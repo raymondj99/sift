@@ -1,0 +1,25 @@
+[package]
+name = "sift-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+sift-store = { workspace = true, features = ["fulltext", "sqlite"] }
+
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+notify = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }

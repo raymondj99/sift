@@ -7,6 +7,7 @@ members = [
     "crates/sift-chunker",
     "crates/sift-embed",
     "crates/sift-store",
+    "crates/sift-server",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 # Core
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -65,6 +67,11 @@ ndarray = "0.16"
 # Network
 ureq = "2"
 
+# Web server
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
 tantivy = "0.22"
@@ -73,14 +80,19 @@ usearch = "2"
 # Image processing
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
+# Utilities
+notify = "7"
+
 # Testing
 tempfile = "3"
+http-body-util = "0.1"
 
 # Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Internal crates
 sift-core = { path = "crates/sift-core" }
+sift-store = { path = "crates/sift-store", default-features = false }
 
 [profile.dev.package."*"]
 opt-level = 1
