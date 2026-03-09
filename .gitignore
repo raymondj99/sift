@@ -1,0 +1,31 @@
+/target
+**/*.rs.bk
+*.swp
+*.swo
+.DS_Store
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Test artifacts
+/tests/fixtures/generated/
+
+# Editor
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+
+# sift index data
+.sift/
+
+# Benchmark results
+/benchsuite/results/
+
+# Local docs (not tracked)
+/docs/
