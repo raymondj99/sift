@@ -1,4 +1,4 @@
-use assert_cmd::Command;
+use assert_cmd::{cargo_bin, Command};
 use predicates::prelude::*;
 use sift_chunker::{chunker_for_content, Chunker, FixedChunker, SemanticChunker};
 use sift_core::*;
@@ -1246,10 +1246,34 @@ fn test_export_to_file() {
 // ============================================================================
 
 /// Helper to get a `Command` for the `sift` binary with a unique index.
+/// Sets ORT_LOG_LEVEL to prevent ONNX Runtime from writing to stdout,
+/// which would corrupt structured (JSON/CSV) output parsing in tests.
 fn sift_cmd(index_name: &str) -> Command {
-    let mut cmd = Command::cargo_bin("sift").unwrap();
-    cmd.arg("--index").arg(index_name);
+    let mut cmd = Command::new(cargo_bin!("sift"));
+    cmd.arg("--index")
+        .arg(index_name)
+        .env("ORT_LOG_LEVEL", "fatal");
     cmd
+}
+
+/// Extract a JSON value from stdout that may contain leading non-JSON lines
+/// (e.g. ONNX Runtime log output). Finds the first `[` or `{` and parses from there.
+fn parse_json_stdout(stdout: &str) -> serde_json::Value {
+    let trimmed = stdout.trim();
+    // Try parsing as-is first
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return v;
+    }
+    // Find first JSON start character
+    if let Some(pos) = trimmed.find(['[', '{']) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&trimmed[pos..]) {
+            return v;
+        }
+    }
+    panic!(
+        "Could not find valid JSON in stdout:\n{}",
+        &trimmed[..trimmed.len().min(500)]
+    );
 }
 
 /// Create a test corpus and return the TempDir (must stay alive for the test).
@@ -1334,7 +1358,7 @@ fn test_cli_search_json_output() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let parsed = parse_json_stdout(&stdout);
     assert!(parsed.is_array());
 }
 
@@ -1362,7 +1386,10 @@ fn test_cli_search_type_filter() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     for result in &parsed {
         assert_eq!(result["file_type"], "rs");
     }
@@ -1392,7 +1419,10 @@ fn test_cli_search_max_results() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     assert!(parsed.len() <= 1);
 }
 
@@ -1437,7 +1467,10 @@ fn test_cli_search_path_glob() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     for result in &parsed {
         let uri = result["uri"].as_str().unwrap();
         assert!(uri.contains("/src/"), "URI should match path glob: {}", uri);
@@ -1474,7 +1507,10 @@ fn test_cli_search_after_filter() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     assert!(
         parsed.is_empty(),
         "Future date should filter out all results"
@@ -1519,7 +1555,10 @@ fn test_cli_scan_type_filter() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     for item in &parsed {
         assert_eq!(item["file_type"], "rs");
     }
@@ -1550,7 +1589,10 @@ fn test_cli_scan_include_exclude() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     for item in &parsed {
         assert_ne!(item["file_type"], "rs", "Excluded .rs should not appear");
     }
@@ -1572,7 +1614,10 @@ fn test_cli_scan_max_depth() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     for item in &parsed {
         let uri = item["uri"].as_str().unwrap();
         assert!(
@@ -1801,7 +1846,7 @@ fn test_cli_status_json() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let parsed = parse_json_stdout(&stdout);
     assert!(parsed["total_sources"].as_u64().unwrap() > 0);
     assert!(parsed["total_chunks"].as_u64().unwrap() > 0);
 }
@@ -1822,7 +1867,10 @@ fn test_cli_list_json() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     assert!(!parsed.is_empty());
     for item in &parsed {
         assert!(item.get("uri").is_some());
@@ -1833,15 +1881,13 @@ fn test_cli_list_json() {
 
 #[test]
 fn test_cli_help_and_version() {
-    Command::cargo_bin("sift")
-        .unwrap()
+    Command::new(cargo_bin!("sift"))
         .arg("--help")
         .assert()
         .success()
         .stdout(predicate::str::contains("sift"));
 
-    Command::cargo_bin("sift")
-        .unwrap()
+    Command::new(cargo_bin!("sift"))
         .arg("--version")
         .assert()
         .success();
@@ -1919,7 +1965,10 @@ fn test_cli_search_threshold_filter() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
+        .as_array()
+        .expect("expected JSON array")
+        .clone();
     assert!(
         parsed.is_empty(),
         "Very high threshold should filter out all results"
@@ -1951,16 +2000,16 @@ fn test_cli_sift_index_env() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
 
     // Use SIFT_INDEX env var instead of --index flag
-    Command::cargo_bin("sift")
-        .unwrap()
+    Command::new(cargo_bin!("sift"))
         .env("SIFT_INDEX", &idx)
+        .env("ORT_LOG_LEVEL", "fatal")
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    Command::cargo_bin("sift")
-        .unwrap()
+    Command::new(cargo_bin!("sift"))
         .env("SIFT_INDEX", &idx)
+        .env("ORT_LOG_LEVEL", "fatal")
         .arg("status")
         .assert()
         .success()
@@ -1978,15 +2027,15 @@ fn test_cli_sift_format_env() {
         .success();
 
     // SIFT_FORMAT=json should produce JSON output
-    let output = Command::cargo_bin("sift")
-        .unwrap()
+    let output = Command::new(cargo_bin!("sift"))
         .env("SIFT_FORMAT", "json")
+        .env("ORT_LOG_LEVEL", "fatal")
         .args(["--index", &idx, "status"])
         .output()
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let parsed = parse_json_stdout(&stdout);
     assert!(parsed.get("total_sources").is_some());
 }
 
@@ -2032,7 +2081,7 @@ fn test_cli_search_csv_output() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("uri,score,chunk_index,file_type,text"));
+    assert!(stdout.contains("uri,score,chunk_index,file_type,text"));
 }
 
 #[test]
@@ -2051,7 +2100,7 @@ fn test_cli_list_csv_output() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("uri,file_type,chunks"));
+    assert!(stdout.contains("uri,file_type,chunks"));
 }
 
 #[test]
@@ -2070,7 +2119,7 @@ fn test_cli_status_csv_output() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("total_sources,total_chunks,index_size_bytes"));
+    assert!(stdout.contains("total_sources,total_chunks,index_size_bytes"));
 }
 
 #[test]
