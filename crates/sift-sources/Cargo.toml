@@ -1,0 +1,18 @@
+[package]
+name = "sift-sources"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+walkdir = { workspace = true }
+ignore = { workspace = true }
+infer = { workspace = true }
+blake3 = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
