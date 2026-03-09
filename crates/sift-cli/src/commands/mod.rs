@@ -1,0 +1,13 @@
+pub mod config;
+pub mod export;
+pub mod list;
+#[cfg(feature = "embeddings")]
+pub mod models;
+pub mod remove;
+pub mod scan;
+pub mod search;
+#[cfg(feature = "serve")]
+pub mod serve;
+pub mod status;
+#[cfg(feature = "serve")]
+pub mod watch;

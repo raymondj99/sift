@@ -1,0 +1,71 @@
+[package]
+name = "sift-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sift"
+path = "src/main.rs"
+
+[features]
+default = ["fts5", "sqlite", "data", "office", "archive", "fancy"]
+ast = ["sift-chunker/ast"]
+ast-rust = ["sift-chunker/ast-rust"]
+ast-python = ["sift-chunker/ast-python"]
+ast-javascript = ["sift-chunker/ast-javascript"]
+ast-typescript = ["sift-chunker/ast-typescript"]
+ast-go = ["sift-chunker/ast-go"]
+ast-c = ["sift-chunker/ast-c"]
+ast-java = ["sift-chunker/ast-java"]
+serve = ["dep:sift-server", "dep:tokio"]
+pdf = ["sift-parsers/pdf"]
+spreadsheets = ["sift-parsers/spreadsheets"]
+email = ["sift-parsers/email"]
+office = ["sift-parsers/office"]
+epub = ["sift-parsers/epub"]
+archive = ["sift-parsers/archive"]
+data = ["sift-parsers/data"]
+embeddings = ["dep:sift-embed"]
+vision = ["embeddings", "sift-embed/vision"]
+audio = ["sift-parsers/audio"]
+fulltext = ["sift-store/fulltext"]
+fts5 = ["sift-store/fts5"]
+sqlite = ["sift-store/sqlite", "sift-embed?/sqlite"]
+hnsw = ["sift-store/hnsw"]
+completions = ["dep:clap_complete"]
+fancy = ["dep:indicatif", "dep:colored"]
+standard = ["ast", "pdf", "spreadsheets", "email", "office", "epub", "archive", "data", "fts5", "sqlite", "embeddings", "fancy"]
+full = ["standard", "serve", "hnsw", "fulltext", "vision", "audio", "completions"]
+
+[dependencies]
+sift-core = { workspace = true }
+sift-sources = { workspace = true }
+sift-parsers = { workspace = true, default-features = false }
+sift-chunker = { workspace = true, default-features = false }
+sift-embed = { workspace = true, default-features = false, optional = true }
+sift-store = { workspace = true, default-features = false }
+sift-server = { workspace = true, optional = true }
+
+clap = { workspace = true }
+clap_complete = { workspace = true, optional = true }
+indicatif = { workspace = true, optional = true }
+colored = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+walkdir = { workspace = true }
+rayon = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

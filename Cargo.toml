@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/sift-cli",
     "crates/sift-core",
     "crates/sift-sources",
     "crates/sift-parsers",
@@ -23,41 +24,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "std"] }
 anyhow = "1"
 thiserror = "2"
-blake3 = "1"
 
 # File processing
 walkdir = "2"
 ignore = "0.4"
 infer = { version = "0.16", default-features = false, features = ["alloc"] }
+blake3 = "1"
 
-# Document parsing
-pdf-extract = "0.10"
-zip = { version = "2.2", default-features = false, features = ["deflate-flate2", "flate2"] }
-calamine = "0.33"
-mail-parser = "0.9"
-tar = "0.4"
-flate2 = "1"
-quick-xml = { version = "0.37", features = ["serialize"] }
-csv = "1"
+# CLI
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "env"] }
+clap_complete = "4"
+indicatif = "0.17"
+colored = "2"
 
-# Audio processing
-symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "isomp4", "aac"] }
-symphonia-core = "0.5"
-
-# Tree-sitter (AST-aware code chunking)
-tree-sitter = "0.24"
-tree-sitter-rust = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-go = "0.23"
-tree-sitter-c = "0.23"
-tree-sitter-java = "0.23"
-
-# Text processing
-unicode-segmentation = "1"
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+tantivy = "0.22"
+usearch = "2"
 
 # Embedding
 ort = { version = "2.0.0-rc.9", default-features = false, features = ["load-dynamic", "ndarray"] }
@@ -72,27 +58,63 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
-# Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
-tantivy = "0.22"
-usearch = "2"
+# Document parsing
+pdf-extract = "0.10"
+zip = { version = "2.2", default-features = false, features = ["deflate-flate2", "flate2"] }
+calamine = "0.33"
+mail-parser = "0.9"
+tar = "0.4"
+flate2 = "1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+csv = "1"
+
+# Tree-sitter (AST-aware code chunking)
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-c = "0.23"
+tree-sitter-java = "0.23"
+
+# Text processing
+unicode-segmentation = "1"
+
+# Parallelism
+rayon = "1.10"
+crossbeam-channel = "0.5"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
+# Audio processing
+symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "isomp4", "aac"] }
+symphonia-core = "0.5"
+
 # Utilities
+uuid = { version = "1", features = ["v7"] }
+tempfile = "3"
 notify = "7"
 
-# Testing
-tempfile = "3"
+# HTTP testing
 http-body-util = "0.1"
+
+# Testing
+assert_cmd = "2"
+predicates = "3"
 
 # Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Internal crates
 sift-core = { path = "crates/sift-core" }
+sift-sources = { path = "crates/sift-sources" }
+sift-parsers = { path = "crates/sift-parsers", default-features = false }
+sift-chunker = { path = "crates/sift-chunker", default-features = false }
+sift-embed = { path = "crates/sift-embed", default-features = false }
 sift-store = { path = "crates/sift-store", default-features = false }
+sift-server = { path = "crates/sift-server" }
 
 [profile.dev.package."*"]
 opt-level = 1
