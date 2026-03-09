@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sift-core",
     "crates/sift-sources",
+    "crates/sift-parsers",
 ]
 
 [workspace.package]
@@ -25,6 +26,20 @@ blake3 = "1"
 walkdir = "2"
 ignore = "0.4"
 infer = { version = "0.16", default-features = false, features = ["alloc"] }
+
+# Document parsing
+pdf-extract = "0.10"
+zip = { version = "2.2", default-features = false, features = ["deflate-flate2", "flate2"] }
+calamine = "0.33"
+mail-parser = "0.9"
+tar = "0.4"
+flate2 = "1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+csv = "1"
+
+# Audio processing
+symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "isomp4", "aac"] }
+symphonia-core = "0.5"
 
 # Testing
 tempfile = "3"

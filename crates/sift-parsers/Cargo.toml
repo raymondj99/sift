@@ -1,0 +1,46 @@
+[package]
+name = "sift-parsers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["pdf", "spreadsheets", "email"]
+pdf = ["dep:pdf-extract"]
+spreadsheets = ["dep:calamine"]
+email = ["dep:mail-parser"]
+audio = ["dep:symphonia", "dep:symphonia-core"]
+office = ["dep:zip", "dep:quick-xml"]
+epub = ["dep:zip", "dep:quick-xml"]
+archive = ["dep:zip", "dep:tar", "dep:flate2"]
+data = ["dep:csv"]
+
+[dependencies]
+sift-core = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Image detection
+infer = { workspace = true }
+
+# Format-specific
+quick-xml = { workspace = true, optional = true }
+csv = { workspace = true, optional = true }
+
+# Document formats
+pdf-extract = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+calamine = { workspace = true, optional = true }
+mail-parser = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+
+# Optional: Audio metadata extraction
+symphonia = { workspace = true, optional = true }
+symphonia-core = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
