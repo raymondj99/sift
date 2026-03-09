@@ -1,3 +1,5 @@
+use assert_cmd::Command;
+use predicates::prelude::*;
 use sift_chunker::{chunker_for_content, Chunker, FixedChunker, SemanticChunker};
 use sift_core::*;
 use sift_parsers::ParserRegistry;
@@ -1237,4 +1239,877 @@ fn test_export_to_file() {
 
     assert_eq!(parsed[1]["uri"], "file:///b.txt");
     assert_eq!(parsed[1]["text"], "chunk two");
+}
+
+// ============================================================================
+// CLI End-to-End Tests (assert_cmd)
+// ============================================================================
+
+/// Helper to get a `Command` for the `sift` binary with a unique index.
+fn sift_cmd(index_name: &str) -> Command {
+    let mut cmd = Command::cargo_bin("sift").unwrap();
+    cmd.arg("--index").arg(index_name);
+    cmd
+}
+
+/// Create a test corpus and return the TempDir (must stay alive for the test).
+fn setup_cli_corpus() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    create_test_corpus(&dir);
+    dir
+}
+
+#[test]
+fn test_cli_scan_and_status() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Scan
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed"))
+        .stdout(predicate::str::contains("files"));
+
+    // Status
+    sift_cmd(&idx)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Index Status"))
+        .stdout(predicate::str::contains("Sources:"))
+        .stdout(predicate::str::contains("Chunks:"));
+}
+
+#[test]
+fn test_cli_list_after_scan() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    sift_cmd(&idx)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sources indexed"))
+        .stdout(predicate::str::contains("chunks)"));
+}
+
+#[test]
+fn test_cli_search_keyword_only() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    sift_cmd(&idx)
+        .args(["search", "--keyword-only", "payment processing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("payment"));
+}
+
+#[test]
+fn test_cli_search_json_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["search", "--keyword-only", "--json", "revenue"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed.is_array());
+}
+
+#[test]
+fn test_cli_search_type_filter() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args([
+            "search",
+            "--keyword-only",
+            "--json",
+            "--type",
+            "rs",
+            "config",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    for result in &parsed {
+        assert_eq!(result["file_type"], "rs");
+    }
+}
+
+#[test]
+fn test_cli_search_max_results() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args([
+            "search",
+            "--keyword-only",
+            "--json",
+            "--max-results",
+            "1",
+            "the",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed.len() <= 1);
+}
+
+#[test]
+fn test_cli_search_no_results() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    sift_cmd(&idx)
+        .args(["search", "--keyword-only", "zzzznonexistentqueryzzz"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No results found"));
+}
+
+#[test]
+fn test_cli_search_path_glob() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args([
+            "search",
+            "--keyword-only",
+            "--json",
+            "--path",
+            "*/src/*",
+            "version",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    for result in &parsed {
+        let uri = result["uri"].as_str().unwrap();
+        assert!(uri.contains("/src/"), "URI should match path glob: {}", uri);
+    }
+}
+
+#[test]
+fn test_cli_search_after_filter() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Files were just created, so --after 1d should include them
+    sift_cmd(&idx)
+        .args(["search", "--keyword-only", "--after", "1d", "config"])
+        .assert()
+        .success();
+
+    // --after with a future date should return no results
+    let output = sift_cmd(&idx)
+        .args([
+            "search",
+            "--keyword-only",
+            "--json",
+            "--after",
+            "2099-01-01",
+            "config",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        parsed.is_empty(),
+        "Future date should filter out all results"
+    );
+}
+
+#[test]
+fn test_cli_scan_dry_run() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", "--dry-run", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"))
+        .stdout(predicate::str::contains("Would index"));
+
+    // After dry run, status should show 0 sources
+    sift_cmd(&idx)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Sources:").and(predicate::str::contains("0")));
+}
+
+#[test]
+fn test_cli_scan_type_filter() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", "--type", "rs", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rs:"));
+
+    // List should only show .rs files
+    let output = sift_cmd(&idx)
+        .args(["--format", "json", "list"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    for item in &parsed {
+        assert_eq!(item["file_type"], "rs");
+    }
+}
+
+#[test]
+fn test_cli_scan_include_exclude() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Include only .md files
+    sift_cmd(&idx)
+        .args(["scan", "--include", "*.md", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("md:"));
+
+    let idx2 = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Exclude .rs files
+    sift_cmd(&idx2)
+        .args(["scan", "--exclude", "*.rs", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx2)
+        .args(["--format", "json", "list"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    for item in &parsed {
+        assert_ne!(item["file_type"], "rs", "Excluded .rs should not appear");
+    }
+}
+
+#[test]
+fn test_cli_scan_max_depth() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // max-depth 1 should not descend into src/
+    sift_cmd(&idx)
+        .args(["scan", "--max-depth", "1", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "json", "list"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    for item in &parsed {
+        let uri = item["uri"].as_str().unwrap();
+        assert!(
+            !uri.contains("/src/"),
+            "max-depth 1 should not include nested files: {}",
+            uri
+        );
+    }
+}
+
+#[test]
+fn test_cli_incremental_scan() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // First scan
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Second scan should skip unchanged files
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("skipped"));
+}
+
+#[test]
+fn test_cli_remove_source() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let readme_path = dir.path().join("readme.md");
+    sift_cmd(&idx)
+        .args(["remove", readme_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // Verify it's gone from the list
+    let output = sift_cmd(&idx)
+        .args(["--format", "json", "list"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("readme.md"));
+}
+
+#[test]
+fn test_cli_export_jsonl() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx).arg("export").output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Each line should be valid JSON
+    for line in stdout.trim().lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("Invalid JSONL line: {}\nError: {}", line, e));
+        assert!(parsed.get("uri").is_some());
+        assert!(parsed.get("text").is_some());
+    }
+}
+
+#[test]
+fn test_cli_export_to_file() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let export_dir = TempDir::new().unwrap();
+    let export_path = export_dir.path().join("out.jsonl");
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    sift_cmd(&idx)
+        .args(["export", "-o", export_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&export_path).unwrap();
+    assert!(!content.is_empty());
+    let line_count = content.trim().lines().count();
+    assert!(line_count > 0, "Export file should have at least one line");
+}
+
+#[test]
+fn test_cli_export_type_filter() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["export", "--type", "rs"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.trim().lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(parsed["file_type"], "rs");
+    }
+}
+
+#[test]
+fn test_cli_export_with_vectors() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["export", "--vectors"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.trim().lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        // With --vectors, vector field should be present
+        assert!(
+            parsed.get("vector").is_some(),
+            "Should include vector field"
+        );
+    }
+}
+
+#[test]
+fn test_cli_config_get_set() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Get a default value
+    sift_cmd(&idx)
+        .args(["config", "search.max_results"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("search.max_results = "));
+
+    // Print full config
+    sift_cmd(&idx)
+        .arg("config")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[default]"))
+        .stdout(predicate::str::contains("[search]"))
+        .stdout(predicate::str::contains("[server]"));
+}
+
+#[test]
+fn test_cli_config_unknown_key() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["config", "nonexistent.key"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key not found"));
+}
+
+#[test]
+fn test_cli_config_set_invalid_value() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["config", "search.max_results", "not_a_number"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_cli_config_set_unknown_key() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["config", "fake.key", "value"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_cli_status_empty_index() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No index found"));
+}
+
+#[test]
+fn test_cli_status_json() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "json", "status"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed["total_sources"].as_u64().unwrap() > 0);
+    assert!(parsed["total_chunks"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn test_cli_list_json() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "json", "list"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(!parsed.is_empty());
+    for item in &parsed {
+        assert!(item.get("uri").is_some());
+        assert!(item.get("file_type").is_some());
+        assert!(item.get("chunks").is_some());
+    }
+}
+
+#[test]
+fn test_cli_help_and_version() {
+    Command::cargo_bin("sift")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sift"));
+
+    Command::cargo_bin("sift")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_cli_scan_nonexistent_path() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Scanning a nonexistent path discovers 0 files (not an error)
+    sift_cmd(&idx)
+        .args(["scan", "/nonexistent/path/that/does/not/exist"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed 0 files"));
+}
+
+#[test]
+fn test_cli_remove_nonexistent() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    sift_cmd(&idx)
+        .args(["remove", "/nonexistent/file.txt"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("0 not found").or(predicate::str::contains("1 not found")),
+        );
+}
+
+#[test]
+fn test_cli_search_context_flag() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // --context should show line numbers with > markers
+    sift_cmd(&idx)
+        .args(["search", "--keyword-only", "--context", "server"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_cli_search_threshold_filter() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Very high threshold should return fewer/no results
+    let output = sift_cmd(&idx)
+        .args([
+            "search",
+            "--keyword-only",
+            "--json",
+            "--threshold",
+            "999.0",
+            "server",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        parsed.is_empty(),
+        "Very high threshold should filter out all results"
+    );
+}
+
+#[test]
+fn test_cli_quiet_suppresses_logs() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    let output = sift_cmd(&idx)
+        .args(["--quiet", "scan", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // Quiet mode should suppress INFO-level log lines
+    assert!(
+        !stderr.contains("INFO"),
+        "Quiet mode should suppress INFO logs"
+    );
+}
+
+#[test]
+fn test_cli_sift_index_env() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Use SIFT_INDEX env var instead of --index flag
+    Command::cargo_bin("sift")
+        .unwrap()
+        .env("SIFT_INDEX", &idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("sift")
+        .unwrap()
+        .env("SIFT_INDEX", &idx)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Sources:"));
+}
+
+#[test]
+fn test_cli_sift_format_env() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // SIFT_FORMAT=json should produce JSON output
+    let output = Command::cargo_bin("sift")
+        .unwrap()
+        .env("SIFT_FORMAT", "json")
+        .args(["--index", &idx, "status"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(parsed.get("total_sources").is_some());
+}
+
+#[test]
+fn test_cli_scan_empty_directory() {
+    let dir = TempDir::new().unwrap();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed 0 files"));
+}
+
+#[test]
+fn test_cli_scan_single_file() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("hello.txt");
+    fs::write(&file, "Hello, world! This is a test file.").unwrap();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed 1 files"));
+}
+
+#[test]
+fn test_cli_search_csv_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "csv", "search", "--keyword-only", "server"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("uri,score,chunk_index,file_type,text"));
+}
+
+#[test]
+fn test_cli_list_csv_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "csv", "list"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("uri,file_type,chunks"));
+}
+
+#[test]
+fn test_cli_status_csv_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd(&idx)
+        .args(["--format", "csv", "status"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("total_sources,total_chunks,index_size_bytes"));
+}
+
+#[test]
+fn test_cli_scan_multiple_paths() {
+    let dir1 = TempDir::new().unwrap();
+    let dir2 = TempDir::new().unwrap();
+    fs::write(dir1.path().join("a.txt"), "File A content").unwrap();
+    fs::write(dir2.path().join("b.txt"), "File B content").unwrap();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args([
+            "scan",
+            dir1.path().to_str().unwrap(),
+            dir2.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Indexed 2 files"));
+}
+
+#[test]
+fn test_cli_remove_multiple() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.txt"), "aaa").unwrap();
+    fs::write(dir.path().join("b.txt"), "bbb").unwrap();
+    fs::write(dir.path().join("c.txt"), "ccc").unwrap();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let a_path = dir.path().join("a.txt");
+    let b_path = dir.path().join("b.txt");
+    sift_cmd(&idx)
+        .args(["remove", a_path.to_str().unwrap(), b_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 2 source"));
 }

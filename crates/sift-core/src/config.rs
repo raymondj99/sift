@@ -114,6 +114,25 @@ impl Config {
             self.default.jobs
         }
     }
+
+    /// Look up a dotted config key (e.g. "search.max_results") and return its
+    /// TOML-formatted value string, or `None` if the key is not recognized.
+    pub fn get_value(&self, key: &str) -> Option<String> {
+        match key {
+            "index_name" => Some(self.index_name.clone()),
+            "default.model" => Some(self.default.model.clone()),
+            "default.chunk_size" => Some(self.default.chunk_size.to_string()),
+            "default.chunk_overlap" => Some(self.default.chunk_overlap.to_string()),
+            "default.max_file_size" => Some(self.default.max_file_size.to_string()),
+            "default.jobs" => Some(self.default.jobs.to_string()),
+            "search.max_results" => Some(self.search.max_results.to_string()),
+            "search.hybrid_alpha" => Some(self.search.hybrid_alpha.to_string()),
+            "search.rerank" => Some(self.search.rerank.to_string()),
+            "server.host" => Some(self.server.host.clone()),
+            "server.port" => Some(self.server.port.to_string()),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Config {
@@ -249,5 +268,47 @@ mod tests {
     fn test_load_missing_file() {
         let config = Config::load_from("/nonexistent/path/config.toml").unwrap();
         assert_eq!(config.index_name, "default");
+    }
+
+    #[test]
+    fn test_get_value_returns_all_known_keys() {
+        let config = Config::default();
+        assert_eq!(config.get_value("index_name").unwrap(), "default");
+        assert_eq!(
+            config.get_value("default.model").unwrap(),
+            "nomic-embed-text-v2"
+        );
+        assert_eq!(config.get_value("default.chunk_size").unwrap(), "512");
+        assert_eq!(config.get_value("default.chunk_overlap").unwrap(), "64");
+        assert_eq!(
+            config.get_value("default.max_file_size").unwrap(),
+            "104857600"
+        );
+        assert_eq!(config.get_value("default.jobs").unwrap(), "0");
+        assert_eq!(config.get_value("search.max_results").unwrap(), "10");
+        assert_eq!(config.get_value("search.rerank").unwrap(), "true");
+        assert_eq!(config.get_value("server.host").unwrap(), "127.0.0.1");
+        assert_eq!(config.get_value("server.port").unwrap(), "7820");
+    }
+
+    #[test]
+    fn test_get_value_returns_none_for_unknown_key() {
+        let config = Config::default();
+        assert!(config.get_value("nonexistent").is_none());
+        assert!(config.get_value("default.nonexistent").is_none());
+        assert!(config.get_value("").is_none());
+    }
+
+    #[test]
+    fn test_get_value_reflects_mutations() {
+        let mut config = Config::default();
+        config.search.max_results = 42;
+        assert_eq!(config.get_value("search.max_results").unwrap(), "42");
+
+        config.default.model = "custom-model".into();
+        assert_eq!(config.get_value("default.model").unwrap(), "custom-model");
+
+        config.server.port = 9999;
+        assert_eq!(config.get_value("server.port").unwrap(), "9999");
     }
 }

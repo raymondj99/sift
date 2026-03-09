@@ -13,18 +13,11 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
             println!("{}", toml_str);
         }
         (Some(key), None) => {
-            // Get a specific value
-            let toml_str = toml::to_string_pretty(config)
-                .map_err(|e| sift_core::SiftError::Config(e.to_string()))?;
-
-            // Simple key lookup in TOML
-            for line in toml_str.lines() {
-                if line.starts_with(&key) || line.contains(&format!("\"{}\"", key)) {
-                    println!("{}", line);
-                    return Ok(());
-                }
+            // Get a specific value using structured lookup
+            match config.get_value(&key) {
+                Some(value) => println!("{} = {}", key.green(), value),
+                None => println!("{}: key not found", key.red()),
             }
-            println!("{}: key not found", key.red());
         }
         (Some(key), Some(value)) => {
             // Set a value - update config and save

@@ -57,8 +57,20 @@ pub fn run(
     }
 
     // Apply path glob filter
-    if let Some(ref glob) = options.path_glob {
-        results.retain(|r| r.uri.contains(glob));
+    if let Some(ref pattern) = options.path_glob {
+        if let Ok(glob) = globset::GlobBuilder::new(pattern)
+            .literal_separator(false)
+            .build()
+        {
+            let matcher = glob.compile_matcher();
+            results.retain(|r| {
+                let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
+                matcher.is_match(path)
+            });
+        } else {
+            // Fall back to substring match if glob is invalid
+            results.retain(|r| r.uri.contains(pattern));
+        }
     }
 
     // Apply --after date filter

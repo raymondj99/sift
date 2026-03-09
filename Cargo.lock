@@ -2740,6 +2740,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "crossbeam-channel",
+ "globset",
  "indicatif",
  "predicates",
  "rayon",
@@ -2758,6 +2759,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "walkdir",
 ]
 
