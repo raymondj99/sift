@@ -4,6 +4,7 @@ members = [
     "crates/sift-core",
     "crates/sift-sources",
     "crates/sift-parsers",
+    "crates/sift-chunker",
 ]
 
 [workspace.package]
@@ -40,6 +41,19 @@ csv = "1"
 # Audio processing
 symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "isomp4", "aac"] }
 symphonia-core = "0.5"
+
+# Tree-sitter (AST-aware code chunking)
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-c = "0.23"
+tree-sitter-java = "0.23"
+
+# Text processing
+unicode-segmentation = "1"
 
 # Testing
 tempfile = "3"
