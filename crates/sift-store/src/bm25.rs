@@ -1,8 +1,8 @@
 use crate::traits::FullTextStore;
+use sift_core::{EmbeddedChunk, SearchResult, SiftResult};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
-use sift_core::{EmbeddedChunk, SearchResult, SiftResult};
 
 /// Pure-Rust BM25 inverted index. Zero external dependencies.
 ///

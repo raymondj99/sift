@@ -1,6 +1,3 @@
-use std::fs;
-use std::io::{BufRead, Write};
-use tempfile::TempDir;
 use sift_chunker::{chunker_for_content, Chunker, FixedChunker, SemanticChunker};
 use sift_core::*;
 use sift_parsers::ParserRegistry;
@@ -10,6 +7,9 @@ use sift_store::HybridSearchEngine;
 use sift_store::{ExportEntry, MetadataStore, SimpleVectorStore, VectorIndex, VectorStore};
 #[cfg(feature = "fulltext")]
 use sift_store::{FullTextStore, TantivyStore};
+use std::fs;
+use std::io::{BufRead, Write};
+use tempfile::TempDir;
 
 /// Create a temporary directory with test files.
 fn create_test_corpus(dir: &TempDir) {
@@ -931,7 +931,7 @@ fn test_after_filter_applied_to_search_results() {
 }
 
 // ============================================================================
-// Feature 6: Add vx export Command
+// Feature 6: Add sift export Command
 // ============================================================================
 
 #[test]

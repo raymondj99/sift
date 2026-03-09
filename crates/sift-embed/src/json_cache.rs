@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+use sift_core::SiftResult;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use sift_core::SiftResult;
 
 #[derive(Serialize, Deserialize, Default)]
 struct CacheData {

@@ -1,6 +1,6 @@
 use crate::traits::Parser;
-use std::collections::HashMap;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for RTF (Rich Text Format) files.
 /// Strips RTF control words and groups, returning clean plain text.

@@ -1,10 +1,10 @@
 use crate::traits::FullTextStore;
+use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{doc, Index, IndexWriter, ReloadPolicy};
-use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 
 /// Tantivy-backed BM25 full-text search store.
 pub struct TantivyStore {
@@ -36,8 +36,9 @@ impl TantivyStore {
 
         let index = match Index::open_in_dir(index_dir) {
             Ok(idx) => idx,
-            Err(_) => Index::create_in_dir(index_dir, schema.clone())
-                .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy create error: {}", e)))?,
+            Err(_) => Index::create_in_dir(index_dir, schema.clone()).map_err(|e| {
+                sift_core::SiftError::Storage(format!("Tantivy create error: {}", e))
+            })?,
         };
 
         Ok(Self {

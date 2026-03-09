@@ -2,8 +2,8 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use std::io::BufRead;
 use sift_core::{IndexStats, SearchResult};
+use std::io::BufRead;
 
 use crate::OutputFormat;
 

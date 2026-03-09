@@ -1,7 +1,7 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 pub struct PdfParser;
 

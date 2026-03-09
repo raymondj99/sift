@@ -1,9 +1,9 @@
 use crate::traits::Parser;
 use calamine::{open_workbook_auto_from_rs, Data, Reader};
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::Cursor;
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for spreadsheet formats: XLSX, XLS, ODS.
 pub struct SpreadsheetParser;

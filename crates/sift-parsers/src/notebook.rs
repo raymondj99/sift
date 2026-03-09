@@ -1,7 +1,7 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for Jupyter Notebook (.ipynb) files.
 /// Extracts code and markdown cells with their outputs.

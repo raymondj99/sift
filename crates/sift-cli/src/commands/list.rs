@@ -12,7 +12,7 @@ pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
             OutputFormat::Json => println!("[]"),
             OutputFormat::Csv => println!("uri,file_type,chunks"),
             OutputFormat::Human => {
-                println!("No index found. Run `vx scan <path>` to create one.");
+                println!("No index found. Run `sift scan <path>` to create one.");
             }
         }
         return Ok(());

@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
+use sift_core::SiftResult;
 use std::path::Path;
 use std::sync::Mutex;
-use sift_core::SiftResult;
 
 /// Content-addressed embedding cache backed by SQLite.
 /// Maps BLAKE3 hash of text → embedding vector to avoid re-computation.

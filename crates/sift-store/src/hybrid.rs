@@ -1,6 +1,6 @@
 use crate::traits::{FullTextStore, VectorStore};
-use std::collections::HashMap;
 use sift_core::{SearchResult, SiftResult};
+use std::collections::HashMap;
 
 /// Hybrid search engine combining vector similarity and BM25 keyword search
 /// using Reciprocal Rank Fusion (RRF).

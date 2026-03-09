@@ -1,7 +1,7 @@
 use crate::traits::Source;
+use sift_core::{ScanOptions, SiftResult, SourceItem};
 use std::path::Path;
 use tracing::debug;
-use sift_core::{ScanOptions, SourceItem, SiftResult};
 
 pub struct FilesystemSource;
 

@@ -6,9 +6,9 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use sift_core::{Embedder, IndexStats, SearchMode};
 use sift_store::{HybridSearchEngine, MetadataStore, SimpleVectorStore, TantivyStore};
+use std::sync::Arc;
 
 pub struct AppState {
     pub engine: HybridSearchEngine<SimpleVectorStore, TantivyStore>,
@@ -158,8 +158,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use http_body_util::BodyExt;
-    use tower::ServiceExt;
     use sift_store::{HybridSearchEngine, MetadataStore, SimpleVectorStore, TantivyStore};
+    use tower::ServiceExt;
 
     struct TestHarness {
         state: Arc<AppState>,

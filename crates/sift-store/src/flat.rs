@@ -1,7 +1,7 @@
 use crate::traits::{VectorIndex, VectorStore};
+use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 
 /// Magic bytes for the binary vector index format (version 1).
 const MAGIC: &[u8; 4] = b"SFT1";

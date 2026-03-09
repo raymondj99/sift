@@ -1,8 +1,8 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::{Cursor, Read};
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for archive formats: ZIP, TAR, GZ, TGZ.
 pub struct ArchiveParser;

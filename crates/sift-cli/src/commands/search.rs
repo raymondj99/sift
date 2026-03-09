@@ -1,8 +1,8 @@
 use crate::{output, pipeline, OutputFormat};
-use tracing::info;
 #[cfg(feature = "embeddings")]
 use sift_core::Embedder;
 use sift_core::{Config, SearchMode, SearchOptions, SiftResult};
+use tracing::info;
 
 pub fn run(
     config: &Config,

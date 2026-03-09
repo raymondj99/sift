@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+use sift_core::{IndexStats, SiftError, SiftResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use sift_core::{IndexStats, SiftError, SiftResult};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct SourceRecord {

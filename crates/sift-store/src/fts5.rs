@@ -1,8 +1,8 @@
 use crate::traits::FullTextStore;
 use rusqlite::{params, Connection};
+use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 use std::path::Path;
 use std::sync::Mutex;
-use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftResult};
 
 /// SQLite FTS5-backed full-text search store.
 ///

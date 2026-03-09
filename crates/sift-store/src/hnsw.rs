@@ -1,9 +1,9 @@
 use crate::flat::{ExportEntry, FlatVectorIndex};
 use crate::traits::{VectorIndex, VectorStore};
+use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftError, SiftResult};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
-use sift_core::{ContentType, EmbeddedChunk, SearchResult, SiftError, SiftResult};
 
 /// HNSW index file name within the index directory.
 const HNSW_INDEX_FILE: &str = "vectors.usearch";

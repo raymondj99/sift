@@ -18,8 +18,8 @@ use crate::rtf::RtfParser;
 use crate::spreadsheet::SpreadsheetParser;
 use crate::traits::Parser;
 use crate::{code::CodeParser, image::ImageParser, text::TextParser, web::WebParser};
-use tracing::debug;
 use sift_core::{ParsedDocument, SiftResult};
+use tracing::debug;
 
 /// Registry of all available parsers. Routes files to the correct parser
 /// based on MIME type and extension.

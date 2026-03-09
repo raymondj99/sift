@@ -1,8 +1,8 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::Cursor;
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for Office documents (DOCX, PPTX). Both are ZIP archives containing XML.
 pub struct OfficeParser;

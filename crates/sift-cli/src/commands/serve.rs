@@ -2,9 +2,9 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use std::sync::Arc;
 use sift_core::{Config, SiftResult};
 use sift_server::routes::{create_router, AppState};
+use std::sync::Arc;
 
 pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
     let (engine, metadata) = crate::pipeline::open_engine(config)?;
@@ -25,7 +25,7 @@ pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
 
     let addr = format!("{}:{}", host, port);
     println!(
-        "Starting vx server on {}",
+        "Starting sift server on {}",
         format!("http://{}", addr).cyan()
     );
     println!("  {} GET /health", "".green());

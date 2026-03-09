@@ -1,6 +1,8 @@
 #[cfg(feature = "audio")]
 use crate::traits::Parser;
 #[cfg(feature = "audio")]
+use sift_core::{ContentType, ParsedDocument, SiftResult};
+#[cfg(feature = "audio")]
 use std::collections::HashMap;
 #[cfg(feature = "audio")]
 use std::io::Cursor;
@@ -14,8 +16,6 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 #[cfg(feature = "audio")]
 use tracing::debug;
-#[cfg(feature = "audio")]
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for audio files. Extracts metadata (duration, codec, sample rate,
 /// channels, and ID3/Vorbis tags) into searchable text using `symphonia`.

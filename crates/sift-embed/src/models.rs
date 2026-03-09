@@ -1,7 +1,7 @@
+use sift_core::{Config, SiftResult};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
-use sift_core::{Config, SiftResult};
 
 /// ONNX Runtime version compatible with ort 2.0.0-rc.9.
 const ORT_VERSION: &str = "1.20.1";
@@ -260,7 +260,7 @@ impl ModelManager {
     pub fn ensure_model(&self, model_name: &str) -> SiftResult<PathBuf> {
         if !self.is_downloaded(model_name) {
             return Err(sift_core::SiftError::Model(format!(
-                "Model '{}' not found. Run `vx models download {}` first.",
+                "Model '{}' not found. Run `sift models download {}` first.",
                 model_name, model_name
             )));
         }
@@ -291,9 +291,9 @@ impl ModelManager {
         let url = ort_download_url();
         info!("Downloading ONNX Runtime {} from {}", ORT_VERSION, url);
 
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e| sift_core::SiftError::Model(format!("ONNX Runtime download failed: {}", e)))?;
+        let response = ureq::get(&url).call().map_err(|e| {
+            sift_core::SiftError::Model(format!("ONNX Runtime download failed: {}", e))
+        })?;
 
         let mut bytes = Vec::new();
         response
@@ -325,7 +325,7 @@ impl ModelManager {
             std::env::set_var("ORT_DYLIB_PATH", &lib_path);
         } else {
             warn!(
-                "ONNX Runtime not found at {}. Run `vx models download` or set ORT_DYLIB_PATH.",
+                "ONNX Runtime not found at {}. Run `sift models download` or set ORT_DYLIB_PATH.",
                 lib_path.display()
             );
         }
@@ -374,8 +374,8 @@ fn extract_ort_lib(archive_bytes: &[u8], dest: &Path) -> SiftResult<()> {
         .entries()
         .map_err(|e| sift_core::SiftError::Model(format!("Failed to read archive: {}", e)))?
     {
-        let mut entry =
-            entry.map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {}", e)))?;
+        let mut entry = entry
+            .map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {}", e)))?;
         let path = entry
             .path()
             .map_err(|e| sift_core::SiftError::Model(format!("Archive path error: {}", e)))?;

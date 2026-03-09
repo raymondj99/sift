@@ -2,10 +2,10 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use std::path::PathBuf;
-use tracing::{error, info};
 use sift_core::{Config, ScanOptions, SiftResult};
 use sift_server::WatchDaemon;
+use std::path::PathBuf;
+use tracing::{error, info};
 
 pub fn run(config: &Config, path: Option<PathBuf>, debounce: u64) -> SiftResult<()> {
     let watch_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());

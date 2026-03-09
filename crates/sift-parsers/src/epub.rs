@@ -1,7 +1,7 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for EPUB (Electronic Publication) files.
 /// EPUBs are ZIP archives containing XHTML chapters with metadata.
@@ -29,10 +29,11 @@ impl Parser for EpubParser {
         _extension: Option<&str>,
     ) -> SiftResult<ParsedDocument> {
         let cursor = Cursor::new(content);
-        let mut archive = zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
-            path: "epub".to_string(),
-            message: format!("Failed to open EPUB zip: {}", e),
-        })?;
+        let mut archive =
+            zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
+                path: "epub".to_string(),
+                message: format!("Failed to open EPUB zip: {}", e),
+            })?;
 
         // Try to extract the title from the OPF metadata file
         let title = extract_title_from_opf(&mut archive);

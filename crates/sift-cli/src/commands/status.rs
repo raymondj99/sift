@@ -12,15 +12,15 @@ pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
         match format {
             OutputFormat::Json => {
                 println!(
-                    r#"{{"status":"no_index","message":"No index found. Run `vx scan` first."}}"#
+                    r#"{{"status":"no_index","message":"No index found. Run `sift scan` first."}}"#
                 );
             }
             OutputFormat::Csv => {
                 println!("status,message");
-                println!("no_index,\"No index found. Run `vx scan` first.\"");
+                println!("no_index,\"No index found. Run `sift scan` first.\"");
             }
             OutputFormat::Human => {
-                println!("No index found. Run `vx scan <path>` to create one.");
+                println!("No index found. Run `sift scan <path>` to create one.");
             }
         }
         return Ok(());

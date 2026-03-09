@@ -1,8 +1,8 @@
 use crate::traits::Parser;
+use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
-use sift_core::{ContentType, ParsedDocument, SiftResult};
 
 /// Parser for email formats: EML and MBOX.
 pub struct EmailParser;

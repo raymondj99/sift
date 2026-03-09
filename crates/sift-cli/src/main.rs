@@ -38,16 +38,18 @@ enum ExitCode {
 
 impl ExitCode {
     fn from_error(err: &anyhow::Error) -> Self {
-        if let Some(vx_err) = err.downcast_ref::<sift_core::SiftError>() {
-            return Self::from_vx_error(vx_err);
+        if let Some(sift_err) = err.downcast_ref::<sift_core::SiftError>() {
+            return Self::from_sift_error(sift_err);
         }
         ExitCode::GeneralError
     }
 
-    fn from_vx_error(err: &sift_core::SiftError) -> Self {
+    fn from_sift_error(err: &sift_core::SiftError) -> Self {
         match err {
             sift_core::SiftError::Config(_) => ExitCode::ConfigError,
-            sift_core::SiftError::Model(_) | sift_core::SiftError::Embedding(_) => ExitCode::ModelError,
+            sift_core::SiftError::Model(_) | sift_core::SiftError::Embedding(_) => {
+                ExitCode::ModelError
+            }
             sift_core::SiftError::Storage(_) => ExitCode::StorageError,
             sift_core::SiftError::Io(_) => ExitCode::StorageError,
             sift_core::SiftError::Parse { .. } => ExitCode::GeneralError,
@@ -69,7 +71,7 @@ fn use_color() -> bool {
     name = "sift",
     about = "Universal data vectorizer — point at anything, search everything",
     version,
-    after_help = "Examples:\n  vx scan .                              Index current directory\n  vx search \"error handling\"             Semantic search\n  vx search --type rs \"config parsing\"   Search only Rust files\n  vx status                              Show index statistics"
+    after_help = "Examples:\n  sift scan .                              Index current directory\n  sift search \"error handling\"             Semantic search\n  sift search --type rs \"config parsing\"   Search only Rust files\n  sift status                              Show index statistics"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -131,7 +133,7 @@ enum Commands {
         file_types: Vec<String>,
 
         /// Override embedding model
-        #[arg(long, env = "VX_MODEL")]
+        #[arg(long, env = "SIFT_MODEL")]
         model: Option<String>,
 
         /// Show what would be indexed without actually indexing
@@ -139,7 +141,7 @@ enum Commands {
         dry_run: bool,
 
         /// Number of parallel workers (0 = auto)
-        #[arg(short, long, default_value = "0", env = "VX_JOBS")]
+        #[arg(short, long, default_value = "0", env = "SIFT_JOBS")]
         jobs: usize,
     },
 

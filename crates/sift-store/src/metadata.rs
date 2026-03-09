@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
+use sift_core::{IndexStats, SiftResult};
 use std::path::Path;
 use std::sync::Mutex;
-use sift_core::{IndexStats, SiftResult};
 
 /// SQLite-backed metadata store for tracking indexed sources.
 pub struct MetadataStore {

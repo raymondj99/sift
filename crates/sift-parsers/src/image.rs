@@ -1,6 +1,6 @@
 use crate::traits::Parser;
-use std::collections::HashMap;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for image files. Extracts metadata (dimensions, format, filename context)
 /// into searchable text. For actual visual content search, an embedding model

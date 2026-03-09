@@ -1,6 +1,6 @@
 use crate::traits::Parser;
-use std::collections::HashMap;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for source code files. Extracts the raw text with language metadata.
 /// Tree-sitter integration can be added for AST-aware parsing.

@@ -1,4 +1,4 @@
-use sift_core::{ScanOptions, SourceItem, SiftResult};
+use sift_core::{ScanOptions, SiftResult, SourceItem};
 
 /// A source of data to be indexed.
 pub trait Source: Send + Sync {

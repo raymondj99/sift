@@ -2,12 +2,10 @@ use crossbeam_channel as channel;
 #[cfg(feature = "fancy")]
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info, warn};
 use sift_chunker::chunker_for_content;
 #[cfg(feature = "vision")]
 use sift_core::ContentType;
-use sift_core::{Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SourceItem, SiftResult};
+use sift_core::{Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult, SourceItem};
 #[cfg(feature = "embeddings")]
 use sift_embed::{models::NOMIC_EMBED_TEXT_V2, EmbeddingCache, ModelManager, OnnxEmbedder};
 use sift_parsers::ParserRegistry;
@@ -15,6 +13,8 @@ use sift_sources::{FilesystemSource, Source};
 #[cfg(feature = "hnsw")]
 use sift_store::VectorIndex;
 use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::{debug, info, warn};
 
 #[cfg(feature = "vision")]
 use sift_embed::{models::NOMIC_EMBED_VISION_V1_5, VisionEmbedder};
@@ -84,7 +84,7 @@ pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
             // Look up by name in ~/.sift/models/
             if !manager.is_downloaded(name) {
                 info!(
-                    "Model '{}' not downloaded — using keyword-only mode. Run `vx models download {}` first.",
+                    "Model '{}' not downloaded — using keyword-only mode. Run `sift models download {}` first.",
                     name, name
                 );
                 return None;
@@ -98,7 +98,7 @@ pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
     } else {
         let model_def = &NOMIC_EMBED_TEXT_V2;
         if !manager.is_downloaded(model_def.name) {
-            info!("Embedding model not downloaded — using keyword-only mode. Run `vx models download nomic-embed-text-v2` for semantic search.");
+            info!("Embedding model not downloaded — using keyword-only mode. Run `sift models download nomic-embed-text-v2` for semantic search.");
             return None;
         }
         (

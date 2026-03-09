@@ -2,9 +2,9 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use tracing::info;
 use sift_core::SiftResult;
 use sift_embed::models::{ModelManager, NOMIC_EMBED_TEXT_V2};
+use tracing::info;
 
 pub fn run(action: Option<crate::ModelsAction>) -> SiftResult<()> {
     let manager = ModelManager::new();

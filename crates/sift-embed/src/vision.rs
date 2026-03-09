@@ -6,10 +6,10 @@
 
 use image::imageops::FilterType;
 use ort::session::Session;
+use sift_core::{SiftError, SiftResult};
 use std::path::Path;
 use std::sync::Mutex;
 use tracing::debug;
-use sift_core::{SiftError, SiftResult};
 
 /// CLIP / ImageNet normalization constants.
 ///
