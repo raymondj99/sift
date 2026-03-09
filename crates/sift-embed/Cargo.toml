@@ -1,0 +1,34 @@
+[package]
+name = "sift-embed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["sqlite"]
+vision = ["dep:image"]
+sqlite = ["dep:rusqlite"]
+cuda = ["ort/cuda"]
+coreml = ["ort/coreml"]
+
+[dependencies]
+sift-core = { workspace = true }
+ort = { workspace = true }
+tokenizers = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ndarray = { workspace = true }
+blake3 = { workspace = true }
+rusqlite = { workspace = true, optional = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+
+# Optional: Vision embedding
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

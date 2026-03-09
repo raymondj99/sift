@@ -5,6 +5,7 @@ members = [
     "crates/sift-sources",
     "crates/sift-parsers",
     "crates/sift-chunker",
+    "crates/sift-embed",
 ]
 
 [workspace.package]
@@ -54,6 +55,20 @@ tree-sitter-java = "0.23"
 
 # Text processing
 unicode-segmentation = "1"
+
+# Embedding
+ort = { version = "2.0.0-rc.9", default-features = false, features = ["load-dynamic", "ndarray"] }
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+ndarray = "0.16"
+
+# Network
+ureq = "2"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
 # Testing
 tempfile = "3"
