@@ -1,0 +1,32 @@
+[package]
+name = "sift-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["sqlite"]
+fulltext = ["dep:tantivy"]
+sqlite = ["dep:rusqlite"]
+fts5 = ["sqlite"]
+hnsw = ["dep:usearch"]
+
+[dependencies]
+sift-core = { workspace = true }
+rusqlite = { workspace = true, optional = true }
+tantivy = { workspace = true, optional = true }
+usearch = { workspace = true, optional = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "vector_search"
+harness = false
