@@ -9,8 +9,12 @@ name = "sift"
 path = "src/main.rs"
 
 [features]
-default = ["fts5", "sqlite", "data", "office", "archive", "fancy"]
+default = ["fts5", "sqlite", "documents", "data-formats", "archive", "fancy"]
+# Coarse feature groups
+documents = ["pdf", "office", "epub"]
+data-formats = ["spreadsheets", "data"]
 ast = ["sift-chunker/ast"]
+# Fine-grained AST language features (prefer `ast` for all languages)
 ast-rust = ["sift-chunker/ast-rust"]
 ast-python = ["sift-chunker/ast-python"]
 ast-javascript = ["sift-chunker/ast-javascript"]
@@ -18,7 +22,7 @@ ast-typescript = ["sift-chunker/ast-typescript"]
 ast-go = ["sift-chunker/ast-go"]
 ast-c = ["sift-chunker/ast-c"]
 ast-java = ["sift-chunker/ast-java"]
-serve = ["dep:sift-server", "dep:tokio"]
+# Parsers
 pdf = ["sift-parsers/pdf"]
 spreadsheets = ["sift-parsers/spreadsheets"]
 email = ["sift-parsers/email"]
@@ -26,17 +30,22 @@ office = ["sift-parsers/office"]
 epub = ["sift-parsers/epub"]
 archive = ["sift-parsers/archive"]
 data = ["sift-parsers/data"]
+audio = ["sift-parsers/audio"]
+# Embedding & search
 embeddings = ["dep:sift-embed"]
 vision = ["embeddings", "sift-embed/vision"]
-audio = ["sift-parsers/audio"]
 fulltext = ["sift-store/fulltext"]
 fts5 = ["sift-store/fts5"]
 sqlite = ["sift-store/sqlite", "sift-embed?/sqlite"]
 hnsw = ["sift-store/hnsw"]
+simd = ["sift-store/simd"]
+# Server & UI
+serve = ["dep:sift-server", "dep:tokio"]
 completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
-standard = ["ast", "pdf", "spreadsheets", "email", "office", "epub", "archive", "data", "fts5", "sqlite", "embeddings", "fancy"]
-full = ["standard", "serve", "hnsw", "fulltext", "vision", "audio", "completions"]
+# Profiles
+standard = ["ast", "documents", "data-formats", "email", "archive", "fts5", "sqlite", "embeddings", "fancy"]
+full = ["standard", "serve", "hnsw", "fulltext", "vision", "audio", "simd", "completions"]
 
 [dependencies]
 sift-core = { workspace = true }

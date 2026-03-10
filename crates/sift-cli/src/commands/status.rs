@@ -2,7 +2,7 @@ use crate::{output, OutputFormat};
 use sift_core::{Config, SiftResult};
 
 pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
-    let index_dir = config.index_dir();
+    let index_dir = config.index_dir()?;
     #[cfg(feature = "sqlite")]
     let metadata_path = index_dir.join("metadata.db");
     #[cfg(not(feature = "sqlite"))]

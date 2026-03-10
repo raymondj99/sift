@@ -7,7 +7,7 @@ use sift_embed::models::{ModelManager, NOMIC_EMBED_TEXT_V2};
 use tracing::info;
 
 pub fn run(action: Option<crate::ModelsAction>) -> SiftResult<()> {
-    let manager = ModelManager::new();
+    let manager = ModelManager::new()?;
 
     match action {
         None | Some(crate::ModelsAction::List) => {

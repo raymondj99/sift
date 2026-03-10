@@ -168,10 +168,10 @@ pub struct ModelManager {
 }
 
 impl ModelManager {
-    pub fn new() -> Self {
-        Self {
-            models_dir: Config::models_dir(),
-        }
+    pub fn new() -> SiftResult<Self> {
+        Ok(Self {
+            models_dir: Config::models_dir()?,
+        })
     }
 
     pub fn with_dir(models_dir: PathBuf) -> Self {
@@ -334,7 +334,7 @@ impl ModelManager {
 
 impl Default for ModelManager {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("failed to resolve models directory")
     }
 }
 

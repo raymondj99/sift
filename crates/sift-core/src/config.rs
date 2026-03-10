@@ -58,24 +58,24 @@ impl Config {
         "default".into()
     }
 
-    pub fn sift_dir() -> PathBuf {
-        dirs_home().join(".sift")
+    pub fn sift_dir() -> crate::SiftResult<PathBuf> {
+        Ok(dirs_home()?.join(".sift"))
     }
 
-    pub fn index_dir(&self) -> PathBuf {
-        Self::sift_dir().join("indexes").join(&self.index_name)
+    pub fn index_dir(&self) -> crate::SiftResult<PathBuf> {
+        Ok(Self::sift_dir()?.join("indexes").join(&self.index_name))
     }
 
-    pub fn models_dir() -> PathBuf {
-        Self::sift_dir().join("models")
+    pub fn models_dir() -> crate::SiftResult<PathBuf> {
+        Ok(Self::sift_dir()?.join("models"))
     }
 
-    pub fn config_path() -> PathBuf {
-        Self::sift_dir().join("config.toml")
+    pub fn config_path() -> crate::SiftResult<PathBuf> {
+        Ok(Self::sift_dir()?.join("config.toml"))
     }
 
     pub fn load() -> crate::SiftResult<Self> {
-        Self::load_from(Self::config_path())
+        Self::load_from(Self::config_path()?)
     }
 
     pub fn load_from(path: impl AsRef<Path>) -> crate::SiftResult<Self> {
@@ -89,7 +89,7 @@ impl Config {
     }
 
     pub fn save(&self) -> crate::SiftResult<()> {
-        let path = Self::config_path();
+        let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -100,8 +100,8 @@ impl Config {
     }
 
     pub fn ensure_dirs(&self) -> crate::SiftResult<()> {
-        std::fs::create_dir_all(self.index_dir())?;
-        std::fs::create_dir_all(Self::models_dir())?;
+        std::fs::create_dir_all(self.index_dir()?)?;
+        std::fs::create_dir_all(Self::models_dir()?)?;
         Ok(())
     }
 
@@ -235,11 +235,15 @@ impl Default for ServerConfig {
     }
 }
 
-fn dirs_home() -> PathBuf {
+fn dirs_home() -> crate::SiftResult<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+        .map_err(|_| {
+            crate::SiftError::Config(
+                "Cannot determine home directory. Set $HOME or $USERPROFILE.".into(),
+            )
+        })
 }
 
 #[cfg(test)]

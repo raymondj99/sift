@@ -32,3 +32,4 @@ tree-sitter-c = { workspace = true, optional = true }
 tree-sitter-java = { workspace = true, optional = true }
 
 [dev-dependencies]
+proptest = { workspace = true }

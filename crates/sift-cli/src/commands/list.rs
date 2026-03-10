@@ -3,9 +3,9 @@ use sift_core::{Config, SiftResult};
 
 pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
     #[cfg(feature = "sqlite")]
-    let metadata_path = config.index_dir().join("metadata.db");
+    let metadata_path = config.index_dir()?.join("metadata.db");
     #[cfg(not(feature = "sqlite"))]
-    let metadata_path = config.index_dir().join("metadata.json");
+    let metadata_path = config.index_dir()?.join("metadata.json");
 
     if !metadata_path.exists() {
         match format {

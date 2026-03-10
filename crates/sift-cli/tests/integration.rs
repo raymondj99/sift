@@ -138,18 +138,12 @@ fn test_full_pipeline_discover_parse_chunk() {
         ..Default::default()
     };
 
-    let mut items = Vec::new();
-    let count = source
-        .discover(&options, &mut |item| {
-            items.push(item);
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
 
     assert!(
-        count >= 8,
+        items.len() >= 8,
         "Should discover at least 8 files, got {}",
-        count
+        items.len()
     );
 
     // Phase 2: Parse all files
@@ -232,40 +226,35 @@ fn test_metadata_store_change_detection() {
         ..Default::default()
     };
 
-    let mut new_count = 0u64;
-    source
-        .discover(&options, &mut |item| {
-            let status = meta.check_source(&item.uri, &item.content_hash)?;
-            assert!(status.is_none(), "First scan should find all files as new");
-            meta.upsert_source(
-                &item.uri,
-                &item.content_hash,
-                item.size,
-                "txt",
-                item.modified_at,
-                1,
-            )?;
-            new_count += 1;
-            Ok(())
-        })
+    let items = source.discover(&options).unwrap();
+    let new_count = items.len() as u64;
+    for item in &items {
+        let status = meta.check_source(&item.uri, &item.content_hash).unwrap();
+        assert!(status.is_none(), "First scan should find all files as new");
+        meta.upsert_source(
+            &item.uri,
+            &item.content_hash,
+            item.size,
+            "txt",
+            item.modified_at,
+            1,
+        )
         .unwrap();
+    }
 
     assert!(new_count > 0);
 
     // Second scan - everything should be unchanged
-    let mut unchanged_count = 0u64;
-    source
-        .discover(&options, &mut |item| {
-            let status = meta.check_source(&item.uri, &item.content_hash)?;
-            assert_eq!(
-                status,
-                Some(true),
-                "Second scan should find all files unchanged"
-            );
-            unchanged_count += 1;
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
+    let unchanged_count = items.len() as u64;
+    for item in &items {
+        let status = meta.check_source(&item.uri, &item.content_hash).unwrap();
+        assert_eq!(
+            status,
+            Some(true),
+            "Second scan should find all files unchanged"
+        );
+    }
 
     assert_eq!(new_count, unchanged_count);
 
@@ -279,17 +268,15 @@ fn test_metadata_store_change_detection() {
     // Third scan - one file should be changed
     let mut changed = 0u64;
     let mut same = 0u64;
-    source
-        .discover(&options, &mut |item| {
-            let status = meta.check_source(&item.uri, &item.content_hash)?;
-            match status {
-                Some(true) => same += 1,
-                Some(false) => changed += 1,
-                None => panic!("Should not find new files"),
-            }
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
+    for item in &items {
+        let status = meta.check_source(&item.uri, &item.content_hash).unwrap();
+        match status {
+            Some(true) => same += 1,
+            Some(false) => changed += 1,
+            None => panic!("Should not find new files"),
+        }
+    }
 
     assert_eq!(changed, 1, "One file should have changed");
     assert_eq!(same, new_count - 1, "Rest should be unchanged");
@@ -670,13 +657,7 @@ fn test_source_exclusion_patterns() {
         ..Default::default()
     };
 
-    let mut items = Vec::new();
-    source
-        .discover(&options, &mut |item| {
-            items.push(item);
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
 
     // Should find keep.rs and keep.txt, but not node_modules/lib.js
     // (hidden dirs are excluded by default in the ignore crate)
@@ -697,16 +678,10 @@ fn test_dry_run_doesnt_modify_state() {
         ..Default::default()
     };
 
-    let mut count = 0u64;
-    source
-        .discover(&options, &mut |_| {
-            count += 1;
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
 
     // Discovery still happens in dry run
-    assert_eq!(count, 1);
+    assert_eq!(items.len(), 1);
 }
 
 // ============================================================================
@@ -726,13 +701,7 @@ fn test_parallel_scan_produces_chunks() {
         ..Default::default()
     };
 
-    let mut items = Vec::new();
-    source
-        .discover(&options, &mut |item| {
-            items.push(item);
-            Ok(())
-        })
-        .unwrap();
+    let items = source.discover(&options).unwrap();
 
     assert!(items.len() >= 8, "Should discover at least 8 files");
 
@@ -774,14 +743,7 @@ fn test_parallel_and_sequential_produce_same_file_count() {
             jobs,
             ..Default::default()
         };
-        let mut count = 0;
-        source
-            .discover(&options, &mut |_| {
-                count += 1;
-                Ok(())
-            })
-            .unwrap();
-        count
+        source.discover(&options).unwrap().len()
     };
 
     let count_1 = discover(1);
@@ -2161,4 +2123,82 @@ fn test_cli_remove_multiple() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Removed 2 source"));
+}
+
+// ============================================================================
+// Error-path integration tests
+// ============================================================================
+
+#[test]
+fn test_corrupt_vector_index_reports_error() {
+    let dir = TempDir::new().unwrap();
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+
+    // Scan some files first to create an index
+    fs::write(dir.path().join("a.txt"), "hello").unwrap();
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Corrupt the vector index
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap();
+    let sift_dir = std::path::PathBuf::from(home)
+        .join(".sift")
+        .join("indexes")
+        .join(&idx);
+    let vectors_path = sift_dir.join("vectors.bin");
+    if vectors_path.exists() {
+        fs::write(&vectors_path, b"corrupted data").unwrap();
+    }
+
+    // Search should fail gracefully
+    sift_cmd(&idx).args(["search", "test"]).assert().failure();
+}
+
+#[test]
+fn test_search_on_nonexistent_index() {
+    let idx = format!("cli-test-nonexistent-{}", uuid::Uuid::now_v7());
+    // An empty/nonexistent index returns "No results found" with exit 0
+    sift_cmd(&idx)
+        .args(["search", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No results"));
+}
+
+#[test]
+fn test_scan_with_zero_valid_files() {
+    let dir = TempDir::new().unwrap();
+    // Create only hidden files (ignored by default)
+    fs::write(dir.path().join(".hidden"), "secret").unwrap();
+
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    sift_cmd(&idx)
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_scan_nonexistent_directory() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    // Scanning a nonexistent directory discovers 0 files, succeeds with empty output
+    sift_cmd(&idx)
+        .args(["scan", "/nonexistent/path/that/does/not/exist"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 files"));
+}
+
+#[test]
+fn test_config_set_invalid_value() {
+    let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    // Setting a non-numeric value for a numeric config key should fail
+    sift_cmd(&idx)
+        .args(["config", "set", "search.max_results", "not_a_number"])
+        .assert()
+        .failure();
 }

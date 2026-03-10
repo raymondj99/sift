@@ -430,4 +430,46 @@ mod tests {
         assert!(all.contains("Hello"));
         assert!(all.contains("Goodbye"));
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn produces_nonempty_output_for_nonempty_input(text in "[a-zA-Z0-9 ]{1,500}", chunk_size in 20..200usize) {
+                let trimmed = text.trim();
+                let chunker = RecursiveChunker::new(chunk_size, 0);
+                let chunks = chunker.chunk(&text);
+                if !trimmed.is_empty() {
+                    prop_assert!(!chunks.is_empty(), "Non-empty input should produce chunks");
+                }
+            }
+
+            #[test]
+            fn offsets_within_bounds(text in "\\PC{1,500}", chunk_size in 10..200usize) {
+                let chunker = RecursiveChunker::new(chunk_size, 0);
+                let chunks = chunker.chunk(&text);
+                for (_, offset) in &chunks {
+                    prop_assert!(*offset <= text.len(), "Offset {} exceeds text len {}", offset, text.len());
+                }
+            }
+
+            #[test]
+            fn offsets_non_decreasing(text in "\\PC{1,500}", chunk_size in 10..200usize) {
+                let chunker = RecursiveChunker::new(chunk_size, 0);
+                let chunks = chunker.chunk(&text);
+                for i in 1..chunks.len() {
+                    prop_assert!(chunks[i].1 >= chunks[i - 1].1,
+                        "Offsets not non-decreasing: {} < {}", chunks[i].1, chunks[i - 1].1);
+                }
+            }
+
+            #[test]
+            fn never_panics(text in "\\PC{0,1000}", chunk_size in 1..500usize, overlap in 0..100usize) {
+                let chunker = RecursiveChunker::new(chunk_size, overlap);
+                let _ = chunker.chunk(&text);
+            }
+        }
+    }
 }
