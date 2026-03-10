@@ -10,6 +10,7 @@ fulltext = ["dep:tantivy"]
 sqlite = ["dep:rusqlite"]
 fts5 = ["sqlite"]
 hnsw = ["dep:usearch"]
+simd = []
 
 [dependencies]
 sift-core = { workspace = true }
@@ -26,6 +27,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+proptest = { workspace = true }
 
 [[bench]]
 name = "vector_search"

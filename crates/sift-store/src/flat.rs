@@ -429,12 +429,33 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    let (dot, norm_a, norm_b) = a
-        .iter()
-        .zip(b.iter())
-        .fold((0.0f32, 0.0f32, 0.0f32), |(dot, na, nb), (&ai, &bi)| {
-            (dot + ai * bi, na + ai * ai, nb + bi * bi)
-        });
+    // Process in chunks of 8 to help LLVM emit SIMD instructions (AVX2/NEON).
+    // The `chunks_exact` + separate accumulator pattern is more vectorization-
+    // friendly than a single fold over zipped iterators.
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+
+    let chunks_a = a.chunks_exact(8);
+    let chunks_b = b.chunks_exact(8);
+    let rem_a = chunks_a.remainder();
+    let rem_b = chunks_b.remainder();
+
+    for (ca, cb) in chunks_a.zip(chunks_b) {
+        for i in 0..8 {
+            let ai = ca[i];
+            let bi = cb[i];
+            dot += ai * bi;
+            norm_a += ai * ai;
+            norm_b += bi * bi;
+        }
+    }
+
+    for (ai, bi) in rem_a.iter().zip(rem_b.iter()) {
+        dot += ai * bi;
+        norm_a += ai * ai;
+        norm_b += bi * bi;
+    }
 
     let denom = (norm_a * norm_b).sqrt();
     if denom == 0.0 {
@@ -752,5 +773,39 @@ mod tests {
     fn test_cosine_zero_vectors() {
         let z = vec![0.0f32; 768];
         assert_eq!(cosine_similarity(&z, &z), 0.0);
+    }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn vec_strategy(dim: usize) -> impl Strategy<Value = Vec<f32>> {
+            prop::collection::vec(-10.0f32..10.0f32, dim)
+        }
+
+        proptest! {
+            #[test]
+            fn symmetric(a in vec_strategy(64), b in vec_strategy(64)) {
+                let ab = cosine_similarity(&a, &b);
+                let ba = cosine_similarity(&b, &a);
+                prop_assert!((ab - ba).abs() < 1e-6, "cos(a,b)={} != cos(b,a)={}", ab, ba);
+            }
+
+            #[test]
+            fn bounded(a in vec_strategy(64), b in vec_strategy(64)) {
+                let score = cosine_similarity(&a, &b);
+                prop_assert!((-1.0 - 1e-6..=1.0 + 1e-6).contains(&score),
+                    "Score {} out of [-1,1]", score);
+            }
+
+            #[test]
+            fn identity_for_nonzero(a in vec_strategy(64)) {
+                let has_nonzero = a.iter().any(|&x| x != 0.0);
+                if has_nonzero {
+                    let score = cosine_similarity(&a, &a);
+                    prop_assert!((score - 1.0).abs() < 1e-5, "cos(a,a)={} != 1.0", score);
+                }
+            }
+        }
     }
 }
