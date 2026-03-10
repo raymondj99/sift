@@ -26,6 +26,3 @@ Thumbs.db
 
 # Benchmark results
 /benchsuite/results/
-
-# Local docs (not tracked)
-/docs/
