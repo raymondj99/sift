@@ -8,7 +8,9 @@
 pub mod config;
 pub mod error;
 pub mod types;
+pub mod util;
 
 pub use config::Config;
 pub use error::{SiftError, SiftResult};
 pub use types::*;
+pub use util::atomic_write;
