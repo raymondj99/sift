@@ -2141,7 +2141,8 @@ fn test_corrupt_vector_index_reports_error() {
         .assert()
         .success();
 
-    // Corrupt the vector index
+    // Corrupt all vector index files so the store cannot load regardless of
+    // which backend (flat or HNSW) is compiled in.
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap();
@@ -2149,12 +2150,18 @@ fn test_corrupt_vector_index_reports_error() {
         .join(".sift")
         .join("indexes")
         .join(&idx);
-    let vectors_path = sift_dir.join("vectors.bin");
-    if vectors_path.exists() {
-        fs::write(&vectors_path, b"corrupted data").unwrap();
-    }
+    fs::create_dir_all(&sift_dir).unwrap();
+    // Corrupt flat vector index
+    fs::write(sift_dir.join("vectors.bin"), b"corrupted data").unwrap();
+    // Corrupt HNSW index files (if present)
+    fs::write(sift_dir.join("vectors.usearch"), b"corrupted data").unwrap();
+    fs::write(
+        sift_dir.join("vectors.usearch.meta.json"),
+        b"corrupted data",
+    )
+    .unwrap();
 
-    // Search should fail gracefully
+    // Search should fail gracefully with a storage error
     sift_cmd(&idx).args(["search", "test"]).assert().failure();
 }
 
