@@ -1,6 +1,7 @@
 use crate::traits::Source;
 use sift_core::{ScanOptions, SiftResult, SourceItem};
 use std::path::Path;
+use std::sync::Mutex;
 use tracing::debug;
 
 pub struct FilesystemSource;
@@ -114,12 +115,8 @@ impl Default for FilesystemSource {
 }
 
 impl Source for FilesystemSource {
-    fn discover(
-        &self,
-        options: &ScanOptions,
-        callback: &mut dyn FnMut(SourceItem) -> SiftResult<()>,
-    ) -> SiftResult<u64> {
-        let mut count = 0u64;
+    fn discover(&self, options: &ScanOptions) -> SiftResult<Vec<SourceItem>> {
+        let items: Mutex<Vec<SourceItem>> = Mutex::new(Vec::new());
 
         for scan_path in &options.paths {
             // Canonicalize the root path once to resolve symlinks (e.g. /var → /private/var
@@ -132,7 +129,8 @@ impl Source for FilesystemSource {
                 .hidden(true) // skip hidden files by default
                 .git_ignore(true)
                 .git_global(true)
-                .git_exclude(true);
+                .git_exclude(true)
+                .threads(options.jobs.max(1));
 
             if let Some(max_depth) = options.max_depth {
                 builder.max_depth(Some(max_depth));
@@ -150,96 +148,110 @@ impl Source for FilesystemSource {
                 builder.overrides(ov);
             }
 
-            for entry in builder.build() {
-                let entry = match entry {
-                    Ok(e) => e,
-                    Err(e) => {
-                        debug!("Walk error: {}", e);
-                        continue;
+            // Use parallel walker with work-stealing across threads
+            let max_file_size = options.max_file_size;
+            let file_types = options.file_types.clone();
+            let items_ref = &items;
+
+            builder.build_parallel().run(|| {
+                let file_types = file_types.clone();
+                Box::new(move |entry| {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            debug!("Walk error: {}", e);
+                            return ignore::WalkState::Continue;
+                        }
+                    };
+
+                    let path = entry.path();
+                    if !path.is_file() {
+                        return ignore::WalkState::Continue;
                     }
-                };
 
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-
-                // Check file size
-                let metadata = match path.metadata() {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                let size = metadata.len();
-                if let Some(max_size) = options.max_file_size {
-                    if size > max_size {
-                        debug!("Skipping {} (too large: {} bytes)", path.display(), size);
-                        continue;
-                    }
-                }
-
-                let extension = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase());
-
-                // Filter by file type if specified (check extension BEFORE reading the file)
-                if !options.file_types.is_empty() {
-                    let ext_matches = options
-                        .file_types
-                        .iter()
-                        .any(|ft| extension.as_deref() == Some(ft.as_str()));
-                    if !ext_matches {
-                        let ext_mime = Self::mime_from_extension(path);
-                        let mime_matches = options
-                            .file_types
-                            .iter()
-                            .any(|ft| ext_mime.is_some_and(|m| m.contains(ft.as_str())));
-                        if !mime_matches {
-                            continue;
+                    // Check file size
+                    let metadata = match path.metadata() {
+                        Ok(m) => m,
+                        Err(_) => return ignore::WalkState::Continue,
+                    };
+                    let size = metadata.len();
+                    if let Some(max_size) = max_file_size {
+                        if size > max_size {
+                            debug!("Skipping {} (too large: {} bytes)", path.display(), size);
+                            return ignore::WalkState::Continue;
                         }
                     }
-                }
 
-                // Single-pass: read file once for both MIME detection and hashing
-                let (content_hash, content_mime) = match Self::read_and_analyze(path) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        debug!("Read error for {}: {}", path.display(), e);
-                        continue;
+                    let extension = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_lowercase());
+
+                    // Filter by file type if specified (check extension BEFORE reading the file)
+                    if !file_types.is_empty() {
+                        let ext_matches = file_types
+                            .iter()
+                            .any(|ft| extension.as_deref() == Some(ft.as_str()));
+                        if !ext_matches {
+                            let ext_mime = FilesystemSource::mime_from_extension(path);
+                            let mime_matches = file_types
+                                .iter()
+                                .any(|ft| ext_mime.is_some_and(|m| m.contains(ft.as_str())));
+                            if !mime_matches {
+                                return ignore::WalkState::Continue;
+                            }
+                        }
                     }
-                };
 
-                // Determine MIME type: prefer content-based, fall back to extension
-                let mime_type =
-                    content_mime.or_else(|| Self::mime_from_extension(path).map(String::from));
+                    // Single-pass: read file once for both MIME detection and hashing
+                    let (content_hash, content_mime) =
+                        match FilesystemSource::read_and_analyze(path) {
+                            Ok(result) => result,
+                            Err(e) => {
+                                debug!("Read error for {}: {}", path.display(), e);
+                                return ignore::WalkState::Continue;
+                            }
+                        };
 
-                // Skip files we can't identify unless they look like text
-                if mime_type.is_none() && extension.is_none() {
-                    continue;
-                }
+                    // Determine MIME type: prefer content-based, fall back to extension
+                    let mime_type = content_mime
+                        .or_else(|| FilesystemSource::mime_from_extension(path).map(String::from));
 
-                let modified_at = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64);
+                    // Skip files we can't identify unless they look like text
+                    if mime_type.is_none() && extension.is_none() {
+                        return ignore::WalkState::Continue;
+                    }
 
-                let item = SourceItem {
-                    uri: format!("file://{}", path.display()),
-                    path: path.to_path_buf(),
-                    content_hash,
-                    size,
-                    modified_at,
-                    mime_type,
-                    extension,
-                };
+                    let modified_at = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64);
 
-                callback(item)?;
-                count += 1;
-            }
+                    let item = SourceItem {
+                        uri: format!("file://{}", path.display()),
+                        path: path.to_path_buf(),
+                        content_hash,
+                        size,
+                        modified_at,
+                        mime_type,
+                        extension,
+                    };
+
+                    if let Ok(mut items) = items_ref.lock() {
+                        items.push(item);
+                    }
+
+                    ignore::WalkState::Continue
+                })
+            });
         }
 
-        Ok(count)
+        let collected = items
+            .into_inner()
+            .map_err(|e| sift_core::SiftError::Source(format!("Lock poisoned: {}", e)))?;
+
+        Ok(collected)
     }
 }
 
@@ -263,15 +275,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut items = vec![];
-        let count = source
-            .discover(&options, &mut |item| {
-                items.push(item);
-                Ok(())
-            })
-            .unwrap();
-
-        assert_eq!(count, 3);
+        let items = source.discover(&options).unwrap();
         assert_eq!(items.len(), 3);
     }
 
@@ -288,14 +292,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut items = vec![];
-        source
-            .discover(&options, &mut |item| {
-                items.push(item);
-                Ok(())
-            })
-            .unwrap();
-
+        let items = source.discover(&options).unwrap();
         assert_eq!(items.len(), 1);
         assert!(items[0].uri.contains("small.txt"));
     }
@@ -361,5 +358,26 @@ mod tests {
 
         let mime = FilesystemSource::mime_from_extension(&path);
         assert!(mime.is_none());
+    }
+
+    #[test]
+    fn test_parallel_discover_deep_nested() {
+        let dir = TempDir::new().unwrap();
+        let mut path = dir.path().to_path_buf();
+        for i in 0..10 {
+            path = path.join(format!("level{}", i));
+            fs::create_dir(&path).unwrap();
+        }
+        fs::write(path.join("deep.txt"), "deep content").unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].uri.contains("deep.txt"));
     }
 }
