@@ -368,12 +368,17 @@ impl VectorStore for FlatVectorIndex {
             })
             .collect();
 
-        // Sort descending by score
+        // Partial sort: O(n + k log k) instead of O(n log n)
+        if scored.len() > top_k && top_k > 0 {
+            scored.select_nth_unstable_by(top_k - 1, |a, b| {
+                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored.truncate(top_k);
+        }
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let results = scored
             .into_iter()
-            .take(top_k)
             .map(|(score, entry)| SearchResult {
                 uri: entry.uri.clone(),
                 text: entry.text.clone(),

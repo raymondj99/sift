@@ -77,12 +77,11 @@ fn rrf_fuse(
 ) -> Vec<SearchResult> {
     const K: f32 = 60.0;
 
-    // Build a map of URI+chunk_index → (best SearchResult, RRF score)
-    let mut scores: HashMap<String, (SearchResult, f32)> = HashMap::new();
+    // Use (uri, chunk_index) tuple key to avoid format! allocations
+    let mut scores: HashMap<(&str, u32), (SearchResult, f32)> = HashMap::new();
 
-    // Process vector results
     for (rank, result) in vector_results.iter().enumerate() {
-        let key = format!("{}:{}", result.uri, result.chunk_index);
+        let key = (result.uri.as_str(), result.chunk_index);
         let rrf_score = alpha / (K + rank as f32 + 1.0);
 
         scores
@@ -91,9 +90,8 @@ fn rrf_fuse(
             .or_insert_with(|| (result.clone(), rrf_score));
     }
 
-    // Process BM25 results
     for (rank, result) in bm25_results.iter().enumerate() {
-        let key = format!("{}:{}", result.uri, result.chunk_index);
+        let key = (result.uri.as_str(), result.chunk_index);
         let rrf_score = (1.0 - alpha) / (K + rank as f32 + 1.0);
 
         scores
@@ -102,11 +100,9 @@ fn rrf_fuse(
             .or_insert_with(|| (result.clone(), rrf_score));
     }
 
-    // Sort by fused score descending
     let mut fused: Vec<(SearchResult, f32)> = scores.into_values().collect();
     fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Return top-k with fused scores
     fused
         .into_iter()
         .take(top_k)

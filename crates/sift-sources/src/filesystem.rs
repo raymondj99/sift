@@ -18,75 +18,70 @@ impl FilesystemSource {
     }
 
     /// MIME type from file extension alone (no I/O).
-    pub(crate) fn mime_from_extension(path: &Path) -> Option<String> {
+    pub(crate) fn mime_from_extension(path: &Path) -> Option<&'static str> {
         let ext = path.extension()?.to_str()?;
-        Some(
-            match ext {
-                "txt" => "text/plain",
-                "md" | "markdown" => "text/markdown",
-                "rs" => "text/x-rust",
-                "py" => "text/x-python",
-                "js" => "text/javascript",
-                "ts" => "text/typescript",
-                "jsx" | "tsx" => "text/javascript",
-                "go" => "text/x-go",
-                "c" | "h" => "text/x-c",
-                "cpp" | "hpp" | "cc" | "cxx" => "text/x-c++",
-                "java" => "text/x-java",
-                "rb" => "text/x-ruby",
-                "sh" | "bash" | "zsh" | "fish" => "text/x-shellscript",
-                "html" | "htm" => "text/html",
-                "xml" => "text/xml",
-                "css" => "text/css",
-                "json" => "application/json",
-                "jsonl" => "application/jsonlines",
-                "toml" => "application/toml",
-                "yaml" | "yml" => "application/yaml",
-                "csv" => "text/csv",
-                "pdf" => "application/pdf",
-                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "pptx" => {
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                }
-                "eml" => "message/rfc822",
-                "mbox" => "application/mbox",
-                "xls" => "application/vnd.ms-excel",
-                "ods" => "application/vnd.oasis.opendocument.spreadsheet",
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                "svg" => "image/svg+xml",
-                "mp3" => "audio/mpeg",
-                "wav" => "audio/wav",
-                "flac" => "audio/flac",
-                "zip" => "application/zip",
-                "tar" => "application/x-tar",
-                "gz" | "tgz" => "application/gzip",
-                "rst" => "text/x-rst",
-                "org" => "text/x-org",
-                "cfg" | "ini" | "conf" => "text/plain",
-                "log" => "text/plain",
-                "sql" => "text/x-sql",
-                "r" => "text/x-r",
-                "swift" => "text/x-swift",
-                "kt" | "kts" => "text/x-kotlin",
-                "scala" => "text/x-scala",
-                "zig" => "text/x-zig",
-                "lua" => "text/x-lua",
-                "pl" | "pm" => "text/x-perl",
-                "ex" | "exs" => "text/x-elixir",
-                "erl" | "hrl" => "text/x-erlang",
-                "hs" => "text/x-haskell",
-                "ml" | "mli" => "text/x-ocaml",
-                "proto" => "text/x-protobuf",
-                "tf" | "tfvars" => "text/x-terraform",
-                "dockerfile" => "text/x-dockerfile",
-                _ => return None,
-            }
-            .to_string(),
-        )
+        Some(match ext {
+            "txt" => "text/plain",
+            "md" | "markdown" => "text/markdown",
+            "rs" => "text/x-rust",
+            "py" => "text/x-python",
+            "js" => "text/javascript",
+            "ts" => "text/typescript",
+            "jsx" | "tsx" => "text/javascript",
+            "go" => "text/x-go",
+            "c" | "h" => "text/x-c",
+            "cpp" | "hpp" | "cc" | "cxx" => "text/x-c++",
+            "java" => "text/x-java",
+            "rb" => "text/x-ruby",
+            "sh" | "bash" | "zsh" | "fish" => "text/x-shellscript",
+            "html" | "htm" => "text/html",
+            "xml" => "text/xml",
+            "css" => "text/css",
+            "json" => "application/json",
+            "jsonl" => "application/jsonlines",
+            "toml" => "application/toml",
+            "yaml" | "yml" => "application/yaml",
+            "csv" => "text/csv",
+            "pdf" => "application/pdf",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "eml" => "message/rfc822",
+            "mbox" => "application/mbox",
+            "xls" => "application/vnd.ms-excel",
+            "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "flac" => "audio/flac",
+            "zip" => "application/zip",
+            "tar" => "application/x-tar",
+            "gz" | "tgz" => "application/gzip",
+            "rst" => "text/x-rst",
+            "org" => "text/x-org",
+            "cfg" | "ini" | "conf" => "text/plain",
+            "log" => "text/plain",
+            "sql" => "text/x-sql",
+            "r" => "text/x-r",
+            "swift" => "text/x-swift",
+            "kt" | "kts" => "text/x-kotlin",
+            "scala" => "text/x-scala",
+            "zig" => "text/x-zig",
+            "lua" => "text/x-lua",
+            "pl" | "pm" => "text/x-perl",
+            "ex" | "exs" => "text/x-elixir",
+            "erl" | "hrl" => "text/x-erlang",
+            "hs" => "text/x-haskell",
+            "ml" | "mli" => "text/x-ocaml",
+            "proto" => "text/x-protobuf",
+            "tf" | "tfvars" => "text/x-terraform",
+            "dockerfile" => "text/x-dockerfile",
+            _ => return None,
+        })
     }
 
     /// Detect MIME type using both content-based detection and extension fallback.
@@ -99,7 +94,7 @@ impl FilesystemSource {
             }
         }
         // Fall back to extension
-        Self::mime_from_extension(path)
+        Self::mime_from_extension(path).map(String::from)
     }
 
     /// Read a file once, returning (content_hash, content_mime).
@@ -127,7 +122,12 @@ impl Source for FilesystemSource {
         let mut count = 0u64;
 
         for scan_path in &options.paths {
-            let mut builder = ignore::WalkBuilder::new(scan_path);
+            // Canonicalize the root path once to resolve symlinks (e.g. /var → /private/var
+            // on macOS). Individual file paths inherit the canonical prefix from the walker.
+            let canonical_root = scan_path
+                .canonicalize()
+                .unwrap_or_else(|_| scan_path.clone());
+            let mut builder = ignore::WalkBuilder::new(&canonical_root);
             builder
                 .hidden(true) // skip hidden files by default
                 .git_ignore(true)
@@ -139,7 +139,7 @@ impl Source for FilesystemSource {
             }
 
             // Add custom ignore patterns
-            let mut overrides = ignore::overrides::OverrideBuilder::new(scan_path);
+            let mut overrides = ignore::overrides::OverrideBuilder::new(&canonical_root);
             for pattern in &options.exclude_globs {
                 let _ = overrides.add(&format!("!{}", pattern));
             }
@@ -189,12 +189,11 @@ impl Source for FilesystemSource {
                         .iter()
                         .any(|ft| extension.as_deref() == Some(ft.as_str()));
                     if !ext_matches {
-                        // Also check the extension-based MIME for type matching
                         let ext_mime = Self::mime_from_extension(path);
                         let mime_matches = options
                             .file_types
                             .iter()
-                            .any(|ft| ext_mime.as_deref().is_some_and(|m| m.contains(ft.as_str())));
+                            .any(|ft| ext_mime.is_some_and(|m| m.contains(ft.as_str())));
                         if !mime_matches {
                             continue;
                         }
@@ -211,7 +210,8 @@ impl Source for FilesystemSource {
                 };
 
                 // Determine MIME type: prefer content-based, fall back to extension
-                let mime_type = content_mime.or_else(|| Self::mime_from_extension(path));
+                let mime_type =
+                    content_mime.or_else(|| Self::mime_from_extension(path).map(String::from));
 
                 // Skip files we can't identify unless they look like text
                 if mime_type.is_none() && extension.is_none() {
@@ -225,10 +225,7 @@ impl Source for FilesystemSource {
                     .map(|d| d.as_secs() as i64);
 
                 let item = SourceItem {
-                    uri: format!(
-                        "file://{}",
-                        path.canonicalize().unwrap_or(path.to_path_buf()).display()
-                    ),
+                    uri: format!("file://{}", path.display()),
                     path: path.to_path_buf(),
                     content_hash,
                     size,
@@ -353,7 +350,7 @@ mod tests {
         fs::write(&path, "fn main() {}").unwrap();
 
         let mime = FilesystemSource::mime_from_extension(&path);
-        assert_eq!(mime, Some("text/x-rust".to_string()));
+        assert_eq!(mime, Some("text/x-rust"));
     }
 
     #[test]
