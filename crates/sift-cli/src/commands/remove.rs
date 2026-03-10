@@ -4,6 +4,7 @@ use crate::OutputFormat;
 #[cfg(feature = "fancy")]
 use colored::*;
 use sift_core::{Config, SiftResult};
+use sift_store::FullTextStore;
 #[cfg(feature = "hnsw")]
 use sift_store::VectorIndex;
 
@@ -40,9 +41,10 @@ pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResu
         }
     }
 
-    // Save vector store (binary format)
+    // Persist stores to disk
     let vector_path = config.index_dir().join("vectors.bin");
     engine.vector_store.save(&vector_path)?;
+    engine.fulltext_store.flush()?;
 
     match format {
         OutputFormat::Json => {

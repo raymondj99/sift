@@ -97,6 +97,8 @@ symphonia-core = "0.5"
 uuid = { version = "1", features = ["v7"] }
 tempfile = "3"
 notify = "7"
+ctrlc = "3"
+fs4 = "0.12"
 
 # HTTP testing
 http-body-util = "0.1"

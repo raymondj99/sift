@@ -1,4 +1,5 @@
 use crossbeam_channel as channel;
+use fs4::fs_std::FileExt;
 #[cfg(feature = "fancy")]
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -10,11 +11,18 @@ use sift_core::{Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult,
 use sift_embed::{models::NOMIC_EMBED_TEXT_V2, EmbeddingCache, ModelManager, OnnxEmbedder};
 use sift_parsers::ParserRegistry;
 use sift_sources::{FilesystemSource, Source};
+#[cfg(feature = "sqlite")]
+use sift_store::TransactionGuard;
 #[cfg(feature = "hnsw")]
 use sift_store::VectorIndex;
-use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
-use std::sync::atomic::{AtomicU64, Ordering};
+use sift_store::{
+    DefaultFullTextStore, FullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore,
+};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{debug, info, warn};
+
+/// Global shutdown flag set by the Ctrl-C handler.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "vision")]
 use sift_embed::{models::NOMIC_EMBED_VISION_V1_5, VisionEmbedder};
@@ -206,6 +214,23 @@ pub fn run_scan_pipeline(
     #[cfg(feature = "vision")] vision_embedder: Option<&VisionEmbedder>,
     quiet: bool,
 ) -> SiftResult<ScanStats> {
+    // Acquire an advisory exclusive lock to prevent concurrent index mutations.
+    let lock_path = config.index_dir().join(".lock");
+    let lock_file = std::fs::File::create(&lock_path)?;
+    lock_file.try_lock_exclusive().map_err(|_| {
+        sift_core::SiftError::Storage(
+            "Another sift process is using this index. If this is incorrect, remove the .lock file."
+                .into(),
+        )
+    })?;
+
+    // Reset and install the Ctrl-C handler for graceful shutdown.
+    SHUTDOWN.store(false, Ordering::SeqCst);
+    ctrlc::set_handler(|| {
+        SHUTDOWN.store(true, Ordering::SeqCst);
+    })
+    .ok(); // best-effort; may fail if already registered
+
     let source = FilesystemSource::new();
     #[cfg(feature = "embeddings")]
     let cache = if embedder.is_some() {
@@ -313,7 +338,9 @@ pub fn run_scan_pipeline(
         // ---- Stage 1: Feed discovered items into the pipeline ----
         s.spawn(|| {
             for item in to_process {
-                // If the receiver has been dropped (e.g. downstream error) just stop.
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    break;
+                }
                 if discover_tx.send(item).is_err() {
                     break;
                 }
@@ -324,17 +351,11 @@ pub fn run_scan_pipeline(
         // ---- Stage 2: Parse + Chunk (rayon) ----
         s.spawn(|| {
             pool.install(|| {
-                // Drain the discover channel in parallel via rayon.
-                // We collect into a temporary vec per batch to enable par_iter.
-                // Using a simple loop that grabs items and spawns rayon work.
-                //
-                // The approach: pull items from the channel on the current
-                // thread, spawn rayon tasks that parse+chunk, and send results.
-                // We use par_bridge() on the channel iterator for direct
-                // rayon parallelism over the channel.
+                let parser_registry = ParserRegistry::new();
                 discover_rx.into_iter().par_bridge().for_each(|item| {
-                    let parser_registry = ParserRegistry::new();
-
+                    if SHUTDOWN.load(Ordering::Relaxed) {
+                        return;
+                    }
                     // Read file content
                     let content = match std::fs::read(&item.path) {
                         Ok(c) => c,
@@ -401,9 +422,13 @@ pub fn run_scan_pipeline(
             drop(parse_tx);
         });
 
-        // ---- Stage 3: Embed ----
+        // ---- Stage 3: Embed (parallel) ----
         s.spawn(|| {
-            for parsed in parse_rx {
+            parse_rx.into_iter().par_bridge().for_each(|parsed| {
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    return;
+                }
+
                 let chunks = parsed.chunks;
                 let item = parsed.item;
                 let file_type = parsed.file_type;
@@ -436,24 +461,23 @@ pub fn run_scan_pipeline(
                     file_type,
                 };
 
-                if embed_tx.send(store_item).is_err() {
-                    break;
-                }
-            }
+                let _ = embed_tx.send(store_item);
+            });
             drop(embed_tx);
         });
 
         // ---- Stage 4: Store (runs on the scoped main thread) ----
-        let mut store_error: Option<sift_core::SiftError> = None;
-
-        // Begin transaction for batch writes
+        // TransactionGuard auto-rolls back on drop if not committed.
+        #[cfg(feature = "sqlite")]
+        let mut txn = TransactionGuard::begin(metadata)?;
         let batch_size: u64 = 100;
         let mut batch_count: u64 = 0;
-        if let Err(e) = metadata.begin_transaction() {
-            store_error = Some(e);
-        }
 
         for store_item in embed_rx {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                break;
+            }
+
             pb.set_message(
                 store_item
                     .item
@@ -470,23 +494,17 @@ pub fn run_scan_pipeline(
             let _ = engine.delete_by_uri(&store_item.item.uri);
 
             // Insert into stores
-            if let Err(e) = engine.insert(&store_item.embedded) {
-                store_error = Some(e);
-                break;
-            }
+            engine.insert(&store_item.embedded)?;
 
             // Update metadata
-            if let Err(e) = metadata.upsert_source(
+            metadata.upsert_source(
                 &store_item.item.uri,
                 &store_item.item.content_hash,
                 store_item.item.size,
                 &store_item.file_type,
                 store_item.item.modified_at,
                 chunk_count,
-            ) {
-                store_error = Some(e);
-                break;
-            }
+            )?;
 
             atomic_indexed.fetch_add(1, Ordering::Relaxed);
             atomic_chunks.fetch_add(chunk_count as u64, Ordering::Relaxed);
@@ -498,34 +516,24 @@ pub fn run_scan_pipeline(
 
             batch_count += 1;
             if batch_count.is_multiple_of(batch_size) {
-                if let Err(e) = metadata.commit_transaction() {
-                    store_error = Some(e);
-                    break;
-                }
-                if let Err(e) = metadata.begin_transaction() {
-                    store_error = Some(e);
-                    break;
-                }
+                #[cfg(feature = "sqlite")]
+                txn.commit_and_reopen()?;
             }
         }
 
-        // Final commit for remaining items
-        if store_error.is_none() {
-            if let Err(e) = metadata.commit_transaction() {
-                store_error = Some(e);
-            }
-        }
+        #[cfg(feature = "sqlite")]
+        txn.commit()?;
 
         pb.finish_and_clear();
-
-        if let Some(e) = store_error {
-            return Err(e);
-        }
 
         Ok(())
     });
 
     scope_result?;
+
+    if SHUTDOWN.load(Ordering::Relaxed) {
+        warn!("Interrupted — partial results have been committed");
+    }
 
     // Collect atomic counters into stats.
     stats.errors = atomic_errors.load(Ordering::Relaxed);
@@ -548,9 +556,10 @@ pub fn run_scan_pipeline(
         }
     }
 
-    // Save vector store to disk (binary format)
+    // Persist stores to disk
     let vector_path = config.index_dir().join("vectors.bin");
     engine.vector_store.save(&vector_path)?;
+    engine.fulltext_store.flush()?;
 
     Ok(stats)
 }

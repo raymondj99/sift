@@ -62,6 +62,8 @@ walkdir = { workspace = true }
 globset = { workspace = true }
 rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
+ctrlc = { workspace = true }
+fs4 = { workspace = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
