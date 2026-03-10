@@ -42,7 +42,7 @@ pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResu
     }
 
     // Persist stores to disk
-    let vector_path = config.index_dir().join("vectors.bin");
+    let vector_path = config.index_dir()?.join("vectors.bin");
     engine.vector_store.save(&vector_path)?;
     engine.fulltext_store.flush()?;
 

@@ -46,7 +46,7 @@ pub fn open_engine(
     MetadataStore,
 )> {
     config.ensure_dirs()?;
-    let index_dir = config.index_dir();
+    let index_dir = config.index_dir()?;
 
     #[cfg(feature = "hnsw")]
     let vector_store = SimpleVectorStore::load_or_create(&index_dir)?;
@@ -75,7 +75,7 @@ pub fn open_engine(
 /// is disabled or when the model is not available.
 #[cfg(feature = "embeddings")]
 pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
-    let manager = ModelManager::new();
+    let manager = ModelManager::new().ok()?;
     manager.init_ort_env();
 
     // Determine which model to load
@@ -134,7 +134,7 @@ pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
 /// Try to load the vision embedder for image embedding.
 #[cfg(all(feature = "embeddings", feature = "vision"))]
 pub fn load_vision_embedder() -> Option<VisionEmbedder> {
-    let manager = ModelManager::new();
+    let manager = ModelManager::new().ok()?;
     manager.init_ort_env();
     let model_def = &NOMIC_EMBED_VISION_V1_5;
 
@@ -166,9 +166,9 @@ pub fn load_vision_embedder() -> Option<VisionEmbedder> {
 #[cfg(feature = "embeddings")]
 pub fn open_cache(config: &Config) -> Option<EmbeddingCache> {
     #[cfg(feature = "sqlite")]
-    let cache_path = config.index_dir().join("embedding_cache.db");
+    let cache_path = config.index_dir().ok()?.join("embedding_cache.db");
     #[cfg(not(feature = "sqlite"))]
-    let cache_path = config.index_dir().join("embedding_cache.json");
+    let cache_path = config.index_dir().ok()?.join("embedding_cache.json");
     match EmbeddingCache::open(&cache_path) {
         Ok(cache) => {
             info!("Opened embedding cache ({} entries)", cache.len());
@@ -215,7 +215,7 @@ pub fn run_scan_pipeline(
     quiet: bool,
 ) -> SiftResult<ScanStats> {
     // Acquire an advisory exclusive lock to prevent concurrent index mutations.
-    let lock_path = config.index_dir().join(".lock");
+    let lock_path = config.index_dir()?.join(".lock");
     let lock_file = std::fs::File::create(&lock_path)?;
     lock_file.try_lock_exclusive().map_err(|_| {
         sift_core::SiftError::Storage(
@@ -244,11 +244,7 @@ pub fn run_scan_pipeline(
     let mut stats = ScanStats::default();
 
     // Phase 1: Discover files
-    let mut items: Vec<SourceItem> = Vec::new();
-    source.discover(options, &mut |item| {
-        items.push(item);
-        Ok(())
-    })?;
+    let items = source.discover(options)?;
 
     info!("Discovered {} files", items.len());
     stats.discovered = items.len() as u64;
@@ -557,7 +553,7 @@ pub fn run_scan_pipeline(
     }
 
     // Persist stores to disk
-    let vector_path = config.index_dir().join("vectors.bin");
+    let vector_path = config.index_dir()?.join("vectors.bin");
     engine.vector_store.save(&vector_path)?;
     engine.fulltext_store.flush()?;
 
