@@ -37,11 +37,6 @@ pub fn format_search_results(results: &[SearchResult], format: &OutputFormat, sh
     }
 }
 
-/// Legacy wrapper — delegates to `format_search_results`.
-pub fn print_search_results(results: &[SearchResult], format: &OutputFormat, show_context: bool) {
-    format_search_results(results, format, show_context);
-}
-
 fn print_search_results_human(results: &[SearchResult], show_context: bool) {
     if results.is_empty() {
         println!("{}", "No results found.".dimmed());
@@ -95,6 +90,8 @@ fn print_snippet(result: &SearchResult) {
 }
 
 /// Read +/-2 lines of context around a byte range from a file URI.
+///
+/// Uses a sliding window to avoid reading the entire file into memory.
 fn read_context_lines(uri: &str, byte_range: Option<(u64, u64)>) -> Option<Vec<String>> {
     let path = uri.strip_prefix("file://")?;
     let (start_byte, _end_byte) = byte_range?;
@@ -102,30 +99,47 @@ fn read_context_lines(uri: &str, byte_range: Option<(u64, u64)>) -> Option<Vec<S
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
 
+    let context_radius = 2;
     let mut offset: u64 = 0;
-    let mut lines: Vec<(usize, String)> = Vec::new();
-    let mut target_line = 0;
+    let mut target_line: Option<usize> = None;
+    let mut kept: Vec<(usize, String)> = Vec::new();
 
     for (line_num, line_result) in reader.lines().enumerate() {
         let line = line_result.ok()?;
-        let line_end = offset + line.len() as u64 + 1; // +1 for newline
-        if offset <= start_byte && start_byte < line_end && target_line == 0 {
-            target_line = line_num;
+        let line_end = offset + line.len() as u64 + 1;
+
+        if target_line.is_none() && offset <= start_byte && start_byte < line_end {
+            target_line = Some(line_num);
         }
-        lines.push((line_num, line));
+
+        match target_line {
+            None => {
+                // Before target: keep a sliding window of `context_radius` lines
+                kept.push((line_num, line));
+                if kept.len() > context_radius {
+                    kept.remove(0);
+                }
+            }
+            Some(tl) => {
+                kept.push((line_num, line));
+                if line_num >= tl + context_radius {
+                    break;
+                }
+            }
+        }
+
         offset = line_end;
     }
 
-    let context_radius = 2;
-    let start = target_line.saturating_sub(context_radius);
-    let end = (target_line + context_radius + 1).min(lines.len());
-
-    let mut output = Vec::new();
-    for &(line_num, ref line) in &lines[start..end] {
-        let num = format!("{:>4}", line_num + 1);
-        let marker = if line_num == target_line { ">" } else { " " };
-        output.push(format!("{}{}{}", num.dimmed(), marker.green().bold(), line));
-    }
+    let tl = target_line?;
+    let output = kept
+        .iter()
+        .map(|(line_num, line)| {
+            let num = format!("{:>4}", line_num + 1);
+            let marker = if *line_num == tl { ">" } else { " " };
+            format!("{}{}{}", num.dimmed(), marker.green().bold(), line)
+        })
+        .collect();
 
     Some(output)
 }
@@ -154,11 +168,6 @@ pub fn format_stats(stats: &IndexStats, format: &OutputFormat) {
             print_index_stats_human(stats);
         }
     }
-}
-
-/// Legacy wrapper — delegates to `format_stats`.
-pub fn print_index_stats(stats: &IndexStats, format: &OutputFormat) {
-    format_stats(stats, format);
 }
 
 fn print_index_stats_human(stats: &IndexStats) {

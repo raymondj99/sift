@@ -79,7 +79,7 @@ pub fn run(
         results.retain(|r| allowed.contains(&r.uri));
     }
 
-    output::print_search_results(&results, format, options.context);
+    output::format_search_results(&results, format, options.context);
 
     // Open top result in default application
     if open {

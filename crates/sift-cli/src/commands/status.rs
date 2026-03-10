@@ -34,7 +34,7 @@ pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
         stats.index_size_bytes = dir_size(&index_dir);
     }
 
-    output::print_index_stats(&stats, format);
+    output::format_stats(&stats, format);
 
     Ok(())
 }
