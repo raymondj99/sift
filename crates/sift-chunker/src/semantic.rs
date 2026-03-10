@@ -20,7 +20,7 @@ impl SemanticChunker {
         let bytes = text.as_bytes();
 
         // Check what's at/around this position
-        if pos >= text.len() {
+        if pos >= text.len() || !text.is_char_boundary(pos) {
             return 0;
         }
 
@@ -39,7 +39,7 @@ impl SemanticChunker {
         if !text.is_char_boundary(line_start) {
             return 0;
         }
-        let line = &text[line_start..pos.min(text.len())];
+        let line = &text[line_start..pos];
         if line.starts_with("fn ")
             || line.starts_with("def ")
             || line.starts_with("class ")
@@ -225,6 +225,35 @@ mod tests {
                     chunks[i].1 >= chunks[i - 1].1,
                     "Offsets should be non-decreasing"
                 );
+            }
+        }
+    }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn never_panics(text in "\\PC{0,1000}", max_size in 10..500usize, overlap in 0..100usize) {
+                let chunker = SemanticChunker::new(max_size, overlap);
+                let _ = chunker.chunk(&text);
+            }
+
+            #[test]
+            fn offsets_within_bounds(text in "\\PC{1,500}", max_size in 10..200usize) {
+                let chunker = SemanticChunker::new(max_size, 0);
+                let chunks = chunker.chunk(&text);
+                for (_, offset) in &chunks {
+                    prop_assert!(*offset <= text.len(), "Offset {} exceeds text len {}", offset, text.len());
+                }
+            }
+
+            #[test]
+            fn split_quality_never_panics(text in "\\PC{1,500}", pos in 0..500usize) {
+                if pos < text.len() {
+                    let _ = SemanticChunker::split_quality(&text, pos);
+                }
             }
         }
     }
