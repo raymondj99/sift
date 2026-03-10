@@ -38,4 +38,10 @@ pub trait FullTextStore: Send + Sync {
 
     /// Delete all chunks from a given source URI.
     fn delete_by_uri(&self, uri: &str) -> SiftResult<u64>;
+
+    /// Persist any buffered state to disk. Default is a no-op for stores
+    /// that commit on each mutation (e.g. SQLite-backed FTS5, Tantivy).
+    fn flush(&self) -> SiftResult<()> {
+        Ok(())
+    }
 }

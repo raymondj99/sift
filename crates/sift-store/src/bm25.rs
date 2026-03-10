@@ -1,4 +1,5 @@
 use crate::traits::FullTextStore;
+use serde::{Deserialize, Serialize};
 use sift_core::{EmbeddedChunk, SearchResult, SiftResult};
 use std::collections::HashMap;
 use std::path::Path;
@@ -32,6 +33,31 @@ struct DocMeta {
     content_type: sift_core::ContentType,
     file_type: String,
     title: Option<String>,
+    byte_range: Option<(u64, u64)>,
+    doc_len: u32,
+}
+
+/// Serializable representation of the BM25 index.
+#[derive(Serialize, Deserialize)]
+struct SerializableBm25 {
+    doc_count: u32,
+    avg_dl: f64,
+    next_id: u32,
+    docs: Vec<SerializableDoc>,
+    index: HashMap<String, Vec<(u32, f32)>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SerializableDoc {
+    id: u32,
+    uri: String,
+    text: String,
+    chunk_index: u32,
+    content_type: sift_core::ContentType,
+    file_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     byte_range: Option<(u64, u64)>,
     doc_len: u32,
 }
@@ -75,116 +101,74 @@ impl Bm25Store {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(path, data)?;
+            sift_core::atomic_write(path, data.as_bytes())?;
         }
         Ok(())
     }
 
+    /// Persist the current in-memory state to disk.
+    ///
+    /// Call this after a batch of insert/delete operations to avoid
+    /// serializing the entire index on every mutation.
+    pub fn flush(&self) -> SiftResult<()> {
+        self.save()
+    }
+
     fn serialize(inner: &Bm25Inner) -> String {
-        let mut docs_json = Vec::new();
-        for (&id, meta) in &inner.docs {
-            let title = meta
-                .title
-                .as_ref()
-                .map(|t| format!(",\"title\":\"{}\"", json_escape(t)))
-                .unwrap_or_default();
-            let byte_range = meta
-                .byte_range
-                .map(|(s, e)| format!(",\"byte_range\":[{},{}]", s, e))
-                .unwrap_or_default();
-            docs_json.push(format!(
-                "{{\"id\":{},\"uri\":\"{}\",\"text\":\"{}\",\"chunk_index\":{},\"content_type\":\"{}\",\"file_type\":\"{}\",\"doc_len\":{}{}{}}}",
-                id,
-                json_escape(&meta.uri),
-                json_escape(&meta.text),
-                meta.chunk_index,
-                meta.content_type,
-                json_escape(&meta.file_type),
-                meta.doc_len,
-                title,
-                byte_range,
-            ));
-        }
-
-        let mut index_json = Vec::new();
-        for (term, postings) in &inner.index {
-            let entries: Vec<String> = postings
+        let ser = SerializableBm25 {
+            doc_count: inner.doc_count,
+            avg_dl: inner.avg_dl,
+            next_id: inner.next_id,
+            docs: inner
+                .docs
                 .iter()
-                .map(|(id, tf)| format!("[{},{}]", id, tf))
-                .collect();
-            index_json.push(format!("\"{}\":[{}]", json_escape(term), entries.join(",")));
-        }
-
-        format!(
-            "{{\"doc_count\":{},\"avg_dl\":{},\"next_id\":{},\"docs\":[{}],\"index\":{{{}}}}}",
-            inner.doc_count,
-            inner.avg_dl,
-            inner.next_id,
-            docs_json.join(","),
-            index_json.join(","),
-        )
+                .map(|(&id, meta)| SerializableDoc {
+                    id,
+                    uri: meta.uri.clone(),
+                    text: meta.text.clone(),
+                    chunk_index: meta.chunk_index,
+                    content_type: meta.content_type,
+                    file_type: meta.file_type.clone(),
+                    title: meta.title.clone(),
+                    byte_range: meta.byte_range,
+                    doc_len: meta.doc_len,
+                })
+                .collect(),
+            index: inner.index.clone(),
+        };
+        serde_json::to_string(&ser).expect("BM25 serialization cannot fail")
     }
 
     fn deserialize(data: &str) -> SiftResult<Bm25Inner> {
-        let v: serde_json::Value =
+        let ser: SerializableBm25 =
             serde_json::from_str(data).map_err(|e| sift_core::SiftError::Storage(e.to_string()))?;
 
-        let doc_count = v["doc_count"].as_u64().unwrap_or(0) as u32;
-        let avg_dl = v["avg_dl"].as_f64().unwrap_or(0.0);
-        let next_id = v["next_id"].as_u64().unwrap_or(0) as u32;
-
-        let mut docs = HashMap::new();
-        if let Some(docs_arr) = v["docs"].as_array() {
-            for d in docs_arr {
-                let id = d["id"].as_u64().unwrap_or(0) as u32;
-                let content_type = match d["content_type"].as_str().unwrap_or("text") {
-                    "code" => sift_core::ContentType::Code,
-                    "image" => sift_core::ContentType::Image,
-                    "audio" => sift_core::ContentType::Audio,
-                    "data" => sift_core::ContentType::Data,
-                    _ => sift_core::ContentType::Text,
-                };
-                let byte_range = d["byte_range"]
-                    .as_array()
-                    .map(|a| (a[0].as_u64().unwrap_or(0), a[1].as_u64().unwrap_or(0)));
-                docs.insert(
-                    id,
+        let docs = ser
+            .docs
+            .into_iter()
+            .map(|d| {
+                (
+                    d.id,
                     DocMeta {
-                        uri: d["uri"].as_str().unwrap_or("").to_string(),
-                        text: d["text"].as_str().unwrap_or("").to_string(),
-                        chunk_index: d["chunk_index"].as_u64().unwrap_or(0) as u32,
-                        content_type,
-                        file_type: d["file_type"].as_str().unwrap_or("").to_string(),
-                        title: d["title"].as_str().map(|s| s.to_string()),
-                        byte_range,
-                        doc_len: d["doc_len"].as_u64().unwrap_or(0) as u32,
+                        uri: d.uri,
+                        text: d.text,
+                        chunk_index: d.chunk_index,
+                        content_type: d.content_type,
+                        file_type: d.file_type,
+                        title: d.title,
+                        byte_range: d.byte_range,
+                        doc_len: d.doc_len,
                     },
-                );
-            }
-        }
-
-        let mut index = HashMap::new();
-        if let Some(idx_obj) = v["index"].as_object() {
-            for (term, postings) in idx_obj {
-                if let Some(arr) = postings.as_array() {
-                    let entries: Vec<(u32, f32)> = arr
-                        .iter()
-                        .filter_map(|entry| {
-                            let a = entry.as_array()?;
-                            Some((a[0].as_u64()? as u32, a[1].as_f64()? as f32))
-                        })
-                        .collect();
-                    index.insert(term.clone(), entries);
-                }
-            }
-        }
+                )
+            })
+            .collect();
 
         Ok(Bm25Inner {
-            index,
+            index: ser.index,
             docs,
-            doc_count,
-            avg_dl,
-            next_id,
+            doc_count: ser.doc_count,
+            avg_dl: ser.avg_dl,
+            next_id: ser.next_id,
         })
     }
 }
@@ -306,8 +290,7 @@ impl FullTextStore for Bm25Store {
             };
             inner.add_doc(meta);
         }
-        drop(inner);
-        self.save()
+        Ok(())
     }
 
     fn search(&self, query: &str, top_k: usize) -> SiftResult<Vec<SearchResult>> {
@@ -353,11 +336,11 @@ impl FullTextStore for Bm25Store {
         for id in ids_to_remove {
             inner.remove_doc(id);
         }
-        drop(inner);
-        if count > 0 {
-            let _ = self.save();
-        }
         Ok(count)
+    }
+
+    fn flush(&self) -> SiftResult<()> {
+        self.save()
     }
 }
 
@@ -377,15 +360,6 @@ fn tokenize(text: &str) -> Vec<String> {
                 .collect()
         })
         .collect()
-}
-
-/// Minimal JSON string escaping.
-fn json_escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
 }
 
 #[cfg(test)]
@@ -483,6 +457,7 @@ mod tests {
             store
                 .insert(&[make_chunk("file:///test.txt", "persistent search data")])
                 .unwrap();
+            store.flush().unwrap();
         }
 
         // Load and verify
