@@ -32,7 +32,7 @@ pub use hybrid::HybridSearchEngine;
 #[cfg(not(feature = "sqlite"))]
 pub use json_metadata::MetadataStore;
 #[cfg(feature = "sqlite")]
-pub use metadata::MetadataStore;
+pub use metadata::{MetadataStore, TransactionGuard};
 #[cfg(feature = "fulltext")]
 pub use tantivy_store::TantivyStore;
 pub use traits::{FullTextStore, VectorIndex, VectorStore};

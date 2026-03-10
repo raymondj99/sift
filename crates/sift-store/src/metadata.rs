@@ -339,6 +339,57 @@ impl MetadataStore {
             .map_err(|e| sift_core::SiftError::Storage(format!("Commit transaction: {}", e)))?;
         Ok(())
     }
+
+    /// Rollback the current transaction.
+    pub fn rollback_transaction(&self) -> SiftResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+        conn.execute_batch("ROLLBACK")
+            .map_err(|e| sift_core::SiftError::Storage(format!("Rollback transaction: {}", e)))?;
+        Ok(())
+    }
+}
+
+/// RAII guard that auto-rolls back an uncommitted transaction on drop.
+pub struct TransactionGuard<'a> {
+    metadata: &'a MetadataStore,
+    committed: bool,
+}
+
+impl<'a> TransactionGuard<'a> {
+    /// Begin a new transaction and return a guard.
+    pub fn begin(metadata: &'a MetadataStore) -> SiftResult<Self> {
+        metadata.begin_transaction()?;
+        Ok(Self {
+            metadata,
+            committed: false,
+        })
+    }
+
+    /// Commit and consume the guard. Starts a new transaction for the next batch.
+    pub fn commit_and_reopen(&mut self) -> SiftResult<()> {
+        self.metadata.commit_transaction()?;
+        self.metadata.begin_transaction()?;
+        // Still active — a new transaction is open
+        Ok(())
+    }
+
+    /// Final commit — marks the guard as committed so drop is a no-op.
+    pub fn commit(mut self) -> SiftResult<()> {
+        self.metadata.commit_transaction()?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for TransactionGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.metadata.rollback_transaction();
+        }
+    }
 }
 
 #[cfg(test)]
