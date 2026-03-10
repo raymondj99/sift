@@ -95,7 +95,7 @@ impl Config {
         }
         let content =
             toml::to_string_pretty(self).map_err(|e| crate::SiftError::Config(e.to_string()))?;
-        std::fs::write(path, content)?;
+        crate::atomic_write(&path, content.as_bytes())?;
         Ok(())
     }
 

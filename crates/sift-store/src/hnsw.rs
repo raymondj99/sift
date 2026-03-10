@@ -199,7 +199,7 @@ impl HnswIndex {
 
         let meta_bytes = serde_json::to_vec(&inner.meta)
             .map_err(|e| SiftError::Storage(format!("usearch: serialize meta: {e}")))?;
-        std::fs::write(&meta_path, meta_bytes)?;
+        sift_core::atomic_write(&meta_path, &meta_bytes)?;
 
         Ok(())
     }

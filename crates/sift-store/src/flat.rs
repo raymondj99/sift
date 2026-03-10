@@ -130,7 +130,7 @@ impl FlatVectorIndex {
                 .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
         }
 
-        std::fs::write(path, buf)?;
+        sift_core::atomic_write(path, &buf)?;
         Ok(())
     }
 
@@ -271,7 +271,7 @@ impl FlatVectorIndex {
         let data = serde_json::to_vec(&serializable)
             .map_err(|e| sift_core::SiftError::Storage(format!("Serialize error: {}", e)))?;
 
-        std::fs::write(path, data)?;
+        sift_core::atomic_write(path, &data)?;
         Ok(())
     }
 

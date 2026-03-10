@@ -30,7 +30,7 @@ impl Inner {
         if let Some(ref path) = self.path {
             let json = serde_json::to_string(&self.data)
                 .map_err(|e| SiftError::Storage(format!("JSON serialize error: {}", e)))?;
-            std::fs::write(path, json)
+            sift_core::atomic_write(path, json.as_bytes())
                 .map_err(|e| SiftError::Storage(format!("File write error: {}", e)))?;
         }
         Ok(())
