@@ -310,4 +310,117 @@ mod tests {
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.language.is_none());
     }
+
+    #[test]
+    fn test_skip_unknown_cell_type() {
+        let nb = make_notebook(
+            r#"[
+                {"cell_type": "raw", "source": "raw cell content", "metadata": {}},
+                {"cell_type": "code", "source": "x = 1", "outputs": [], "metadata": {}}
+            ]"#,
+        );
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        // raw cells should be skipped
+        assert!(!doc.text.contains("raw cell content"));
+        assert!(doc.text.contains("x = 1"));
+        assert_eq!(doc.metadata.get("cell_count").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_extract_source_array_format() {
+        let cell: serde_json::Value =
+            serde_json::from_str(r#"{"source": ["line 1\n", "line 2\n", "line 3"]}"#).unwrap();
+        let source = extract_source(&cell);
+        assert_eq!(source, "line 1\nline 2\nline 3");
+    }
+
+    #[test]
+    fn test_extract_source_string_format() {
+        let cell: serde_json::Value =
+            serde_json::from_str(r#"{"source": "single string source"}"#).unwrap();
+        let source = extract_source(&cell);
+        assert_eq!(source, "single string source");
+    }
+
+    #[test]
+    fn test_extract_source_missing() {
+        let cell: serde_json::Value = serde_json::from_str(r#"{}"#).unwrap();
+        let source = extract_source(&cell);
+        assert!(source.is_empty());
+    }
+
+    #[test]
+    fn test_extract_source_null() {
+        let cell: serde_json::Value = serde_json::from_str(r#"{"source": null}"#).unwrap();
+        let source = extract_source(&cell);
+        assert!(source.is_empty());
+    }
+
+    #[test]
+    fn test_extract_text_outputs_display_data() {
+        let outputs: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"output_type": "display_data", "data": {"text/plain": "displayed text"}}]"#,
+        )
+        .unwrap();
+        let result = extract_text_outputs(&outputs);
+        assert_eq!(result, "displayed text");
+    }
+
+    #[test]
+    fn test_extract_text_outputs_stream_array() {
+        let outputs: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"output_type": "stream", "name": "stdout", "text": ["line1\n", "line2\n"]}]"#,
+        )
+        .unwrap();
+        let result = extract_text_outputs(&outputs);
+        assert_eq!(result, "line1\nline2\n");
+    }
+
+    #[test]
+    fn test_extract_text_outputs_unknown_type() {
+        let outputs: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"output_type": "error", "ename": "ValueError", "evalue": "bad"}]"#,
+        )
+        .unwrap();
+        let result = extract_text_outputs(&outputs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_utf8_returns_error() {
+        let parser = NotebookParser;
+        let result = parser.parse(&[0xFF, 0xFE], None, Some("ipynb"));
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("UTF-8"));
+    }
+
+    #[test]
+    fn test_code_cell_no_outputs_key() {
+        let nb =
+            make_notebook(r#"[{"cell_type": "code", "source": "print('hi')", "metadata": {}}]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("print('hi')"));
+        // No output section since outputs key is missing
+        assert!(!doc.text.contains("--- output ---"));
+    }
+
+    #[test]
+    fn test_code_cell_with_empty_output() {
+        let nb = make_notebook(
+            r#"[{"cell_type": "code", "source": "x = 1", "outputs": [], "metadata": {}}]"#,
+        );
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("x = 1"));
+        assert!(!doc.text.contains("--- output ---"));
+    }
+
+    #[test]
+    fn test_parser_name_notebook() {
+        let parser = NotebookParser;
+        assert_eq!(parser.name(), "notebook");
+    }
 }

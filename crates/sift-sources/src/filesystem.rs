@@ -380,4 +380,329 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(items[0].uri.contains("deep.txt"));
     }
+
+    #[test]
+    fn test_mime_from_extension_covers_all_categories() {
+        use std::path::Path;
+        // Text
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.txt")),
+            Some("text/plain")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.md")),
+            Some("text/markdown")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.rst")),
+            Some("text/x-rst")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.org")),
+            Some("text/x-org")
+        );
+        // Code
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.py")),
+            Some("text/x-python")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.js")),
+            Some("text/javascript")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.ts")),
+            Some("text/typescript")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.go")),
+            Some("text/x-go")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.c")),
+            Some("text/x-c")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.cpp")),
+            Some("text/x-c++")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.java")),
+            Some("text/x-java")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.rb")),
+            Some("text/x-ruby")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.sh")),
+            Some("text/x-shellscript")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.swift")),
+            Some("text/x-swift")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.kt")),
+            Some("text/x-kotlin")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.zig")),
+            Some("text/x-zig")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.lua")),
+            Some("text/x-lua")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.pl")),
+            Some("text/x-perl")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.ex")),
+            Some("text/x-elixir")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.erl")),
+            Some("text/x-erlang")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.hs")),
+            Some("text/x-haskell")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.ml")),
+            Some("text/x-ocaml")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.r")),
+            Some("text/x-r")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.scala")),
+            Some("text/x-scala")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.sql")),
+            Some("text/x-sql")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.proto")),
+            Some("text/x-protobuf")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.tf")),
+            Some("text/x-terraform")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.jsx")),
+            Some("text/javascript")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.tsx")),
+            Some("text/javascript")
+        );
+        // Web
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.html")),
+            Some("text/html")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.xml")),
+            Some("text/xml")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.css")),
+            Some("text/css")
+        );
+        // Data
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.json")),
+            Some("application/json")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.jsonl")),
+            Some("application/jsonlines")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.toml")),
+            Some("application/toml")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.yaml")),
+            Some("application/yaml")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.csv")),
+            Some("text/csv")
+        );
+        // Documents
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.pdf")),
+            Some("application/pdf")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.docx")),
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.xlsx")),
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.eml")),
+            Some("message/rfc822")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.mbox")),
+            Some("application/mbox")
+        );
+        // Media
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.png")),
+            Some("image/png")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.jpg")),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.gif")),
+            Some("image/gif")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.webp")),
+            Some("image/webp")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.svg")),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.mp3")),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.wav")),
+            Some("audio/wav")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.flac")),
+            Some("audio/flac")
+        );
+        // Archives
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.zip")),
+            Some("application/zip")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.tar")),
+            Some("application/x-tar")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.gz")),
+            Some("application/gzip")
+        );
+        // Config
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.cfg")),
+            Some("text/plain")
+        );
+        assert_eq!(
+            FilesystemSource::mime_from_extension(Path::new("f.log")),
+            Some("text/plain")
+        );
+        // No extension
+        assert!(FilesystemSource::mime_from_extension(Path::new("Makefile")).is_none());
+    }
+
+    #[test]
+    fn test_discover_with_file_type_filter() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("code.rs"), "fn main() {}").unwrap();
+        fs::write(dir.path().join("notes.txt"), "hello").unwrap();
+        fs::write(dir.path().join("data.json"), "{}").unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            file_types: vec!["rs".to_string()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].uri.contains("code.rs"));
+    }
+
+    #[test]
+    fn test_discover_with_max_depth() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("root.txt"), "root").unwrap();
+        fs::create_dir(dir.path().join("a")).unwrap();
+        fs::write(dir.path().join("a/level1.txt"), "level1").unwrap();
+        fs::create_dir(dir.path().join("a/b")).unwrap();
+        fs::write(dir.path().join("a/b/level2.txt"), "level2").unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            max_depth: Some(1),
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        // max_depth 1 = root dir only, files at root level
+        assert_eq!(items.len(), 1);
+        assert!(items[0].uri.contains("root.txt"));
+    }
+
+    #[test]
+    fn test_discover_empty_directory() {
+        let dir = TempDir::new().unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_discover_source_item_fields() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("hello.txt"), "hello world").unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert!(item.uri.starts_with("file://"));
+        assert!(item.uri.contains("hello.txt"));
+        assert_eq!(item.size, 11); // "hello world" = 11 bytes
+        assert_eq!(item.extension.as_deref(), Some("txt"));
+        assert!(item.modified_at.is_some());
+        // Hash should be deterministic BLAKE3 of "hello world"
+        let expected = *blake3::hash(b"hello world").as_bytes();
+        assert_eq!(item.content_hash, expected);
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let source = FilesystemSource;
+        let options = ScanOptions {
+            paths: vec![],
+            ..Default::default()
+        };
+        let items = source.discover(&options).unwrap();
+        assert!(items.is_empty());
+    }
 }

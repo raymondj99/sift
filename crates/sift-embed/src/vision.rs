@@ -484,6 +484,112 @@ mod tests {
         );
     }
 
+    /// Verify L2 normalization handles negative values.
+    #[test]
+    fn test_l2_normalize_negative_values() {
+        let v = vec![-3.0, 4.0];
+        let normalized = l2_normalize(&v);
+
+        // L2 norm of [-3, 4] is 5
+        assert!((normalized[0] - (-0.6)).abs() < 1e-6);
+        assert!((normalized[1] - 0.8).abs() < 1e-6);
+
+        let norm: f32 = normalized.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+    }
+
+    /// Verify L2 normalization preserves direction with all-equal values.
+    #[test]
+    fn test_l2_normalize_all_equal() {
+        let v = vec![1.0, 1.0, 1.0, 1.0];
+        let normalized = l2_normalize(&v);
+
+        // All elements should be 1/sqrt(4) = 0.5
+        let expected = 1.0f32 / 2.0;
+        for (i, &val) in normalized.iter().enumerate() {
+            assert!(
+                (val - expected).abs() < 1e-6,
+                "element {i}: got {val}, expected {expected}"
+            );
+        }
+    }
+
+    /// Verify L2 normalization with an empty vector.
+    #[test]
+    fn test_l2_normalize_empty() {
+        let v: Vec<f32> = vec![];
+        let normalized = l2_normalize(&v);
+        assert!(normalized.is_empty());
+    }
+
+    /// Verify preprocess_image with a 1x1 image.
+    #[test]
+    fn test_preprocess_image_1x1() {
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([128, 64, 200]));
+        let tensor = preprocess_image(&img, 1);
+        assert_eq!(tensor.len(), 3);
+
+        let expected_r = (128.0 / 255.0 - CLIP_MEAN[0]) / CLIP_STD[0];
+        let expected_g = (64.0 / 255.0 - CLIP_MEAN[1]) / CLIP_STD[1];
+        let expected_b = (200.0 / 255.0 - CLIP_MEAN[2]) / CLIP_STD[2];
+
+        assert!((tensor[0] - expected_r).abs() < 1e-4);
+        assert!((tensor[1] - expected_g).abs() < 1e-4);
+        assert!((tensor[2] - expected_b).abs() < 1e-4);
+    }
+
+    /// Verify preprocess_image with a larger non-square-looking (but still
+    /// square) image to ensure the indexing math is correct.
+    #[test]
+    fn test_preprocess_image_8x8() {
+        let size = 8u32;
+        let img = image::RgbImage::from_fn(size, size, |x, y| {
+            image::Rgb([
+                ((x * 37 + y * 13) % 256) as u8,
+                ((x * 53 + y * 7) % 256) as u8,
+                ((x * 11 + y * 43) % 256) as u8,
+            ])
+        });
+
+        let tensor = preprocess_image(&img, size);
+        assert_eq!(tensor.len(), 3 * 64);
+
+        // Spot-check a specific pixel: (3, 5)
+        let px = img.get_pixel(3, 5);
+        let idx = (5 * size + 3) as usize;
+        let npixels = 64;
+        let expected_r = (f32::from(px[0]) / 255.0 - CLIP_MEAN[0]) / CLIP_STD[0];
+        let expected_g = (f32::from(px[1]) / 255.0 - CLIP_MEAN[1]) / CLIP_STD[1];
+        let expected_b = (f32::from(px[2]) / 255.0 - CLIP_MEAN[2]) / CLIP_STD[2];
+        assert!((tensor[idx] - expected_r).abs() < 1e-4);
+        assert!((tensor[npixels + idx] - expected_g).abs() < 1e-4);
+        assert!((tensor[2 * npixels + idx] - expected_b).abs() < 1e-4);
+    }
+
+    /// Verify constants are within expected ranges.
+    #[test]
+    fn test_clip_constants() {
+        for &mean in &CLIP_MEAN {
+            assert!(mean > 0.0 && mean < 1.0, "CLIP mean {mean} out of range");
+        }
+        for &std in &CLIP_STD {
+            assert!(std > 0.0 && std < 1.0, "CLIP std {std} out of range");
+        }
+        assert_eq!(DEFAULT_IMAGE_SIZE, 224);
+    }
+
+    /// L2 normalization with very small values should still normalize correctly.
+    #[test]
+    fn test_l2_normalize_very_small_values() {
+        let v = vec![1e-10, 2e-10, 3e-10];
+        let normalized = l2_normalize(&v);
+        let norm: f32 = normalized.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "Normalized small vector should have unit norm, got {norm}"
+        );
+    }
+
     /// Batch embedding integration test -- requires a real model on disk.
     #[test]
     #[ignore = "requires a real ONNX model on disk"]

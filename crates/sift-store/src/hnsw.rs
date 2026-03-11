@@ -641,6 +641,138 @@ mod tests {
     }
 
     #[test]
+    fn test_default_impl() {
+        let index = HnswIndex::default();
+        assert_eq!(index.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_insert_empty_chunks() {
+        let index = HnswIndex::new();
+        // Insert empty slice should be a no-op
+        index.insert(&[]).unwrap();
+        assert_eq!(index.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_dimension_mismatch_error() {
+        let index = HnswIndex::new();
+        // First insert with 3 dimensions
+        let c1 = make_chunk_with_vec("file:///a.txt", "hello", 0, vec![1.0, 0.0, 0.0]);
+        index.insert(&[c1]).unwrap();
+
+        // Second insert with 4 dimensions should fail
+        let c2 = make_chunk_with_vec("file:///b.txt", "world", 0, vec![1.0, 0.0, 0.0, 0.0]);
+        let err = index.insert(&[c2]);
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("dimension mismatch"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_export_all_empty_index() {
+        let index = HnswIndex::new();
+        let entries = index.export_all().unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_load_with_file_path() {
+        // Test the `load` method that treats a file path by using its parent dir
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let index = HnswIndex::new();
+        index
+            .insert(&[make_chunk_with_vec(
+                "file:///a.txt",
+                "hello",
+                0,
+                vec![1.0, 0.0, 0.0],
+            )])
+            .unwrap();
+        index.save_to(dir.path()).unwrap();
+
+        // Pass a file path (not directory) to load()
+        let file_path = dir.path().join("some_file.bin");
+        let loaded = HnswIndex::load(&file_path).unwrap();
+        assert_eq!(loaded.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_load_with_directory_path() {
+        // Test the `load` method with a directory path
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let index = HnswIndex::new();
+        index
+            .insert(&[make_chunk_with_vec(
+                "file:///a.txt",
+                "hello",
+                0,
+                vec![1.0, 0.0, 0.0],
+            )])
+            .unwrap();
+        index.save_to(dir.path()).unwrap();
+
+        // Pass the directory itself to load()
+        let loaded = HnswIndex::load(dir.path()).unwrap();
+        assert_eq!(loaded.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_migration_from_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // Create a legacy JSON flat file
+        let flat = FlatVectorIndex::new();
+        flat.insert(&[make_chunk_with_vec(
+            "file:///a.txt",
+            "json migrated",
+            0,
+            vec![1.0, 2.0, 3.0],
+        )])
+        .unwrap();
+        let json_path = dir.path().join("vectors.json");
+        flat.save_json(&json_path).unwrap();
+
+        // load_or_create should detect JSON and migrate
+        let hnsw = HnswIndex::load_or_create(dir.path()).unwrap();
+        assert_eq!(hnsw.count().unwrap(), 1);
+
+        // HNSW files should now exist
+        assert!(dir.path().join(HNSW_INDEX_FILE).exists());
+        assert!(dir.path().join(HNSW_META_FILE).exists());
+
+        // JSON should be renamed to .bak
+        assert!(!dir.path().join("vectors.json").exists());
+        assert!(dir.path().join("vectors.json.bak").exists());
+    }
+
+    #[test]
+    fn test_migrate_from_empty_flat() {
+        let flat = FlatVectorIndex::new();
+        let hnsw = HnswIndex::migrate_from_flat(&flat).unwrap();
+        assert_eq!(hnsw.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_uri() {
+        let index = HnswIndex::new();
+        index
+            .insert(&[make_chunk_with_vec(
+                "file:///a.txt",
+                "hello",
+                0,
+                vec![1.0, 0.0, 0.0],
+            )])
+            .unwrap();
+
+        let deleted = index.delete_by_uri("file:///nonexistent.txt").unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(index.count().unwrap(), 1);
+    }
+
+    #[test]
     fn test_delete_then_search() {
         let index = HnswIndex::new();
         index

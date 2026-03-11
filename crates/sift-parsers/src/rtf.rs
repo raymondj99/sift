@@ -309,4 +309,150 @@ mod tests {
         let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
         assert!(doc.text.contains("col1\tcol2\tcol3"));
     }
+
+    #[test]
+    fn test_parser_name() {
+        let parser = RtfParser;
+        assert_eq!(parser.name(), "rtf");
+    }
+
+    #[test]
+    fn test_parse_rtf_hex_escape_ascii() {
+        // \'41 = 'A' (ASCII 0x41)
+        let rtf = br"{\rtf1\ansi Letter \'41 here}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains("Letter A here"));
+    }
+
+    #[test]
+    fn test_parse_rtf_hex_escape_win1252() {
+        // \'93 = left double quote (Windows-1252)
+        // \'94 = right double quote
+        let rtf = br"{\rtf1\ansi \'93Hello\'94}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains('\u{201C}')); // left double quote
+        assert!(doc.text.contains('\u{201D}')); // right double quote
+    }
+
+    #[test]
+    fn test_parse_rtf_unicode_escape() {
+        // \u8364? = Euro sign (U+20AC = 8364 decimal), ? is replacement char
+        let rtf = br"{\rtf1\ansi Price: \u8364?100}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        // The euro sign should be present
+        assert!(doc.text.contains('\u{20AC}'));
+    }
+
+    #[test]
+    fn test_parse_rtf_line_control_word() {
+        let rtf = br"{\rtf1\ansi Line one\line Line two}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        let lines: Vec<&str> = doc.text.lines().collect();
+        assert!(lines.len() >= 2);
+        assert!(doc.text.contains("Line one"));
+        assert!(doc.text.contains("Line two"));
+    }
+
+    #[test]
+    fn test_parse_rtf_skip_colortbl() {
+        let rtf =
+            br"{\rtf1\ansi{\colortbl;\red0\green0\blue0;\red255\green0\blue0;}After color table}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains("After color table"));
+        assert!(!doc.text.contains("red0"));
+    }
+
+    #[test]
+    fn test_parse_rtf_skip_stylesheet() {
+        let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}}Visible text}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains("Visible text"));
+        assert!(!doc.text.contains("Normal"));
+    }
+
+    #[test]
+    fn test_parse_rtf_skip_info() {
+        let rtf = br"{\rtf1\ansi{\info{\author John}}Document content}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains("Document content"));
+        assert!(!doc.text.contains("John"));
+    }
+
+    #[test]
+    fn test_decode_win1252_known_chars() {
+        assert_eq!(decode_win1252(0x80), '\u{20AC}'); // Euro
+        assert_eq!(decode_win1252(0x85), '\u{2026}'); // Ellipsis
+        assert_eq!(decode_win1252(0x91), '\u{2018}'); // Left single quote
+        assert_eq!(decode_win1252(0x92), '\u{2019}'); // Right single quote
+        assert_eq!(decode_win1252(0x93), '\u{201C}'); // Left double quote
+        assert_eq!(decode_win1252(0x94), '\u{201D}'); // Right double quote
+        assert_eq!(decode_win1252(0x95), '\u{2022}'); // Bullet
+        assert_eq!(decode_win1252(0x96), '\u{2013}'); // En dash
+        assert_eq!(decode_win1252(0x97), '\u{2014}'); // Em dash
+        assert_eq!(decode_win1252(0xA0), '\u{00A0}'); // Non-breaking space
+    }
+
+    #[test]
+    fn test_decode_win1252_latin1_range() {
+        // 0xA1-0xFF should map to Unicode code points directly
+        assert_eq!(decode_win1252(0xA1), '\u{00A1}'); // Inverted exclamation mark
+        assert_eq!(decode_win1252(0xBF), '\u{00BF}'); // Inverted question mark
+        assert_eq!(decode_win1252(0xFF), '\u{00FF}'); // Latin small letter y with diaeresis
+    }
+
+    #[test]
+    fn test_decode_win1252_unknown() {
+        // Values in the gap (like 0x81, 0x8D, etc.) should return '?'
+        assert_eq!(decode_win1252(0x81), '?');
+        assert_eq!(decode_win1252(0x8D), '?');
+    }
+
+    #[test]
+    fn test_parse_rtf_collapses_blank_lines() {
+        // Multiple \par in a row should be collapsed
+        let rtf = br"{\rtf1\ansi Hello\par\par\par\par World}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        // Count consecutive newlines - should be at most 2
+        let max_consecutive = doc
+            .text
+            .chars()
+            .fold((0u32, 0u32), |(current, max), ch| {
+                if ch == '\n' {
+                    let new = current + 1;
+                    (new, max.max(new))
+                } else {
+                    (0, max)
+                }
+            })
+            .1;
+        assert!(max_consecutive <= 2);
+    }
+
+    #[test]
+    fn test_parse_rtf_skip_pict() {
+        let rtf = br"{\rtf1\ansi Before picture{\pict binary image data here}After picture}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains("Before picture"));
+        assert!(doc.text.contains("After picture"));
+        assert!(!doc.text.contains("binary image data"));
+    }
+
+    #[test]
+    fn test_parse_rtf_negative_unicode() {
+        // Negative unicode value: \u-4064? should map to U+F020
+        // -4064 + 65536 = 61472 = 0xF020
+        let rtf = br"{\rtf1\ansi \u-4064?x}";
+        let parser = RtfParser;
+        let doc = parser.parse(rtf, None, Some("rtf")).unwrap();
+        assert!(doc.text.contains('\u{F020}'));
+    }
 }

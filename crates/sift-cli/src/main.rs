@@ -606,4 +606,175 @@ mod tests {
         assert!(parse_after_date("2025-13-01").is_err());
         assert!(parse_after_date("2025-00-01").is_err());
     }
+
+    #[test]
+    fn test_parse_after_date_day_out_of_range() {
+        assert!(parse_after_date("2025-01-00").is_err());
+        assert!(parse_after_date("2025-01-32").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_year_before_epoch() {
+        assert!(parse_after_date("1969-06-15").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_invalid_week_suffix() {
+        assert!(parse_after_date("abcw").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_invalid_month_suffix() {
+        assert!(parse_after_date("xyzm").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_empty_number_before_week() {
+        assert!(parse_after_date("w").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_empty_number_before_month() {
+        assert!(parse_after_date("m").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_too_few_parts() {
+        assert!(parse_after_date("2025-01").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_too_many_parts() {
+        assert!(parse_after_date("2025-01-01-extra").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_non_numeric_year() {
+        assert!(parse_after_date("abcd-01-01").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_non_numeric_month() {
+        assert!(parse_after_date("2025-ab-01").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_non_numeric_day() {
+        assert!(parse_after_date("2025-01-ab").is_err());
+    }
+
+    #[test]
+    fn test_parse_after_date_february() {
+        // Feb 28 should work
+        let ts = parse_after_date("2025-02-28").unwrap();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_parse_after_date_leap_year() {
+        let ts = parse_after_date("2024-02-29").unwrap();
+        assert!(ts > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // ExitCode coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_exit_code_from_sift_config_error() {
+        let err = sift_core::SiftError::Config("bad".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::ConfigError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_model_error() {
+        let err = sift_core::SiftError::Model("missing".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::ModelError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_embedding_error() {
+        let err = sift_core::SiftError::Embedding("dim mismatch".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::ModelError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_storage_error() {
+        let err = sift_core::SiftError::Storage("disk full".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::StorageError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_io_error() {
+        let err =
+            sift_core::SiftError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::StorageError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_search_error() {
+        let err = sift_core::SiftError::Search("no index".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_source_error() {
+        let err = sift_core::SiftError::Source("bad source".into());
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_parse_error() {
+        let err = sift_core::SiftError::Parse {
+            path: "test.txt".into(),
+            message: "invalid".into(),
+        };
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_other_error() {
+        let err = sift_core::SiftError::Other(anyhow::anyhow!("unknown"));
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_partial_error() {
+        let err = sift_core::SiftError::Partial(vec![sift_core::SiftError::Config("a".into())]);
+        let code = ExitCode::from_sift_error(&err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_sift_with_path_error() {
+        let inner = sift_core::SiftError::Storage("corrupt".into());
+        let err = inner.with_path("/tmp/bad");
+        let code = ExitCode::from_sift_error(&err);
+        // WithPath delegates to its source, which is Storage -> StorageError
+        assert_eq!(code as i32, ExitCode::StorageError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_anyhow_with_sift_error() {
+        let sift_err = sift_core::SiftError::Config("bad config".into());
+        let anyhow_err: anyhow::Error = sift_err.into();
+        let code = ExitCode::from_error(&anyhow_err);
+        assert_eq!(code as i32, ExitCode::ConfigError as i32);
+    }
+
+    #[test]
+    fn test_exit_code_from_anyhow_without_sift_error() {
+        let anyhow_err = anyhow::anyhow!("generic error");
+        let code = ExitCode::from_error(&anyhow_err);
+        assert_eq!(code as i32, ExitCode::GeneralError as i32);
+    }
 }

@@ -367,4 +367,106 @@ mod tests {
         let doc = result.unwrap();
         assert_eq!(doc.title, Some("(no subject)".to_string()));
     }
+
+    #[test]
+    fn test_eml_with_html_body_only() {
+        // EML with no text body, only HTML body
+        let parser = EmailParser;
+        let eml = b"From: alice@example.com\r\nSubject: HTML Only\r\nContent-Type: text/html\r\n\r\n<html><body><p>Hello from <b>HTML</b></p></body></html>\r\n";
+        let doc = parser.parse(eml, None, Some("eml")).unwrap();
+        assert!(doc.text.contains("Subject: HTML Only"));
+        // HTML tags should be stripped
+        assert!(doc.text.contains("Hello from"));
+        assert!(doc.text.contains("HTML"));
+    }
+
+    #[test]
+    fn test_eml_with_name_and_email() {
+        let parser = EmailParser;
+        let eml = b"From: Alice Smith <alice@example.com>\r\nTo: Bob Jones <bob@example.com>\r\nSubject: Named\r\n\r\nBody\r\n";
+        let doc = parser.parse(eml, None, Some("eml")).unwrap();
+        assert!(doc.text.contains("Alice Smith <alice@example.com>"));
+        assert!(doc.text.contains("Bob Jones <bob@example.com>"));
+    }
+
+    #[test]
+    fn test_eml_metadata_contains_subject_and_from() {
+        let parser = EmailParser;
+        let eml = b"From: sender@test.com\r\nSubject: Meta Test\r\nDate: Tue, 2 Jan 2024 10:00:00 +0000\r\n\r\nBody\r\n";
+        let doc = parser.parse(eml, None, Some("eml")).unwrap();
+        assert_eq!(doc.metadata.get("subject").unwrap(), "Meta Test");
+        assert!(doc.metadata.contains_key("from"));
+        assert!(doc.metadata.contains_key("date"));
+    }
+
+    #[test]
+    fn test_mbox_empty_input() {
+        let parser = EmailParser;
+        let doc = parser.parse(b"", None, Some("mbox")).unwrap();
+        assert_eq!(doc.metadata.get("message_count").unwrap(), "0");
+    }
+
+    #[test]
+    fn test_strip_html_with_crlf() {
+        let html = "<p>Line 1</p>\r\n<p>Line 2</p>";
+        let text = strip_html_tags(html);
+        assert!(text.contains("Line 1"));
+        assert!(text.contains("Line 2"));
+    }
+
+    #[test]
+    fn test_strip_html_with_leading_whitespace() {
+        let html = "   <p>  Indented text  </p>";
+        let text = strip_html_tags(html);
+        assert!(text.contains("Indented text"));
+    }
+
+    #[test]
+    fn test_strip_html_unclosed_tag() {
+        // An unclosed < tag at end of input
+        let html = "Hello <b";
+        let text = strip_html_tags(html);
+        assert!(text.contains("Hello"));
+    }
+
+    #[test]
+    fn test_mbox_with_body_from_parsed_message() {
+        let parser = EmailParser;
+        let mbox = b"From sender@example.com Mon Jan 01 12:00:00 2024\r\nFrom: alice@example.com\r\nSubject: Test\r\n\r\nThis is the body text.\r\n";
+        let doc = parser.parse(mbox, None, Some("mbox")).unwrap();
+        assert!(doc.text.contains("This is the body text."));
+    }
+
+    #[test]
+    fn test_parser_name_email() {
+        let parser = EmailParser;
+        assert_eq!(parser.name(), "email");
+    }
+
+    #[test]
+    fn test_format_address_name_only() {
+        let addr = mail_parser::Addr {
+            name: Some("Alice".into()),
+            address: None,
+        };
+        assert_eq!(format_address(&addr), "Alice");
+    }
+
+    #[test]
+    fn test_format_address_none_none() {
+        let addr = mail_parser::Addr {
+            name: None,
+            address: None,
+        };
+        assert_eq!(format_address(&addr), "(unknown)");
+    }
+
+    #[test]
+    fn test_format_address_email_only() {
+        let addr = mail_parser::Addr {
+            name: None,
+            address: Some("test@example.com".into()),
+        };
+        assert_eq!(format_address(&addr), "test@example.com");
+    }
 }

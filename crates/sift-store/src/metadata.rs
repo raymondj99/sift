@@ -717,6 +717,200 @@ mod tests {
     }
 
     #[test]
+    fn test_upsert_batch_inserts_multiple_records() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash_a = [1u8; 32];
+        let hash_b = [2u8; 32];
+
+        store
+            .upsert_batch(&[
+                ("file:///a.txt", &hash_a, 100, "txt", Some(1000), 3),
+                ("file:///b.rs", &hash_b, 200, "rs", Some(2000), 5),
+            ])
+            .unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.total_sources, 2);
+        assert_eq!(stats.total_chunks, 8);
+
+        // Verify individual records
+        assert_eq!(
+            store.check_source("file:///a.txt", &hash_a).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            store.check_source("file:///b.rs", &hash_b).unwrap(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_upsert_batch_empty_input_does_nothing() {
+        let store = MetadataStore::open_in_memory().unwrap();
+
+        store.upsert_batch(&[]).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.total_sources, 0);
+        assert_eq!(stats.total_chunks, 0);
+    }
+
+    #[test]
+    fn test_find_stale_sources_returns_empty_for_in_memory() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        // Insert sources with URIs that don't exist on disk
+        store
+            .upsert_source(
+                "file:///nonexistent/path/abc123.txt",
+                &hash,
+                10,
+                "txt",
+                None,
+                1,
+            )
+            .unwrap();
+        store
+            .upsert_source(
+                "file:///nonexistent/path/def456.rs",
+                &hash,
+                20,
+                "rs",
+                None,
+                2,
+            )
+            .unwrap();
+
+        // All file:// URIs point to non-existent paths, so all should be stale
+        let stale = store.find_stale_sources().unwrap();
+        assert_eq!(stale.len(), 2);
+        assert!(stale.contains(&"file:///nonexistent/path/abc123.txt".to_string()));
+        assert!(stale.contains(&"file:///nonexistent/path/def456.rs".to_string()));
+    }
+
+    #[test]
+    fn test_find_stale_sources_non_file_uris_not_stale() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        // Non-file URIs should never be considered stale
+        store
+            .upsert_source("https://example.com/doc", &hash, 10, "html", None, 1)
+            .unwrap();
+        store
+            .upsert_source("s3://bucket/object", &hash, 10, "txt", None, 1)
+            .unwrap();
+
+        let stale = store.find_stale_sources().unwrap();
+        assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn test_transaction_guard_begin_and_commit() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        {
+            let guard = TransactionGuard::begin(&store).unwrap();
+            store
+                .upsert_source("file:///guarded.txt", &hash, 10, "txt", None, 1)
+                .unwrap();
+            guard.commit().unwrap();
+        }
+
+        // Data should be persisted after commit
+        assert_eq!(
+            store.check_source("file:///guarded.txt", &hash).unwrap(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_transaction_guard_auto_rollback_on_drop() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        {
+            let _guard = TransactionGuard::begin(&store).unwrap();
+            store
+                .upsert_source("file:///dropped.txt", &hash, 10, "txt", None, 1)
+                .unwrap();
+            // guard drops here without commit -> rollback
+        }
+
+        // Data should NOT be persisted because guard was dropped
+        assert!(store
+            .check_source("file:///dropped.txt", &hash)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_transaction_guard_commit_and_reopen() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        {
+            let mut guard = TransactionGuard::begin(&store).unwrap();
+
+            // Batch 1
+            store
+                .upsert_source("file:///batch1.txt", &hash, 10, "txt", None, 1)
+                .unwrap();
+            guard.commit_and_reopen().unwrap();
+
+            // Batch 2 (new transaction after reopen)
+            store
+                .upsert_source("file:///batch2.txt", &hash, 20, "txt", None, 2)
+                .unwrap();
+            guard.commit().unwrap();
+        }
+
+        // Both batches should be persisted
+        assert_eq!(
+            store.check_source("file:///batch1.txt", &hash).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            store.check_source("file:///batch2.txt", &hash).unwrap(),
+            Some(true)
+        );
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.total_sources, 2);
+        assert_eq!(stats.total_chunks, 3);
+    }
+
+    #[test]
+    fn test_stats_returns_correct_file_type_counts() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let hash = [0u8; 32];
+
+        store
+            .upsert_source("file:///a.txt", &hash, 10, "txt", None, 1)
+            .unwrap();
+        store
+            .upsert_source("file:///b.txt", &hash, 10, "txt", None, 2)
+            .unwrap();
+        store
+            .upsert_source("file:///c.rs", &hash, 10, "rs", None, 3)
+            .unwrap();
+        store
+            .upsert_source("file:///d.py", &hash, 10, "py", None, 4)
+            .unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.total_sources, 4);
+        assert_eq!(stats.total_chunks, 10);
+        assert_eq!(stats.file_type_counts.len(), 3);
+        assert_eq!(stats.file_type_counts["txt"], 2);
+        assert_eq!(stats.file_type_counts["rs"], 1);
+        assert_eq!(stats.file_type_counts["py"], 1);
+        // index_size_bytes is computed externally, always 0 from MetadataStore
+        assert_eq!(stats.index_size_bytes, 0);
+    }
+
+    #[test]
     fn test_batch_matches_individual_checks() {
         let store = MetadataStore::open_in_memory().unwrap();
         let hash_a = [1u8; 32];

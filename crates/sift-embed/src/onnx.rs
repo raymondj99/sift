@@ -285,3 +285,122 @@ impl Embedder for OnnxEmbedder {
         &self.model_name
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // select_execution_providers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_execution_providers_contains_cpu() {
+        let providers = select_execution_providers();
+        // There must be at least one provider (CPU fallback)
+        assert!(!providers.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // OnnxEmbedder::mean_pooling — pure math, no ONNX session needed
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mean_pooling_single_item_uniform_mask() {
+        // batch_size=1, seq_len=2, hidden_size=3
+        // All tokens unmasked (mask=1)
+        let token_embeddings: Vec<f32> = vec![
+            1.0, 2.0, 3.0, // token 0
+            4.0, 5.0, 6.0, // token 1
+        ];
+        let attention_mask: Vec<i64> = vec![1, 1];
+
+        let results = OnnxEmbedder::mean_pooling(&token_embeddings, &attention_mask, 1, 2, 3);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 3);
+
+        // Mean of [1,2,3] and [4,5,6] = [2.5, 3.5, 4.5]
+        // Then L2 normalized: norm = sqrt(2.5^2 + 3.5^2 + 4.5^2) = sqrt(6.25+12.25+20.25)=sqrt(38.75)
+        let raw_mean = [2.5f32, 3.5, 4.5];
+        let norm: f32 = raw_mean.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        for (i, &v) in results[0].iter().enumerate() {
+            let expected = raw_mean[i] / norm;
+            assert!(
+                (v - expected).abs() < 1e-5,
+                "dim {i}: got {v}, expected {expected}"
+            );
+        }
+
+        // Verify unit length
+        let result_norm: f32 = results[0].iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (result_norm - 1.0).abs() < 1e-5,
+            "result should be L2-normalized, got norm {result_norm}"
+        );
+    }
+
+    #[test]
+    fn mean_pooling_batch_of_two_different_masks() {
+        // batch_size=2, seq_len=3, hidden_size=2
+        #[rustfmt::skip]
+        let token_embeddings: Vec<f32> = vec![
+            // batch 0
+            1.0, 0.0,   // token 0
+            0.0, 1.0,   // token 1
+            9.0, 9.0,   // token 2 (will be masked for batch 0)
+            // batch 1
+            2.0, 2.0,   // token 0
+            4.0, 4.0,   // token 1
+            6.0, 6.0,   // token 2
+        ];
+        let attention_mask: Vec<i64> = vec![
+            1, 1, 0, // batch 0: only first 2 tokens
+            1, 1, 1, // batch 1: all 3 tokens
+        ];
+
+        let results = OnnxEmbedder::mean_pooling(&token_embeddings, &attention_mask, 2, 3, 2);
+        assert_eq!(results.len(), 2);
+
+        // Batch 0: mean of [1,0],[0,1] = [0.5, 0.5], norm=sqrt(0.5), normalized=[1/sqrt(2), 1/sqrt(2)]
+        let expected_0 = 1.0f32 / 2.0f32.sqrt();
+        assert!((results[0][0] - expected_0).abs() < 1e-5);
+        assert!((results[0][1] - expected_0).abs() < 1e-5);
+
+        // Batch 1: mean of [2,2],[4,4],[6,6] = [4,4], norm=sqrt(32), normalized=[4/sqrt(32), 4/sqrt(32)]
+        let norm_1 = (4.0f32 * 4.0 + 4.0 * 4.0).sqrt();
+        let expected_1 = 4.0 / norm_1;
+        assert!((results[1][0] - expected_1).abs() < 1e-5);
+        assert!((results[1][1] - expected_1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn mean_pooling_zero_mask_produces_zero_vector() {
+        // All tokens masked out
+        let token_embeddings: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let attention_mask: Vec<i64> = vec![0, 0];
+
+        let results = OnnxEmbedder::mean_pooling(&token_embeddings, &attention_mask, 1, 2, 3);
+        assert_eq!(results.len(), 1);
+        // When count == 0 and norm == 0, the result should be all zeros
+        for &v in &results[0] {
+            assert!((v - 0.0).abs() < 1e-10, "expected 0.0 but got {v}");
+        }
+    }
+
+    #[test]
+    fn mean_pooling_single_token() {
+        // batch_size=1, seq_len=1, hidden_size=4
+        let token_embeddings: Vec<f32> = vec![3.0, 0.0, 4.0, 0.0];
+        let attention_mask: Vec<i64> = vec![1];
+
+        let results = OnnxEmbedder::mean_pooling(&token_embeddings, &attention_mask, 1, 1, 4);
+        assert_eq!(results.len(), 1);
+
+        // Mean is [3,0,4,0], norm=5, normalized=[0.6, 0.0, 0.8, 0.0]
+        assert!((results[0][0] - 0.6).abs() < 1e-5);
+        assert!((results[0][1] - 0.0).abs() < 1e-5);
+        assert!((results[0][2] - 0.8).abs() < 1e-5);
+        assert!((results[0][3] - 0.0).abs() < 1e-5);
+    }
+}

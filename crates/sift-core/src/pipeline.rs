@@ -29,3 +29,36 @@ pub struct ScanStats {
     pub cache_hits: u64,
     pub file_types: std::collections::HashMap<String, u64>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn scan_stats_default_all_zeros() {
+        let stats = ScanStats::default();
+        assert_eq!(stats.discovered, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.indexed, 0);
+        assert_eq!(stats.chunks, 0);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.cache_hits, 0);
+        assert!(stats.file_types.is_empty());
+    }
+
+    #[test]
+    fn noop_progress_does_not_panic() {
+        let p = NoopProgress;
+        let path = Path::new("/tmp/test.txt");
+        let stats = ScanStats::default();
+
+        p.on_file_discovered(path);
+        p.on_file_skipped(path);
+        p.on_file_parsed(path, 5);
+        p.on_file_embedded(path);
+        p.on_file_stored(path);
+        p.on_file_error(path, "boom");
+        p.on_scan_complete(&stats);
+    }
+}

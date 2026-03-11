@@ -74,3 +74,46 @@ impl Colorize for str {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colorize_methods_are_identity() {
+        let s = "hello world";
+        assert_eq!(s.red(), "hello world");
+        assert_eq!(s.green(), "hello world");
+        assert_eq!(s.blue(), "hello world");
+        assert_eq!(s.cyan(), "hello world");
+        assert_eq!(s.yellow(), "hello world");
+        assert_eq!(s.white(), "hello world");
+        assert_eq!(s.bold(), "hello world");
+        assert_eq!(s.dimmed(), "hello world");
+        assert_eq!(s.italic(), "hello world");
+        assert_eq!(s.underline(), "hello world");
+        assert_eq!(s.bright_black(), "hello world");
+        assert_eq!(s.bright_white(), "hello world");
+        assert_eq!(s.color(Color::Red), "hello world");
+        assert_eq!(s.color(Color::Green), "hello world");
+        assert_eq!(s.color(Color::Yellow), "hello world");
+        assert_eq!(s.color(Color::Blue), "hello world");
+        assert_eq!(s.color(Color::Cyan), "hello world");
+        assert_eq!(s.color(Color::White), "hello world");
+    }
+
+    #[test]
+    fn test_colorize_empty_string() {
+        let s = "";
+        assert_eq!(s.bold(), "");
+        assert_eq!(s.dimmed(), "");
+        assert_eq!(s.red(), "");
+    }
+
+    #[test]
+    fn test_colorize_chaining() {
+        // Chaining should work since each method returns &str
+        let s = "test";
+        assert_eq!(s.bold().red().cyan(), "test");
+    }
+}

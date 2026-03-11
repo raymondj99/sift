@@ -267,4 +267,129 @@ mod tests {
         let opts = ScanOptions::default();
         assert_eq!(opts.jobs, 0);
     }
+
+    // --- CancellationToken tests ---
+
+    #[test]
+    fn cancellation_token_new_is_not_cancelled() {
+        let token = CancellationToken::new();
+        assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn cancellation_token_cancel_sets_cancelled() {
+        let token = CancellationToken::new();
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn cancellation_token_clone_shares_state() {
+        let token = CancellationToken::new();
+        let clone = token.clone();
+        assert!(!clone.is_cancelled());
+
+        token.cancel();
+        assert!(clone.is_cancelled());
+    }
+
+    // --- ContentType Display tests ---
+
+    #[test]
+    fn content_type_display_text() {
+        assert_eq!(ContentType::Text.to_string(), "text");
+    }
+
+    #[test]
+    fn content_type_display_code() {
+        assert_eq!(ContentType::Code.to_string(), "code");
+    }
+
+    #[test]
+    fn content_type_display_image() {
+        assert_eq!(ContentType::Image.to_string(), "image");
+    }
+
+    #[test]
+    fn content_type_display_audio() {
+        assert_eq!(ContentType::Audio.to_string(), "audio");
+    }
+
+    #[test]
+    fn content_type_display_data() {
+        assert_eq!(ContentType::Data.to_string(), "data");
+    }
+
+    // --- ContentType serde roundtrip ---
+
+    #[test]
+    fn content_type_serde_roundtrip() {
+        for variant in [
+            ContentType::Text,
+            ContentType::Code,
+            ContentType::Image,
+            ContentType::Audio,
+            ContentType::Data,
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let deserialized: ContentType = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, deserialized);
+        }
+    }
+
+    // --- ScanOptions default values ---
+
+    #[test]
+    fn scan_options_default_values() {
+        let opts = ScanOptions::default();
+        assert!(opts.paths.is_empty());
+        assert!(opts.recursive);
+        assert!(opts.max_depth.is_none());
+        assert!(opts.max_file_size.is_none());
+        assert!(opts.include_globs.is_empty());
+        assert!(opts.exclude_globs.is_empty());
+        assert!(opts.file_types.is_empty());
+        assert!(!opts.dry_run);
+        assert_eq!(opts.jobs, 0);
+    }
+
+    // --- SearchOptions default values ---
+
+    #[test]
+    fn search_options_default_values() {
+        let opts = SearchOptions::default();
+        assert!(opts.query.is_empty());
+        assert_eq!(opts.max_results, 10);
+        assert!(opts.file_type.is_none());
+        assert!(opts.path_glob.is_none());
+        assert!((opts.threshold - 0.5).abs() < f32::EPSILON);
+        assert_eq!(opts.mode, SearchMode::Hybrid);
+        assert!(!opts.context);
+        assert!(opts.after.is_none());
+    }
+
+    // --- Embedder default embed() delegates to embed_batch() ---
+
+    struct FakeEmbedder;
+
+    impl Embedder for FakeEmbedder {
+        fn embed_batch(&self, texts: &[&str]) -> SiftResult<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| vec![t.len() as f32]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            1
+        }
+
+        fn model_name(&self) -> &'static str {
+            "fake"
+        }
+    }
+
+    #[test]
+    fn embedder_default_embed_delegates_to_embed_batch() {
+        let embedder = FakeEmbedder;
+        let result = embedder.embed("hello").unwrap();
+        assert_eq!(result, vec![5.0]);
+    }
 }

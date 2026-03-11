@@ -364,4 +364,393 @@ mod tests {
         assert!(doc.text.contains("square"));
         assert!(doc.text.contains("thumbnail"));
     }
+
+    #[test]
+    fn test_read_jpeg_dimensions() {
+        // Construct a minimal valid JPEG with SOF0 marker
+        // FF D8 = SOI, FF C0 = SOF0
+        let mut jpeg = vec![0xFF, 0xD8]; // SOI marker
+                                         // SOF0 marker at offset 2
+        jpeg.push(0xFF);
+        jpeg.push(0xC0);
+        // Length of SOF0 segment (high byte, low byte)
+        jpeg.push(0x00);
+        jpeg.push(0x11); // 17 bytes
+                         // Precision (offset 6 = i+4)
+        jpeg.push(0x08);
+        // Height: 480 (big-endian) at offset 7-8 = i+5, i+6
+        jpeg.push(0x01);
+        jpeg.push(0xE0);
+        // Width: 640 (big-endian) at offset 9-10 = i+7, i+8
+        jpeg.push(0x02);
+        jpeg.push(0x80);
+        // Pad to ensure i+9 < data.len() (need len > 11)
+        jpeg.push(0x00);
+
+        let (w, h) = read_jpeg_dimensions(&jpeg).unwrap();
+        assert_eq!(w, 640);
+        assert_eq!(h, 480);
+    }
+
+    #[test]
+    fn test_read_jpeg_dimensions_sof2() {
+        // JPEG with SOF2 (progressive) marker after an APP0 marker
+        let mut jpeg = vec![0xFF, 0xD8]; // SOI
+                                         // APP0 marker at offset 2
+        jpeg.push(0xFF);
+        jpeg.push(0xE0); // APP0
+        jpeg.push(0x00);
+        jpeg.push(0x04); // length 4 (includes length bytes, so 2 payload bytes)
+        jpeg.push(0x00);
+        jpeg.push(0x00);
+        // After skipping APP0: i = 2 + 2 + 4 = 8
+        // SOF2 marker at offset 8
+        jpeg.push(0xFF);
+        jpeg.push(0xC2);
+        jpeg.push(0x00);
+        jpeg.push(0x11); // length
+        jpeg.push(0x08); // precision (offset 12 = i+4)
+                         // Height: 100 (offset 13-14 = i+5, i+6)
+        jpeg.push(0x00);
+        jpeg.push(0x64);
+        // Width: 200 (offset 15-16 = i+7, i+8)
+        jpeg.push(0x00);
+        jpeg.push(0xC8);
+        // Pad so i+9 < data.len() (need len > 17)
+        jpeg.push(0x00);
+
+        let (w, h) = read_jpeg_dimensions(&jpeg).unwrap();
+        assert_eq!(w, 200);
+        assert_eq!(h, 100);
+    }
+
+    #[test]
+    fn test_read_jpeg_invalid() {
+        // Not a JPEG
+        assert!(read_jpeg_dimensions(b"not jpeg").is_none());
+        // Too short
+        assert!(read_jpeg_dimensions(&[0xFF]).is_none());
+        // Valid SOI but no SOF marker
+        assert!(read_jpeg_dimensions(&[0xFF, 0xD8, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn test_read_webp_dimensions() {
+        // Construct minimal WebP VP8 lossy header
+        let mut webp = Vec::new();
+        webp.extend_from_slice(b"RIFF");
+        // File size (placeholder, little-endian)
+        webp.extend_from_slice(&100u32.to_le_bytes());
+        webp.extend_from_slice(b"WEBP");
+        webp.extend_from_slice(b"VP8 ");
+        // Chunk size
+        webp.extend_from_slice(&30u32.to_le_bytes());
+        // 3 bytes before the frame tag (bytes 20-22)
+        webp.push(0x00);
+        webp.push(0x00);
+        webp.push(0x00);
+        // VP8 frame tag: 9D 01 2A
+        webp.push(0x9D);
+        webp.push(0x01);
+        webp.push(0x2A);
+        // Width: 320 (little-endian, 14-bit)
+        webp.extend_from_slice(&320u16.to_le_bytes());
+        // Height: 240 (little-endian, 14-bit)
+        webp.extend_from_slice(&240u16.to_le_bytes());
+
+        let (w, h) = read_webp_dimensions(&webp).unwrap();
+        assert_eq!(w, 320);
+        assert_eq!(h, 240);
+    }
+
+    #[test]
+    fn test_read_webp_invalid() {
+        // Not a WebP
+        assert!(read_webp_dimensions(b"not webp").is_none());
+        // Too short
+        assert!(read_webp_dimensions(&[0; 10]).is_none());
+        // Valid RIFF/WEBP but wrong chunk type
+        let mut bad = Vec::new();
+        bad.extend_from_slice(b"RIFF");
+        bad.extend_from_slice(&100u32.to_le_bytes());
+        bad.extend_from_slice(b"WEBP");
+        bad.extend_from_slice(b"XXXX"); // Not VP8 or VP8L
+        bad.extend_from_slice(&[0; 20]);
+        assert!(read_webp_dimensions(&bad).is_none());
+    }
+
+    #[test]
+    fn test_read_bmp_dimensions() {
+        // Construct minimal BMP header
+        let mut bmp = vec![0u8; 26];
+        bmp[0] = b'B';
+        bmp[1] = b'M';
+        // Width at offset 18 (little-endian u32): 800
+        bmp[18..22].copy_from_slice(&800u32.to_le_bytes());
+        // Height at offset 22 (little-endian u32): 600
+        bmp[22..26].copy_from_slice(&600u32.to_le_bytes());
+
+        let (w, h) = read_bmp_dimensions(&bmp).unwrap();
+        assert_eq!(w, 800);
+        assert_eq!(h, 600);
+    }
+
+    #[test]
+    fn test_read_bmp_invalid() {
+        // Not a BMP
+        assert!(read_bmp_dimensions(b"not bmp").is_none());
+        // Too short
+        assert!(read_bmp_dimensions(b"BM").is_none());
+    }
+
+    #[test]
+    fn test_portrait_image() {
+        let parser = ImageParser;
+        // PNG with height > width (portrait: 100x200)
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&100u32.to_be_bytes()); // width
+        png.extend_from_slice(&200u32.to_be_bytes()); // height
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+        let doc = parser.parse(&png, Some("image/png"), Some("png")).unwrap();
+        assert!(doc.text.contains("portrait"));
+    }
+
+    #[test]
+    fn test_panoramic_image() {
+        let parser = ImageParser;
+        // PNG with width > height * 2 (panoramic: 1000x400)
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&1000u32.to_be_bytes()); // width
+        png.extend_from_slice(&400u32.to_be_bytes()); // height
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+        let doc = parser.parse(&png, Some("image/png"), Some("png")).unwrap();
+        assert!(doc.text.contains("panoramic"));
+    }
+
+    #[test]
+    fn test_tall_image() {
+        let parser = ImageParser;
+        // PNG with height > width * 2 (tall: 100x300)
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&100u32.to_be_bytes()); // width
+        png.extend_from_slice(&300u32.to_be_bytes()); // height
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+        let doc = parser.parse(&png, Some("image/png"), Some("png")).unwrap();
+        assert!(doc.text.contains("tall vertical"));
+    }
+
+    #[test]
+    fn test_parse_unknown_format() {
+        let parser = ImageParser;
+        // Non-image bytes but parsed with image MIME
+        let garbage = b"this is not an image at all";
+        let doc = parser
+            .parse(garbage, Some("image/unknown"), Some("xyz"))
+            .unwrap();
+        assert_eq!(doc.content_type, ContentType::Image);
+        // Should not have width/height since format detection fails
+        assert!(!doc.metadata.contains_key("width"));
+    }
+
+    #[test]
+    fn test_can_parse_case_insensitive() {
+        let parser = ImageParser;
+        assert!(parser.can_parse(None, Some("JPG")));
+        assert!(parser.can_parse(None, Some("PNG")));
+        assert!(parser.can_parse(None, Some("Jpeg")));
+        assert!(parser.can_parse(None, Some("WEBP")));
+        assert!(parser.can_parse(None, Some("BMP")));
+    }
+
+    #[test]
+    fn test_webp_extension() {
+        let parser = ImageParser;
+        // Parse with "webp" extension - should include WebP note
+        let garbage = b"not actually webp";
+        let doc = parser.parse(garbage, None, Some("webp")).unwrap();
+        assert!(doc.text.contains("WebP image"));
+    }
+
+    #[test]
+    fn test_bmp_extension() {
+        let parser = ImageParser;
+        let garbage = b"not actually bmp";
+        let doc = parser.parse(garbage, None, Some("bmp")).unwrap();
+        assert!(doc.text.contains("BMP bitmap"));
+    }
+
+    #[test]
+    fn test_ico_extension() {
+        let parser = ImageParser;
+        let garbage = b"not actually ico";
+        let doc = parser.parse(garbage, None, Some("ico")).unwrap();
+        assert!(doc.text.contains("icon favicon"));
+    }
+
+    #[test]
+    fn test_jpeg_extension() {
+        let parser = ImageParser;
+        let garbage = b"not actually jpeg";
+        let doc = parser.parse(garbage, None, Some("jpeg")).unwrap();
+        assert!(doc.text.contains("JPEG photograph"));
+    }
+
+    #[test]
+    fn test_gif_extension() {
+        let parser = ImageParser;
+        let garbage = b"not gif";
+        let doc = parser.parse(garbage, None, Some("gif")).unwrap();
+        assert!(doc.text.contains("GIF image animation"));
+    }
+
+    #[test]
+    fn test_read_dimensions_unknown_mime() {
+        // Mime type that doesn't match any known format
+        assert!(read_dimensions(b"data", "application/octet-stream").is_none());
+    }
+
+    #[test]
+    fn test_parser_name() {
+        let parser = ImageParser;
+        assert_eq!(parser.name(), "image");
+    }
+
+    #[test]
+    fn test_parse_no_extension() {
+        let parser = ImageParser;
+        // Parse with no extension, uses default "image"
+        let garbage = b"some data";
+        let doc = parser.parse(garbage, Some("image/unknown"), None).unwrap();
+        assert_eq!(doc.metadata.get("extension").unwrap(), "image");
+    }
+
+    #[test]
+    fn test_read_png_invalid() {
+        // Not a PNG
+        assert!(read_png_dimensions(b"not png").is_none());
+        // Too short
+        assert!(read_png_dimensions(&[0x89, b'P', b'N', b'G']).is_none());
+    }
+
+    #[test]
+    fn test_read_gif_invalid() {
+        assert!(read_gif_dimensions(b"not gif").is_none());
+        assert!(read_gif_dimensions(b"GIF89").is_none()); // too short
+    }
+
+    #[test]
+    fn test_svg_extract_text_multiple_elements() {
+        let svg = r#"<svg><title>Title 1</title><desc>Description</desc><text x="10" y="20">Label A</text><text x="30" y="40">Label B</text></svg>"#;
+        let result = extract_svg_text(svg);
+        assert!(result.contains("Title 1"));
+        assert!(result.contains("Description"));
+        assert!(result.contains("Label A"));
+        assert!(result.contains("Label B"));
+    }
+
+    #[test]
+    fn test_svg_extract_text_empty_tags() {
+        let svg = r#"<svg><title></title><text x="0" y="0">   </text></svg>"#;
+        let result = extract_svg_text(svg);
+        // Empty and whitespace-only content should be filtered out
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_svg_with_no_extractable_tags() {
+        let svg = r#"<svg><circle cx="50" cy="50" r="40"/></svg>"#;
+        let result = extract_svg_text(svg);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_can_parse_tiff_extensions() {
+        let parser = ImageParser;
+        assert!(parser.can_parse(None, Some("tiff")));
+        assert!(parser.can_parse(None, Some("tif")));
+        assert!(parser.can_parse(None, Some("TIF")));
+    }
+
+    #[test]
+    fn test_can_parse_all_image_mimes() {
+        let parser = ImageParser;
+        assert!(parser.can_parse(Some("image/gif"), None));
+        assert!(parser.can_parse(Some("image/webp"), None));
+        assert!(parser.can_parse(Some("image/svg+xml"), None));
+        assert!(parser.can_parse(Some("image/bmp"), None));
+        assert!(parser.can_parse(Some("image/tiff"), None));
+        assert!(parser.can_parse(Some("image/x-icon"), None));
+    }
+
+    #[test]
+    fn test_read_webp_vp8l_lossless() {
+        // Construct minimal WebP VP8L (lossless) header
+        let mut webp = Vec::new();
+        webp.extend_from_slice(b"RIFF");
+        webp.extend_from_slice(&100u32.to_le_bytes());
+        webp.extend_from_slice(b"WEBP");
+        webp.extend_from_slice(b"VP8L");
+        // Chunk size
+        webp.extend_from_slice(&30u32.to_le_bytes());
+        // Signature byte (offset 20)
+        webp.push(0x2F);
+        // VP8L bitstream: width and height encoded in bytes 21-24
+        // width = (b0 | (b1 << 8)) & 0x3FFF, then +1
+        // height = ((b1 >> 6) | (b2 << 2) | (b3 << 10)) & 0x3FFF, then +1
+        // Encode width=99 (stored as 99-1=98=0x62) and height=49 (stored as 49-1=48=0x30)
+        // b0 = 0x62, b1 = 0x00, so width = 0x0062 & 0x3FFF = 98, +1 = 99
+        // height: (b1>>6) | (b2<<2) | (b3<<10) = 0 | (0x0C << 2) | (0 << 10) = 0x30 = 48, +1 = 49
+        // For w=100 (stored 99=0x63), h=50 (stored 49=0x31):
+        //   b0 = 0x63, b1 = 0x40 (b1[7:6]=01 for h low bits, b1[5:0]=0 for w high)
+        //   b2 = 0x0C (h bits[9:2]), b3 = 0x00
+        // Check: w = (0x63 | (0x40 << 8)) & 0x3FFF = 0x63 = 99, +1 = 100
+        // Check: h = (0x40>>6) | (0x0C<<2) | (0<<10) = 1 | 48 | 0 = 49, +1 = 50
+        webp.push(0x63); // b0 (offset 21)
+        webp.push(0x40); // b1 (offset 22)
+        webp.push(0x0C); // b2 (offset 23)
+        webp.push(0x00); // b3 (offset 24)
+                         // Pad to >= 30 bytes (outer length check requires data.len() >= 30)
+        webp.extend_from_slice(&[0u8; 5]);
+
+        let (w, h) = read_webp_dimensions(&webp).unwrap();
+        assert_eq!(w, 100);
+        assert_eq!(h, 50);
+    }
+
+    #[test]
+    fn test_parse_bmp_with_dimensions() {
+        let parser = ImageParser;
+        // Construct minimal BMP header with dimensions
+        let mut bmp = vec![0u8; 54]; // standard BMP header size
+        bmp[0] = b'B';
+        bmp[1] = b'M';
+        bmp[18..22].copy_from_slice(&640u32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&480u32.to_le_bytes());
+
+        let doc = parser.parse(&bmp, Some("image/bmp"), Some("bmp")).unwrap();
+        assert!(doc.text.contains("640x480"));
+        assert!(doc.text.contains("BMP bitmap"));
+        assert!(doc.text.contains("landscape"));
+    }
+
+    #[test]
+    fn test_svg_extension_triggers_text_extraction() {
+        let parser = ImageParser;
+        let svg = b"<svg><title>My SVG</title><text>Visible</text></svg>";
+        let doc = parser
+            .parse(svg, Some("image/svg+xml"), Some("svg"))
+            .unwrap();
+        assert!(doc.text.contains("My SVG"));
+        assert!(doc.text.contains("Visible"));
+        assert!(doc.text.contains("SVG vector graphic"));
+    }
 }

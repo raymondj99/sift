@@ -407,3 +407,541 @@ pub fn validate_model_dir(dir: &Path) -> SiftResult<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    // -----------------------------------------------------------------------
+    // ModelSpec::onnx_file_for_quant
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn onnx_file_for_quant_fp32() {
+        assert_eq!(
+            NOMIC_EMBED_TEXT_V1_5.onnx_file_for_quant(QuantizationType::FP32),
+            "model.onnx"
+        );
+    }
+
+    #[test]
+    fn onnx_file_for_quant_fp16() {
+        assert_eq!(
+            BGE_M3.onnx_file_for_quant(QuantizationType::FP16),
+            "model_fp16.onnx"
+        );
+    }
+
+    #[test]
+    fn onnx_file_for_quant_int8() {
+        assert_eq!(
+            NOMIC_EMBED_TEXT_V2.onnx_file_for_quant(QuantizationType::INT8),
+            "model_int8.onnx"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_model
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_model_existing() {
+        let m = get_model("bge-m3").expect("bge-m3 should exist");
+        assert_eq!(m.name, "bge-m3");
+        assert_eq!(m.dimensions, 1024);
+    }
+
+    #[test]
+    fn get_model_nomic_v1_5() {
+        let m = get_model("nomic-embed-text-v1.5").expect("should exist");
+        assert_eq!(m.repo_id, "nomic-ai/nomic-embed-text-v1.5");
+    }
+
+    #[test]
+    fn get_model_vision() {
+        let m = get_model("nomic-embed-vision-v1.5").expect("should exist");
+        assert_eq!(m.max_tokens, 0);
+        assert_eq!(m.pooling, PoolingStrategy::MeanPooling);
+    }
+
+    #[test]
+    fn get_model_unknown_returns_none() {
+        assert!(get_model("does-not-exist").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // all_models
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn all_models_returns_four() {
+        let models = all_models();
+        assert_eq!(models.len(), 4);
+    }
+
+    #[test]
+    fn all_models_contains_expected_names() {
+        let names: Vec<&str> = all_models().iter().map(|m| m.name).collect();
+        assert!(names.contains(&"nomic-embed-text-v1.5"));
+        assert!(names.contains(&"nomic-embed-text-v2"));
+        assert!(names.contains(&"bge-m3"));
+        assert!(names.contains(&"nomic-embed-vision-v1.5"));
+    }
+
+    // -----------------------------------------------------------------------
+    // optimal_batch_size
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn optimal_batch_size_clamps_to_min() {
+        // With extremely large dimension and tiny memory, the calculated batch
+        // should fall below 8 and get clamped up to the minimum.
+        let bs = optimal_batch_size(1_000_000, 1);
+        assert_eq!(bs, 8);
+    }
+
+    #[test]
+    fn optimal_batch_size_clamps_to_max() {
+        // Very high memory should clamp to 256
+        let bs = optimal_batch_size(64, 100_000);
+        assert_eq!(bs, 256);
+    }
+
+    #[test]
+    fn optimal_batch_size_mid_range() {
+        // With a moderate amount of memory and typical dimension, should be between 8 and 256
+        let bs = optimal_batch_size(768, 256);
+        assert!((8..=256).contains(&bs), "batch size {bs} out of range");
+    }
+
+    #[test]
+    fn optimal_batch_size_large_dimension() {
+        // Large dimension means more per-item cost
+        let bs = optimal_batch_size(4096, 512);
+        assert!((8..=256).contains(&bs), "batch size {bs} out of range");
+    }
+
+    // -----------------------------------------------------------------------
+    // QuantizationType::default
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quantization_default_is_fp32() {
+        assert_eq!(QuantizationType::default(), QuantizationType::FP32);
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::with_dir and path methods
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn model_manager_with_dir_paths() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+
+        let model_dir = mgr.model_dir("test-model");
+        assert_eq!(model_dir, tmp.path().join("test-model"));
+
+        let model_path = mgr.model_path("test-model");
+        assert_eq!(model_path, tmp.path().join("test-model").join("model.onnx"));
+
+        let tokenizer_path = mgr.tokenizer_path("test-model");
+        assert_eq!(
+            tokenizer_path,
+            tmp.path().join("test-model").join("tokenizer.json")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::is_downloaded
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_downloaded_false_when_empty() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(!mgr.is_downloaded("some-model"));
+    }
+
+    #[test]
+    fn is_downloaded_false_when_only_model_exists() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("my-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(!mgr.is_downloaded("my-model"));
+    }
+
+    #[test]
+    fn is_downloaded_false_when_only_tokenizer_exists() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("my-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(!mgr.is_downloaded("my-model"));
+    }
+
+    #[test]
+    fn is_downloaded_true_when_both_exist() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("my-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(mgr.is_downloaded("my-model"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::is_model_file_downloaded
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_model_file_downloaded_false_when_missing() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(!mgr.is_model_file_downloaded("vision-model"));
+    }
+
+    #[test]
+    fn is_model_file_downloaded_true_when_onnx_exists() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("vision-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
+        // No tokenizer needed for vision models
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(mgr.is_model_file_downloaded("vision-model"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::list_downloaded
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_downloaded_empty_dir() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(mgr.list_downloaded().is_empty());
+    }
+
+    #[test]
+    fn list_downloaded_with_valid_model() {
+        let tmp = tempdir().unwrap();
+
+        // Create a fully downloaded model
+        let model_dir = tmp.path().join("model-a");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
+
+        // Create a partially downloaded model (should not appear)
+        let partial_dir = tmp.path().join("model-b");
+        std::fs::create_dir_all(&partial_dir).unwrap();
+        std::fs::write(partial_dir.join("model.onnx"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        let downloaded = mgr.list_downloaded();
+        assert_eq!(downloaded.len(), 1);
+        assert!(downloaded.contains(&"model-a".to_string()));
+    }
+
+    #[test]
+    fn list_downloaded_ignores_files() {
+        let tmp = tempdir().unwrap();
+        // A file (not a directory) should be ignored
+        std::fs::write(tmp.path().join("stray-file.txt"), b"data").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(mgr.list_downloaded().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::ensure_model
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ensure_model_error_when_not_downloaded() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        let result = mgr.ensure_model("missing-model");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("missing-model"));
+    }
+
+    #[test]
+    fn ensure_model_ok_when_downloaded() {
+        let tmp = tempdir().unwrap();
+        let model_dir = tmp.path().join("good-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
+        std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        let result = mgr.ensure_model("good-model");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), model_dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::ort_lib_path / is_ort_downloaded
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ort_lib_path_construction() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        let lib_path = mgr.ort_lib_path();
+        assert_eq!(lib_path, tmp.path().join("ort").join(ORT_LIB_FILENAME));
+    }
+
+    #[test]
+    fn is_ort_downloaded_false_when_missing() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(!mgr.is_ort_downloaded());
+    }
+
+    #[test]
+    fn is_ort_downloaded_true_when_exists() {
+        let tmp = tempdir().unwrap();
+        let ort_dir = tmp.path().join("ort");
+        std::fs::create_dir_all(&ort_dir).unwrap();
+        std::fs::write(ort_dir.join(ORT_LIB_FILENAME), b"fake-lib").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert!(mgr.is_ort_downloaded());
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_model_dir
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_model_dir_missing_model_onnx() {
+        let tmp = tempdir().unwrap();
+        let result = validate_model_dir(tmp.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("model.onnx"));
+    }
+
+    #[test]
+    fn validate_model_dir_missing_tokenizer() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("model.onnx"), b"fake").unwrap();
+        let result = validate_model_dir(tmp.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("tokenizer.json"));
+    }
+
+    #[test]
+    fn validate_model_dir_ok_when_both_present() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("model.onnx"), b"fake").unwrap();
+        std::fs::write(tmp.path().join("tokenizer.json"), b"fake").unwrap();
+        assert!(validate_model_dir(tmp.path()).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::init_ort_env
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn init_ort_env_does_not_panic() {
+        let tmp = tempdir().unwrap();
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        // Should not panic even if the ORT lib does not exist
+        mgr.init_ort_env();
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelSpec field coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn model_spec_prefixes() {
+        assert_eq!(NOMIC_EMBED_TEXT_V1_5.search_prefix, "search_query: ");
+        assert_eq!(NOMIC_EMBED_TEXT_V1_5.document_prefix, "search_document: ");
+        assert_eq!(BGE_M3.search_prefix, "");
+        assert_eq!(BGE_M3.document_prefix, "");
+    }
+
+    #[test]
+    fn model_spec_pooling_strategies() {
+        assert_eq!(NOMIC_EMBED_TEXT_V1_5.pooling, PoolingStrategy::MeanPooling);
+        assert_eq!(BGE_M3.pooling, PoolingStrategy::ClsToken);
+    }
+
+    #[test]
+    fn model_spec_matryoshka_dims() {
+        assert_eq!(
+            NOMIC_EMBED_TEXT_V1_5.matryoshka_dims,
+            &[768, 512, 256, 128, 64]
+        );
+        assert_eq!(NOMIC_EMBED_TEXT_V2.matryoshka_dims, &[768, 512, 256, 128]);
+        assert!(BGE_M3.matryoshka_dims.is_empty());
+        assert!(NOMIC_EMBED_VISION_V1_5.matryoshka_dims.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // ort_download_url (internal helper, exercised for coverage)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ort_download_url_contains_version() {
+        let url = ort_download_url();
+        assert!(url.contains(ORT_VERSION));
+        assert!(url.starts_with("https://github.com/microsoft/onnxruntime/"));
+    }
+
+    #[test]
+    fn ort_download_url_contains_platform() {
+        let url = ort_download_url();
+        // On macOS arm64, should contain "osx" and "arm64"
+        // On other platforms, should contain relevant strings
+        assert!(url.contains(".tgz"), "URL should end with .tgz");
+        // Just verify it contains the onnxruntime prefix
+        assert!(url.contains("onnxruntime-"));
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_ort_lib — success path
+    // -----------------------------------------------------------------------
+
+    fn make_ort_tgz() -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        let data = b"fake ort library";
+        header.set_size(data.len() as u64);
+        header
+            .set_path(format!(
+                "onnxruntime-osx-arm64-{}/lib/{}",
+                ORT_VERSION, ORT_LIB_FILENAME
+            ))
+            .unwrap();
+        header.set_cksum();
+        builder.append(&header, &data[..]).unwrap();
+        let tar_bytes = builder.into_inner().unwrap();
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn extract_ort_lib_success() {
+        let tgz = make_ort_tgz();
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(ORT_LIB_FILENAME);
+
+        extract_ort_lib(&tgz, &dest).unwrap();
+        assert!(dest.exists());
+
+        let content = std::fs::read(&dest).unwrap();
+        assert_eq!(content, b"fake ort library");
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_ort_lib — library not found in archive
+    // -----------------------------------------------------------------------
+
+    fn make_ort_tgz_missing_lib() -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        let data = b"some other file";
+        header.set_size(data.len() as u64);
+        header
+            .set_path("onnxruntime-osx-arm64-1.20.1/lib/some_other_file.txt")
+            .unwrap();
+        header.set_cksum();
+        builder.append(&header, &data[..]).unwrap();
+        let tar_bytes = builder.into_inner().unwrap();
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn extract_ort_lib_missing_library_returns_error() {
+        let tgz = make_ort_tgz_missing_lib();
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(ORT_LIB_FILENAME);
+
+        let result = extract_ort_lib(&tgz, &dest);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not found in ONNX Runtime archive"));
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_ort_lib — invalid archive bytes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_ort_lib_invalid_archive() {
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(ORT_LIB_FILENAME);
+
+        let result = extract_ort_lib(b"not a gzip archive", &dest);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::init_ort_env — with library present
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn init_ort_env_with_lib_present() {
+        let tmp = tempdir().unwrap();
+        let ort_dir = tmp.path().join("ort");
+        std::fs::create_dir_all(&ort_dir).unwrap();
+        std::fs::write(ort_dir.join(ORT_LIB_FILENAME), b"fake-lib").unwrap();
+
+        // Clear ORT_DYLIB_PATH so the function can set it
+        let prev = std::env::var("ORT_DYLIB_PATH").ok();
+        std::env::remove_var("ORT_DYLIB_PATH");
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        mgr.init_ort_env();
+
+        // Restore previous value
+        if let Some(val) = prev {
+            std::env::set_var("ORT_DYLIB_PATH", val);
+        } else {
+            std::env::remove_var("ORT_DYLIB_PATH");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ModelManager::download_ort — already downloaded branch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn download_ort_already_exists() {
+        let tmp = tempdir().unwrap();
+        let ort_dir = tmp.path().join("ort");
+        std::fs::create_dir_all(&ort_dir).unwrap();
+        std::fs::write(ort_dir.join(ORT_LIB_FILENAME), b"fake-lib").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        // Should return Ok immediately since lib already exists
+        let result = mgr.download_ort();
+        assert!(result.is_ok());
+    }
+}

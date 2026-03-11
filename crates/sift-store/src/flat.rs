@@ -778,6 +778,111 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_cosine_empty_vectors() {
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(cosine_similarity(&[], &[]), 0.0);
+        }
+    }
+
+    #[test]
+    fn test_cosine_mismatched_lengths() {
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(cosine_similarity(&[1.0, 2.0], &[1.0]), 0.0);
+        }
+    }
+
+    #[test]
+    fn test_load_bin_bad_magic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bad.bin");
+        // Write an invalid magic header
+        std::fs::write(&path, b"BAAD00000000000000000000").unwrap();
+        let err = FlatVectorIndex::load_bin(&path);
+        match err {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("bad magic"), "got: {msg}");
+            }
+            Ok(_) => panic!("Expected error for bad magic bytes"),
+        }
+    }
+
+    #[test]
+    fn test_load_alias_delegates_to_load_bin() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("vectors.bin");
+
+        let store = FlatVectorIndex::new();
+        let mut c1 = make_chunk("file:///a.txt", "alias test", 0);
+        c1.vector = vec![1.0, 2.0, 3.0];
+        store.insert(&[c1]).unwrap();
+        store.save(&path).unwrap();
+
+        let loaded = FlatVectorIndex::load(&path).unwrap();
+        assert_eq!(loaded.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let store = FlatVectorIndex::default();
+        assert_eq!(store.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_vector_index_trait_save() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("vectors.bin");
+
+        let store = FlatVectorIndex::new();
+        let mut c1 = make_chunk("file:///a.txt", "trait save", 0);
+        c1.vector = vec![1.0, 2.0, 3.0];
+        store.insert(&[c1]).unwrap();
+
+        // Use the VectorIndex::save trait method
+        VectorIndex::save(&store, &path).unwrap();
+
+        let loaded = FlatVectorIndex::load_bin(&path).unwrap();
+        assert_eq!(loaded.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_vector_index_trait_export_all() {
+        let store = FlatVectorIndex::new();
+        let mut c1 = make_chunk("file:///a.txt", "trait export", 0);
+        c1.vector = vec![1.0, 2.0, 3.0];
+        store.insert(&[c1]).unwrap();
+
+        // Use the VectorIndex::export_all trait method
+        let entries = VectorIndex::export_all(&store).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "trait export");
+    }
+
+    #[test]
+    fn test_search_top_k_zero() {
+        let store = FlatVectorIndex::new();
+        let mut c1 = make_chunk("file:///a.txt", "hello", 0);
+        c1.vector = vec![1.0, 0.0, 0.0];
+        store.insert(&[c1]).unwrap();
+
+        let results = store.search(&[1.0, 0.0, 0.0], 0).unwrap();
+        // top_k=0 should still return results (no truncation when top_k is 0)
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_load_bin_truncated_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("truncated.bin");
+        // Write just the magic bytes, truncated before count
+        std::fs::write(&path, b"SFT1").unwrap();
+        let err = FlatVectorIndex::load_bin(&path);
+        assert!(err.is_err());
+    }
+
     mod proptests {
         use super::*;
         use proptest::prelude::*;

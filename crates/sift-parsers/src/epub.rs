@@ -403,4 +403,149 @@ mod tests {
         assert!(result.contains("world"));
         assert!(!result.contains('<'));
     }
+
+    #[test]
+    fn test_parse_epub_no_title_in_opf() {
+        // EPUB with an OPF file that has no <dc:title>
+        let epub = make_epub(
+            &[(
+                "chapter1.xhtml",
+                "<html><body><p>Content here.</p></body></html>",
+            )],
+            None,
+        );
+
+        let parser = EpubParser;
+        let doc = parser.parse(&epub, None, Some("epub")).unwrap();
+        assert!(doc.title.is_none());
+        assert!(doc.text.contains("Content here."));
+    }
+
+    #[test]
+    fn test_parse_epub_empty_chapter_skipped() {
+        // Chapter with only whitespace content should be skipped
+        let epub = make_epub(
+            &[
+                ("chapter1.xhtml", "<html><body>   </body></html>"),
+                (
+                    "chapter2.xhtml",
+                    "<html><body><p>Real content.</p></body></html>",
+                ),
+            ],
+            None,
+        );
+
+        let parser = EpubParser;
+        let doc = parser.parse(&epub, None, Some("epub")).unwrap();
+        assert!(doc.text.contains("Real content."));
+        // Only the non-empty chapter should count
+        assert_eq!(doc.metadata.get("chapter_count").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_parse_epub_skips_nav_file() {
+        let epub = make_epub(
+            &[
+                (
+                    "nav.xhtml",
+                    "<html><body><p>Navigation content</p></body></html>",
+                ),
+                (
+                    "chapter1.xhtml",
+                    "<html><body><p>Chapter text.</p></body></html>",
+                ),
+            ],
+            None,
+        );
+
+        let parser = EpubParser;
+        let doc = parser.parse(&epub, None, Some("epub")).unwrap();
+        assert!(!doc.text.contains("Navigation content"));
+        assert!(doc.text.contains("Chapter text."));
+    }
+
+    #[test]
+    fn test_strip_html_script_and_style() {
+        let html = "<html><head><script>var x = 1;</script><style>body { color: red; }</style></head><body><p>Visible text</p></body></html>";
+        let result = strip_html_tags(html);
+        assert!(result.contains("Visible text"));
+        assert!(!result.contains("var x"));
+        assert!(!result.contains("color: red"));
+    }
+
+    #[test]
+    fn test_strip_html_nbsp_entity() {
+        let html = "<p>Hello&nbsp;World</p>";
+        let result = strip_html_tags(html);
+        assert!(result.contains("Hello World"));
+    }
+
+    #[test]
+    fn test_strip_html_quot_entity() {
+        let html = "<p>&quot;Quoted&quot;</p>";
+        let result = strip_html_tags(html);
+        assert!(result.contains("\"Quoted\""));
+    }
+
+    #[test]
+    fn test_strip_html_apostrophe_entity() {
+        let html = "<p>It&#39;s</p>";
+        let result = strip_html_tags(html);
+        assert!(result.contains("It's"));
+    }
+
+    #[test]
+    fn test_collapse_whitespace() {
+        // collapse_whitespace trims start/end and collapses consecutive whitespace
+        let input = "  Hello   World  \n  Next  ";
+        let result = collapse_whitespace(input);
+        // After collapsing, runs of spaces become a single space,
+        // but newlines are preserved as newlines
+        assert!(result.starts_with("Hello"));
+        assert!(result.contains("World"));
+        assert!(result.contains("Next"));
+        assert!(result.ends_with("Next"));
+    }
+
+    #[test]
+    fn test_is_content_file() {
+        assert!(is_content_file("OEBPS/chapter1.xhtml"));
+        assert!(is_content_file("chapter.html"));
+        assert!(is_content_file("content.htm"));
+        assert!(!is_content_file("toc.xhtml"));
+        assert!(!is_content_file("nav.xhtml"));
+        assert!(!is_content_file("style.css"));
+        assert!(!is_content_file("image.png"));
+    }
+
+    #[test]
+    fn test_parser_name_epub() {
+        let parser = EpubParser;
+        assert_eq!(parser.name(), "epub");
+    }
+
+    #[test]
+    fn test_parse_epub_htm_extension() {
+        // Use .htm extension for the chapter
+        let epub = make_epub(
+            &[(
+                "chapter1.htm",
+                "<html><body><p>HTM content.</p></body></html>",
+            )],
+            Some("HTM Book"),
+        );
+
+        let parser = EpubParser;
+        let doc = parser.parse(&epub, None, Some("epub")).unwrap();
+        assert!(doc.text.contains("HTM content."));
+    }
+
+    #[test]
+    fn test_strip_html_block_elements_produce_newlines() {
+        let html = "<h1>Title</h1><p>Paragraph</p><div>Div content</div>";
+        let result = strip_html_tags(html);
+        assert!(result.contains("Title"));
+        assert!(result.contains("Paragraph"));
+        assert!(result.contains("Div content"));
+    }
 }

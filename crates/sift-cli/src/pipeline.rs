@@ -710,3 +710,359 @@ fn embed_image_chunks(
 }
 
 pub use sift_core::pipeline::ScanStats;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sift_store::VectorStore;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Mutex to serialize tests that manipulate the HOME env var.
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Helper: set HOME to `dir`, run `f`, then restore the original HOME.
+    /// Must be called while holding `HOME_MUTEX`.
+    #[allow(unsafe_code)]
+    fn with_home<F, R>(dir: &std::path::Path, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", dir) };
+        let result = f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        result
+    }
+
+    // ------------------------------------------------------------------
+    // Test 1: open_engine
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_open_engine() {
+        let _lock = HOME_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = Config::default();
+            let (engine, metadata) = open_engine(&config).expect("open_engine should succeed");
+            // Engine and metadata should be usable: inserting nothing should be fine.
+            let count = engine.vector_store.count().unwrap();
+            assert_eq!(count, 0);
+            let all = metadata.load_all_hashes().unwrap();
+            assert!(all.is_empty());
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Test 2: zero_vector_chunks
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_zero_vector_chunks() {
+        let chunks = vec![
+            Chunk {
+                text: "hello world".into(),
+                source_uri: "file:///a.txt".into(),
+                chunk_index: 0,
+                content_type: sift_core::ContentType::Text,
+                file_type: "txt".into(),
+                title: None,
+                language: None,
+                byte_range: Some((0, 11)),
+            },
+            Chunk {
+                text: "fn main() {}".into(),
+                source_uri: "file:///b.rs".into(),
+                chunk_index: 0,
+                content_type: sift_core::ContentType::Code,
+                file_type: "rs".into(),
+                title: None,
+                language: Some("rust".into()),
+                byte_range: Some((0, 12)),
+            },
+        ];
+        let embedded = zero_vector_chunks(&chunks);
+        assert_eq!(embedded.len(), 2);
+        for ec in &embedded {
+            assert_eq!(ec.vector.len(), 768, "vector should be 768-dimensional");
+            assert!(
+                ec.vector.iter().all(|&v| v == 0.0),
+                "all values should be zero"
+            );
+        }
+        // Verify chunk data is preserved
+        assert_eq!(embedded[0].chunk.text, "hello world");
+        assert_eq!(embedded[1].chunk.text, "fn main() {}");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 3: run_scan_pipeline with text files
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_run_scan_pipeline_with_text_files() {
+        let _lock = HOME_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        // Create source files in a sub-directory
+        let src_dir = tmp.path().join("sources");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("a.txt"), "Hello world").unwrap();
+        std::fs::write(src_dir.join("b.rs"), "fn main() {}").unwrap();
+        std::fs::write(src_dir.join("c.md"), "# Title\n\nSome content").unwrap();
+
+        with_home(tmp.path(), || {
+            let config = Config::default();
+            let (engine, metadata) = open_engine(&config).unwrap();
+            let token = CancellationToken::new();
+            let options = ScanOptions {
+                paths: vec![src_dir.clone()],
+                jobs: 2,
+                ..Default::default()
+            };
+
+            let stats = run_scan_pipeline(
+                &config,
+                &options,
+                &engine,
+                &metadata,
+                None, // no embedder
+                #[cfg(feature = "vision")]
+                None, // no vision embedder
+                &token,
+                true, // quiet
+            )
+            .expect("run_scan_pipeline should succeed");
+
+            assert!(
+                stats.discovered >= 3,
+                "should discover at least 3 files, got {}",
+                stats.discovered
+            );
+            assert!(
+                stats.indexed >= 3,
+                "should index at least 3 files, got {}",
+                stats.indexed
+            );
+            assert_eq!(stats.errors, 0, "should have no errors");
+            assert!(stats.chunks > 0, "should produce at least one chunk");
+            assert!(
+                stats.file_types.contains_key("txt"),
+                "file_types should contain 'txt'"
+            );
+            assert!(
+                stats.file_types.contains_key("rs"),
+                "file_types should contain 'rs'"
+            );
+            assert!(
+                stats.file_types.contains_key("md"),
+                "file_types should contain 'md'"
+            );
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Test 4: run_scan_pipeline dry run
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_run_scan_pipeline_dry_run() {
+        let _lock = HOME_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        let src_dir = tmp.path().join("sources");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("a.txt"), "Hello world").unwrap();
+
+        with_home(tmp.path(), || {
+            let config = Config::default();
+            let (engine, metadata) = open_engine(&config).unwrap();
+            let token = CancellationToken::new();
+            let options = ScanOptions {
+                paths: vec![src_dir.clone()],
+                dry_run: true,
+                jobs: 2,
+                ..Default::default()
+            };
+
+            let stats = run_scan_pipeline(
+                &config,
+                &options,
+                &engine,
+                &metadata,
+                None,
+                #[cfg(feature = "vision")]
+                None,
+                &token,
+                true,
+            )
+            .unwrap();
+
+            assert!(
+                stats.discovered > 0,
+                "should discover files, got {}",
+                stats.discovered
+            );
+            assert_eq!(stats.indexed, 0, "dry_run should not index any files");
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Test 5: run_scan_pipeline incremental (second run skips unchanged)
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_run_scan_pipeline_incremental() {
+        let _lock = HOME_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        let src_dir = tmp.path().join("sources");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("a.txt"), "Hello world").unwrap();
+        std::fs::write(src_dir.join("b.rs"), "fn main() {}").unwrap();
+
+        with_home(tmp.path(), || {
+            let config = Config::default();
+            let (engine, metadata) = open_engine(&config).unwrap();
+            let token = CancellationToken::new();
+            let options = ScanOptions {
+                paths: vec![src_dir.clone()],
+                jobs: 2,
+                ..Default::default()
+            };
+
+            // First run: should index files
+            let stats1 = run_scan_pipeline(
+                &config,
+                &options,
+                &engine,
+                &metadata,
+                None,
+                #[cfg(feature = "vision")]
+                None,
+                &token,
+                true,
+            )
+            .unwrap();
+            assert!(stats1.indexed > 0, "first run should index files");
+
+            // Second run: same files, should skip all
+            let stats2 = run_scan_pipeline(
+                &config,
+                &options,
+                &engine,
+                &metadata,
+                None,
+                #[cfg(feature = "vision")]
+                None,
+                &token,
+                true,
+            )
+            .unwrap();
+            assert!(
+                stats2.skipped > 0,
+                "second run should skip unchanged files, got skipped={}",
+                stats2.skipped
+            );
+            assert_eq!(
+                stats2.indexed, 0,
+                "second run should not index any new files"
+            );
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Test 6: run_scan_pipeline empty directory
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_run_scan_pipeline_empty_dir() {
+        let _lock = HOME_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        let src_dir = tmp.path().join("empty_sources");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        with_home(tmp.path(), || {
+            let config = Config::default();
+            let (engine, metadata) = open_engine(&config).unwrap();
+            let token = CancellationToken::new();
+            let options = ScanOptions {
+                paths: vec![src_dir.clone()],
+                jobs: 2,
+                ..Default::default()
+            };
+
+            let stats = run_scan_pipeline(
+                &config,
+                &options,
+                &engine,
+                &metadata,
+                None,
+                #[cfg(feature = "vision")]
+                None,
+                &token,
+                true,
+            )
+            .unwrap();
+
+            assert_eq!(stats.discovered, 0, "empty dir should discover 0 files");
+            assert_eq!(stats.indexed, 0, "empty dir should index 0 files");
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Test 7: embed_text_chunks_atomic with no embedder
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_embed_text_chunks_atomic_no_embedder() {
+        let chunks = vec![
+            Chunk {
+                text: "alpha".into(),
+                source_uri: "file:///x.txt".into(),
+                chunk_index: 0,
+                content_type: sift_core::ContentType::Text,
+                file_type: "txt".into(),
+                title: None,
+                language: None,
+                byte_range: None,
+            },
+            Chunk {
+                text: "beta".into(),
+                source_uri: "file:///y.txt".into(),
+                chunk_index: 1,
+                content_type: sift_core::ContentType::Text,
+                file_type: "txt".into(),
+                title: None,
+                language: None,
+                byte_range: None,
+            },
+            Chunk {
+                text: "gamma".into(),
+                source_uri: "file:///z.txt".into(),
+                chunk_index: 2,
+                content_type: sift_core::ContentType::Text,
+                file_type: "txt".into(),
+                title: None,
+                language: None,
+                byte_range: None,
+            },
+        ];
+
+        #[cfg(feature = "embeddings")]
+        let cache: Option<EmbeddingCache> = None;
+        #[cfg(not(feature = "embeddings"))]
+        let cache: Option<()> = None;
+        let cache_hits = AtomicU64::new(0);
+
+        let embedded = embed_text_chunks_atomic(&chunks, None, &cache, &cache_hits);
+
+        assert_eq!(embedded.len(), 3);
+        for ec in &embedded {
+            assert_eq!(ec.vector.len(), 768);
+            assert!(ec.vector.iter().all(|&v| v == 0.0));
+        }
+        assert_eq!(embedded[0].chunk.text, "alpha");
+        assert_eq!(embedded[1].chunk.text, "beta");
+        assert_eq!(embedded[2].chunk.text, "gamma");
+        assert_eq!(cache_hits.load(Ordering::Relaxed), 0);
+    }
+}
