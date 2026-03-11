@@ -3,7 +3,7 @@ use crate::color_stub::*;
 use crate::{pipeline, OutputFormat};
 #[cfg(feature = "fancy")]
 use colored::*;
-use sift_core::{Config, ScanOptions, SiftResult};
+use sift_core::{CancellationToken, Config, ScanOptions, SiftResult};
 
 pub fn run(
     config: &Config,
@@ -31,6 +31,14 @@ pub fn run(
     #[cfg(feature = "vision")]
     let vision_embedder = pipeline::load_vision_embedder();
 
+    // Create a cancellation token and wire it to Ctrl-C.
+    let token = CancellationToken::new();
+    let token_handler = token.clone();
+    ctrlc::set_handler(move || {
+        token_handler.cancel();
+    })
+    .ok(); // best-effort; may fail if already registered
+
     let stats = pipeline::run_scan_pipeline(
         config,
         options,
@@ -39,6 +47,7 @@ pub fn run(
         embedder_ref,
         #[cfg(feature = "vision")]
         vision_embedder.as_ref(),
+        &token,
         quiet,
     )?;
 

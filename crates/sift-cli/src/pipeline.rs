@@ -6,7 +6,9 @@ use rayon::prelude::*;
 use sift_chunker::chunker_for_content;
 #[cfg(feature = "vision")]
 use sift_core::ContentType;
-use sift_core::{Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult, SourceItem};
+use sift_core::{
+    CancellationToken, Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult, SourceItem,
+};
 #[cfg(feature = "embeddings")]
 use sift_embed::{models::NOMIC_EMBED_TEXT_V2, EmbeddingCache, ModelManager, OnnxEmbedder};
 use sift_parsers::ParserRegistry;
@@ -18,11 +20,8 @@ use sift_store::VectorIndex;
 use sift_store::{
     DefaultFullTextStore, FullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore,
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
-
-/// Global shutdown flag set by the Ctrl-C handler.
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "vision")]
 use sift_embed::{models::NOMIC_EMBED_VISION_V1_5, VisionEmbedder};
@@ -212,6 +211,7 @@ pub fn run_scan_pipeline(
     metadata: &MetadataStore,
     embedder: Option<&dyn Embedder>,
     #[cfg(feature = "vision")] vision_embedder: Option<&VisionEmbedder>,
+    token: &CancellationToken,
     quiet: bool,
 ) -> SiftResult<ScanStats> {
     // Acquire an advisory exclusive lock to prevent concurrent index mutations.
@@ -223,13 +223,6 @@ pub fn run_scan_pipeline(
                 .into(),
         )
     })?;
-
-    // Reset and install the Ctrl-C handler for graceful shutdown.
-    SHUTDOWN.store(false, Ordering::SeqCst);
-    ctrlc::set_handler(|| {
-        SHUTDOWN.store(true, Ordering::SeqCst);
-    })
-    .ok(); // best-effort; may fail if already registered
 
     let source = FilesystemSource::new();
     #[cfg(feature = "embeddings")]
@@ -334,7 +327,7 @@ pub fn run_scan_pipeline(
         // ---- Stage 1: Feed discovered items into the pipeline ----
         s.spawn(|| {
             for item in to_process {
-                if SHUTDOWN.load(Ordering::Relaxed) {
+                if token.is_cancelled() {
                     break;
                 }
                 if discover_tx.send(item).is_err() {
@@ -349,7 +342,7 @@ pub fn run_scan_pipeline(
             pool.install(|| {
                 let parser_registry = ParserRegistry::new();
                 discover_rx.into_iter().par_bridge().for_each(|item| {
-                    if SHUTDOWN.load(Ordering::Relaxed) {
+                    if token.is_cancelled() {
                         return;
                     }
                     // Read file content
@@ -421,7 +414,7 @@ pub fn run_scan_pipeline(
         // ---- Stage 3: Embed (parallel) ----
         s.spawn(|| {
             parse_rx.into_iter().par_bridge().for_each(|parsed| {
-                if SHUTDOWN.load(Ordering::Relaxed) {
+                if token.is_cancelled() {
                     return;
                 }
 
@@ -470,7 +463,7 @@ pub fn run_scan_pipeline(
         let mut batch_count: u64 = 0;
 
         for store_item in embed_rx {
-            if SHUTDOWN.load(Ordering::Relaxed) {
+            if token.is_cancelled() {
                 break;
             }
 
@@ -527,7 +520,7 @@ pub fn run_scan_pipeline(
 
     scope_result?;
 
-    if SHUTDOWN.load(Ordering::Relaxed) {
+    if token.is_cancelled() {
         warn!("Interrupted — partial results have been committed");
     }
 

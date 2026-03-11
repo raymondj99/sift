@@ -2,6 +2,35 @@ use crate::error::{SiftError, SiftResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// A cooperative cancellation token for pipeline stages.
+///
+/// Clone-cheap (wraps an `Arc<AtomicBool>`). Call [`cancel()`](Self::cancel)
+/// from a signal handler; pipeline stages poll [`is_cancelled()`](Self::is_cancelled).
+#[derive(Clone)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Represents a discovered item from a source, before parsing.
 #[derive(Debug, Clone)]

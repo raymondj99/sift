@@ -140,6 +140,65 @@ impl MetadataStore {
         Ok(())
     }
 
+    /// Batch upsert multiple source records in a single transaction.
+    pub fn upsert_batch(
+        &self,
+        items: &[(&str, &[u8; 32], u64, &str, Option<i64>, u32)],
+    ) -> SiftResult<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| sift_core::SiftError::Storage(format!("System clock error: {e}")))?
+            .as_secs() as i64;
+
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| sift_core::SiftError::Storage(format!("Transaction error: {e}")))?;
+
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO sources (uri, content_hash, file_size, file_type, modified_at, indexed_at, chunk_count, status)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'indexed')
+                     ON CONFLICT(uri) DO UPDATE SET
+                        content_hash = excluded.content_hash,
+                        file_size = excluded.file_size,
+                        file_type = excluded.file_type,
+                        modified_at = excluded.modified_at,
+                        indexed_at = excluded.indexed_at,
+                        chunk_count = excluded.chunk_count,
+                        status = 'indexed'",
+                )
+                .map_err(|e| sift_core::SiftError::Storage(format!("Prepare error: {e}")))?;
+
+            for &(uri, hash, size, file_type, modified_at, chunk_count) in items {
+                stmt.execute(params![
+                    uri,
+                    hash.as_slice(),
+                    size as i64,
+                    file_type,
+                    modified_at,
+                    now,
+                    i64::from(chunk_count),
+                ])
+                .map_err(|e| sift_core::SiftError::Storage(format!("Upsert error: {e}")))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| sift_core::SiftError::Storage(format!("Commit error: {e}")))?;
+
+        Ok(())
+    }
+
     /// Remove a source and return true if it existed.
     pub fn remove_source(&self, uri: &str) -> SiftResult<bool> {
         let conn = self
