@@ -35,12 +35,9 @@ impl CodeChunker {
             None => return self.fallback_chunk(text),
         };
 
-        let ts_language = match lang_for_extension(lang) {
-            Some(l) => l,
-            None => {
-                debug!("No tree-sitter grammar for language: {}", lang);
-                return self.fallback_chunk(text);
-            }
+        let ts_language = if let Some(l) = lang_for_extension(lang) { l } else {
+            debug!("No tree-sitter grammar for language: {}", lang);
+            return self.fallback_chunk(text);
         };
 
         let mut parser = tree_sitter::Parser::new();
@@ -170,7 +167,7 @@ impl Chunker for CodeChunker {
         CodeChunker::chunk_with_language(self, text, language)
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "code"
     }
 }
@@ -202,7 +199,7 @@ fn collect_top_level_definitions(node: tree_sitter::Node, text: &str, defs: &mut
 
 /// Recursively collect definitions nested inside container nodes
 /// (impl blocks, class bodies, etc.) so they each get their own
-/// scope path. We only descend into "body" / "declaration_list" children.
+/// scope path. We only descend into "body" / "`declaration_list`" children.
 fn collect_nested_definitions(parent: tree_sitter::Node, text: &str, _defs: &mut Vec<Definition>) {
     if !is_container_node(parent.kind()) {
         return;
@@ -344,7 +341,7 @@ fn node_label(node: tree_sitter::Node, text: &str) -> Option<String> {
     let name = find_name_child(node, text);
 
     match name {
-        Some(n) => Some(format!("{} {}", prefix, n)),
+        Some(n) => Some(format!("{prefix} {n}")),
         None => Some(prefix.to_string()),
     }
 }
@@ -427,7 +424,7 @@ fn lang_for_extension(ext: &str) -> Option<tree_sitter::Language> {
 }
 
 /// Build a scope header string from a set of definition indices.
-/// If there is exactly one definition with a scope_path, return it.
+/// If there is exactly one definition with a `scope_path`, return it.
 /// If there are multiple, join them with ", ".
 fn build_scope_header(defs: &[Definition], indices: &[usize]) -> Option<String> {
     let paths: Vec<&str> = indices
@@ -449,7 +446,7 @@ fn build_scope_header(defs: &[Definition], indices: &[usize]) -> Option<String> 
 /// Returns the original text unchanged if `scope_path` is None.
 fn prepend_scope_comment(text: &str, scope_path: &Option<String>) -> String {
     match scope_path {
-        Some(path) if !path.is_empty() => format!("// {}\n{}", path, text),
+        Some(path) if !path.is_empty() => format!("// {path}\n{text}"),
         _ => text.to_string(),
     }
 }
@@ -460,12 +457,13 @@ fn find_line_start(text: &str, pos: usize) -> usize {
         return 0;
     }
     let search = &text[..pos.min(text.len())];
-    search.rfind('\n').map(|p| p + 1).unwrap_or(0)
+    search.rfind('\n').map_or(0, |p| p + 1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write;
 
     // ---------------------------------------------------------------
     // Helper: join all chunk texts and verify a substring is present.
@@ -759,7 +757,7 @@ use std::sync::Arc;
         // A function body that far exceeds 100 bytes
         let mut body = String::from("fn big() {\n");
         for i in 0..20 {
-            body.push_str(&format!("    let x{} = {};\n", i, i));
+            let _ = writeln!(body, "    let x{i} = {i};");
         }
         body.push_str("}\n");
 
@@ -835,8 +833,7 @@ fn delta() { println!(\"d\"); }
         for ext in &supported {
             assert!(
                 lang_for_extension(ext).is_some(),
-                "Extension '{}' should map to a tree-sitter language",
-                ext
+                "Extension '{ext}' should map to a tree-sitter language"
             );
         }
     }
@@ -880,8 +877,7 @@ impl Foo {
         // Should contain a scope path comment for at least one function
         assert!(
             t.contains("// fn hello") || t.contains("// fn world") || t.contains("// impl Foo"),
-            "Expected a scope-path comment in chunks, got:\n{}",
-            t
+            "Expected a scope-path comment in chunks, got:\n{t}"
         );
     }
 
@@ -906,8 +902,7 @@ def main():
             t.contains("// fn greet")
                 || t.contains("// class Calculator")
                 || t.contains("// fn main"),
-            "Expected a scope-path comment in Python chunks, got:\n{}",
-            t
+            "Expected a scope-path comment in Python chunks, got:\n{t}"
         );
     }
 
@@ -928,8 +923,7 @@ def main():
                 let path = path.unwrap();
                 assert!(
                     path.contains("fn top"),
-                    "Expected 'fn top' in path, got: {}",
-                    path
+                    "Expected 'fn top' in path, got: {path}"
                 );
             }
         }
@@ -969,8 +963,7 @@ impl MyStruct {
         // Should contain both the impl and the fn
         assert!(
             path.contains("impl MyStruct") && path.contains("fn my_method"),
-            "Expected scope path 'impl MyStruct > ... > fn my_method', got: {}",
-            path
+            "Expected scope path 'impl MyStruct > ... > fn my_method', got: {path}"
         );
     }
 

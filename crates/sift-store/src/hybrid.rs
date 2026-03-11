@@ -67,7 +67,7 @@ impl<V: VectorStore, F: FullTextStore> HybridSearchEngine<V, F> {
 
 /// Reciprocal Rank Fusion - merge two ranked lists into one.
 ///
-/// RRF score = alpha * 1/(k+rank_vector) + (1-alpha) * 1/(k+rank_bm25)
+/// RRF score = alpha * `1/(k+rank_vector)` + (1-alpha) * `1/(k+rank_bm25)`
 /// where k=60 is a standard constant.
 fn rrf_fuse(
     vector_results: &[SearchResult],

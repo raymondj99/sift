@@ -98,7 +98,7 @@ impl FilesystemSource {
         Self::mime_from_extension(path).map(String::from)
     }
 
-    /// Read a file once, returning (content_hash, content_mime).
+    /// Read a file once, returning (`content_hash`, `content_mime`).
     /// Uses the same buffer for both MIME detection (via `infer`) and BLAKE3 hashing.
     pub(crate) fn read_and_analyze(path: &Path) -> SiftResult<([u8; 32], Option<String>)> {
         let data = std::fs::read(path)?;
@@ -139,7 +139,7 @@ impl Source for FilesystemSource {
             // Add custom ignore patterns
             let mut overrides = ignore::overrides::OverrideBuilder::new(&canonical_root);
             for pattern in &options.exclude_globs {
-                let _ = overrides.add(&format!("!{}", pattern));
+                let _ = overrides.add(&format!("!{pattern}"));
             }
             for pattern in &options.include_globs {
                 let _ = overrides.add(pattern);
@@ -185,7 +185,7 @@ impl Source for FilesystemSource {
                     let extension = path
                         .extension()
                         .and_then(|e| e.to_str())
-                        .map(|s| s.to_lowercase());
+                        .map(str::to_lowercase);
 
                     // Filter by file type if specified (check extension BEFORE reading the file)
                     if !file_types.is_empty() {
@@ -249,7 +249,7 @@ impl Source for FilesystemSource {
 
         let collected = items
             .into_inner()
-            .map_err(|e| sift_core::SiftError::Source(format!("Lock poisoned: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Source(format!("Lock poisoned: {e}")))?;
 
         Ok(collected)
     }
@@ -365,7 +365,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut path = dir.path().to_path_buf();
         for i in 0..10 {
-            path = path.join(format!("level{}", i));
+            path = path.join(format!("level{i}"));
             fs::create_dir(&path).unwrap();
         }
         fs::write(path.join("deep.txt"), "deep content").unwrap();

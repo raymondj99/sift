@@ -1,6 +1,6 @@
 use crate::traits::Chunker;
 
-/// Recursive character text splitter, similar to LangChain's
+/// Recursive character text splitter, similar to `LangChain`'s
 /// `RecursiveCharacterTextSplitter`.
 ///
 /// Splits text using a hierarchy of separators, attempting the first separator
@@ -80,7 +80,7 @@ impl RecursiveChunker {
             let candidate = if current.is_empty() {
                 piece.to_string()
             } else {
-                format!("{}{}{}", current, sep, piece)
+                format!("{current}{sep}{piece}")
             };
 
             if candidate.len() <= self.chunk_size {
@@ -230,7 +230,7 @@ impl Chunker for RecursiveChunker {
             .collect()
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "recursive"
     }
 }
@@ -353,8 +353,7 @@ mod tests {
         for (chunk_text, _) in &chunks {
             assert!(
                 chunk_text.len() <= 10,
-                "Chunk '{}' exceeds limit",
-                chunk_text
+                "Chunk '{chunk_text}' exceeds limit"
             );
         }
     }
@@ -412,7 +411,7 @@ mod tests {
         // All words from the original should appear somewhere in the chunks
         for word in text.split_whitespace() {
             let found = chunks.iter().any(|(c, _)| c.contains(word));
-            assert!(found, "Word '{}' should be in some chunk", word);
+            assert!(found, "Word '{word}' should be in some chunk");
         }
     }
 

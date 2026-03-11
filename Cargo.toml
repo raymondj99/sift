@@ -120,6 +120,40 @@ sift-embed = { path = "crates/sift-embed", default-features = false }
 sift-store = { path = "crates/sift-store", default-features = false }
 sift-server = { path = "crates/sift-server" }
 
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+wildcard_imports = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+unnecessary_wraps = "allow"
+match_same_arms = "allow"
+items_after_statements = "allow"
+needless_pass_by_value = "allow"
+trivially_copy_pass_by_ref = "allow"
+doc_markdown = "allow"
+unreadable_literal = "allow"
+return_self_not_must_use = "allow"
+if_not_else = "allow"
+uninlined_format_args = "allow"
+manual_let_else = "allow"
+redundant_closure_for_method_calls = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+needless_raw_string_hashes = "allow"
+option_if_let_else = "allow"
+str_split_at_newline = "allow"
+ref_option = "allow"
+
 [profile.dev.package."*"]
 opt-level = 1
 

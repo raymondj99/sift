@@ -20,7 +20,7 @@ pub fn run(
 
     let mut writer: Box<dyn Write> = if let Some(ref path) = output_path {
         Box::new(std::fs::File::create(path).map_err(|e| {
-            sift_core::SiftError::Storage(format!("Failed to create output file: {}", e))
+            sift_core::SiftError::Storage(format!("Failed to create output file: {e}"))
         })?)
     } else {
         Box::new(std::io::stdout().lock())
@@ -56,9 +56,9 @@ pub fn run(
         }
 
         let line = serde_json::to_string(&obj)
-            .map_err(|e| sift_core::SiftError::Storage(format!("JSON serialize error: {}", e)))?;
-        writeln!(writer, "{}", line)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("JSON serialize error: {e}")))?;
+        writeln!(writer, "{line}")
+            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
         count += 1;
     }
 

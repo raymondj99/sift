@@ -1,5 +1,6 @@
 use crate::traits::Parser;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for plain text, markdown, RST, org-mode files.
 pub struct TextParser;
@@ -47,11 +48,11 @@ impl Parser for TextParser {
             title,
             language: None,
             content_type: ContentType::Text,
-            metadata: Default::default(),
+            metadata: HashMap::new(),
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "text"
     }
 }

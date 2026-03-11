@@ -43,7 +43,7 @@ impl Parser for EmailParser {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "email"
     }
 }
@@ -61,12 +61,12 @@ fn parse_eml(content: &[u8]) -> SiftResult<ParsedDocument> {
 
     // Extract headers
     let subject = message.subject().unwrap_or("(no subject)").to_string();
-    parts.push(format!("Subject: {}", subject));
+    parts.push(format!("Subject: {subject}"));
 
     if let Some(from) = message.from() {
         let addrs: Vec<String> = from.iter().map(format_address).collect();
         let from_str = addrs.join(", ");
-        parts.push(format!("From: {}", from_str));
+        parts.push(format!("From: {from_str}"));
         metadata.insert("from".to_string(), from_str);
     }
 
@@ -77,7 +77,7 @@ fn parse_eml(content: &[u8]) -> SiftResult<ParsedDocument> {
 
     if let Some(date) = message.date() {
         let date_str = date.to_rfc3339();
-        parts.push(format!("Date: {}", date_str));
+        parts.push(format!("Date: {date_str}"));
         metadata.insert("date".to_string(), date_str);
     }
 
@@ -137,16 +137,15 @@ fn parse_mbox(content: &[u8]) -> SiftResult<ParsedDocument> {
         if count > MAX_MBOX_MESSAGES {
             let _ = write!(
                 output,
-                "\n--- truncated: {} message limit reached ---\n",
-                MAX_MBOX_MESSAGES
+                "\n--- truncated: {MAX_MBOX_MESSAGES} message limit reached ---\n"
             );
             break;
         }
 
         if let Some(parsed) = mail_parser::MessageParser::default().parse(trimmed.as_bytes()) {
             let subject = parsed.subject().unwrap_or("(no subject)");
-            let _ = writeln!(output, "--- Message {} ---", count);
-            let _ = writeln!(output, "Subject: {}", subject);
+            let _ = writeln!(output, "--- Message {count} ---");
+            let _ = writeln!(output, "Subject: {subject}");
             if let Some(from) = parsed.from() {
                 let addrs: Vec<String> = from.iter().map(format_address).collect();
                 let _ = writeln!(output, "From: {}", addrs.join(", "));
@@ -178,7 +177,7 @@ fn parse_mbox(content: &[u8]) -> SiftResult<ParsedDocument> {
 
 fn format_address(addr: &mail_parser::Addr) -> String {
     match (&addr.name, &addr.address) {
-        (Some(name), Some(email)) => format!("{} <{}>", name, email),
+        (Some(name), Some(email)) => format!("{name} <{email}>"),
         (None, Some(email)) => email.to_string(),
         (Some(name), None) => name.to_string(),
         (None, None) => "(unknown)".to_string(),

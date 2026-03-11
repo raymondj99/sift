@@ -70,7 +70,7 @@ impl Parser for ImageParser {
         if let Some((w, h)) = read_dimensions(content, &format) {
             metadata.insert("width".to_string(), w.to_string());
             metadata.insert("height".to_string(), h.to_string());
-            text_parts.push(format!("{}x{} pixels", w, h));
+            text_parts.push(format!("{w}x{h} pixels"));
 
             // Classify by aspect ratio / size
             if w == h {
@@ -86,7 +86,7 @@ impl Parser for ImageParser {
             }
 
             // Size classification
-            let megapixels = (w as f64 * h as f64) / 1_000_000.0;
+            let megapixels = (f64::from(w) * f64::from(h)) / 1_000_000.0;
             if megapixels > 8.0 {
                 text_parts.push("high resolution".to_string());
             } else if megapixels < 0.1 {
@@ -127,7 +127,7 @@ impl Parser for ImageParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "image"
     }
 }
@@ -173,8 +173,8 @@ fn read_jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         let marker = data[i + 1];
         // SOF0 (0xC0) or SOF2 (0xC2) — baseline or progressive
         if (marker == 0xC0 || marker == 0xC2) && i + 9 < data.len() {
-            let h = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
-            let w = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
+            let h = u32::from(u16::from_be_bytes([data[i + 5], data[i + 6]]));
+            let w = u32::from(u16::from_be_bytes([data[i + 7], data[i + 8]]));
             return Some((w, h));
         }
         // Skip to next marker
@@ -193,8 +193,8 @@ fn read_gif_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() < 10 || (&data[0..3] != b"GIF") {
         return None;
     }
-    let w = u16::from_le_bytes([data[6], data[7]]) as u32;
-    let h = u16::from_le_bytes([data[8], data[9]]) as u32;
+    let w = u32::from(u16::from_le_bytes([data[6], data[7]]));
+    let h = u32::from(u16::from_le_bytes([data[8], data[9]]));
     Some((w, h))
 }
 
@@ -207,17 +207,17 @@ fn read_webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if &data[12..16] == b"VP8 " && data.len() > 29 {
         // VP8 bitstream starts at offset 20, frame header at 23
         if data[23] == 0x9D && data[24] == 0x01 && data[25] == 0x2A {
-            let w = u16::from_le_bytes([data[26], data[27]]) as u32 & 0x3FFF;
-            let h = u16::from_le_bytes([data[28], data[29]]) as u32 & 0x3FFF;
+            let w = u32::from(u16::from_le_bytes([data[26], data[27]])) & 0x3FFF;
+            let h = u32::from(u16::from_le_bytes([data[28], data[29]])) & 0x3FFF;
             return Some((w, h));
         }
     }
     // VP8L lossless
     if &data[12..16] == b"VP8L" && data.len() > 24 {
-        let b0 = data[21] as u32;
-        let b1 = data[22] as u32;
-        let b2 = data[23] as u32;
-        let b3 = data[24] as u32;
+        let b0 = u32::from(data[21]);
+        let b1 = u32::from(data[22]);
+        let b2 = u32::from(data[23]);
+        let b3 = u32::from(data[24]);
         let w = (b0 | (b1 << 8)) & 0x3FFF;
         let h = ((b1 >> 6) | (b2 << 2) | (b3 << 10)) & 0x3FFF;
         return Some((w + 1, h + 1));
@@ -241,8 +241,8 @@ fn extract_svg_text(svg: &str) -> String {
 
     // Simple regex-free extraction of <title>, <desc>, <text> content
     for tag in &["title", "desc", "text"] {
-        let open = format!("<{}", tag);
-        let close = format!("</{}>", tag);
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
         let mut search_from = 0;
         while let Some(start) = svg[search_from..].find(&open) {
             let abs_start = search_from + start;

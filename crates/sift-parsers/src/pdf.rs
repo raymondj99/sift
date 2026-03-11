@@ -43,7 +43,7 @@ impl Parser for PdfParser {
             Ok(Err(e)) => {
                 return Err(sift_core::SiftError::Parse {
                     path: "pdf".to_string(),
-                    message: format!("PDF extraction failed: {}", e),
+                    message: format!("PDF extraction failed: {e}"),
                 });
             }
             Err(_) => {
@@ -90,7 +90,7 @@ impl Parser for PdfParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "pdf"
     }
 }

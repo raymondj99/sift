@@ -35,7 +35,7 @@ impl SemanticChunker {
         }
 
         // Function/class definition (code)
-        let line_start = text[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let line_start = text[..pos].rfind('\n').map_or(0, |p| p + 1);
         if !text.is_char_boundary(line_start) {
             return 0;
         }
@@ -149,8 +149,7 @@ impl Chunker for SemanticChunker {
                 if overlap_target < split_at {
                     text[overlap_target..split_at]
                         .find('\n')
-                        .map(|p| overlap_target + p + 1)
-                        .unwrap_or(split_at)
+                        .map_or(split_at, |p| overlap_target + p + 1)
                 } else {
                     split_at
                 }
@@ -163,7 +162,7 @@ impl Chunker for SemanticChunker {
         chunks
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "semantic"
     }
 }

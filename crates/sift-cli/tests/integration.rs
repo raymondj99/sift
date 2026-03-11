@@ -1008,7 +1008,7 @@ fn test_export_jsonl_format() {
             obj["byte_range"] = serde_json::json!([start, end]);
         }
         let line = serde_json::to_string(&obj).unwrap();
-        writeln!(output, "{}", line).unwrap();
+        writeln!(output, "{line}").unwrap();
     }
 
     // Parse back and verify JSONL
@@ -1208,7 +1208,7 @@ fn test_export_to_file() {
 // ============================================================================
 
 /// Helper to get a `Command` for the `sift` binary with a unique index.
-/// Sets ORT_LOG_LEVEL to prevent ONNX Runtime from writing to stdout,
+/// Sets `ORT_LOG_LEVEL` to prevent ONNX Runtime from writing to stdout,
 /// which would corrupt structured (JSON/CSV) output parsing in tests.
 fn sift_cmd(index_name: &str) -> Command {
     let mut cmd = Command::new(cargo_bin!("sift"));
@@ -1238,7 +1238,7 @@ fn parse_json_stdout(stdout: &str) -> serde_json::Value {
     );
 }
 
-/// Create a test corpus and return the TempDir (must stay alive for the test).
+/// Create a test corpus and return the `TempDir` (must stay alive for the test).
 fn setup_cli_corpus() -> TempDir {
     let dir = TempDir::new().unwrap();
     create_test_corpus(&dir);
@@ -1435,7 +1435,7 @@ fn test_cli_search_path_glob() {
         .clone();
     for result in &parsed {
         let uri = result["uri"].as_str().unwrap();
-        assert!(uri.contains("/src/"), "URI should match path glob: {}", uri);
+        assert!(uri.contains("/src/"), "URI should match path glob: {uri}");
     }
 }
 
@@ -1584,8 +1584,7 @@ fn test_cli_scan_max_depth() {
         let uri = item["uri"].as_str().unwrap();
         assert!(
             !uri.contains("/src/"),
-            "max-depth 1 should not include nested files: {}",
-            uri
+            "max-depth 1 should not include nested files: {uri}"
         );
     }
 }
@@ -1652,7 +1651,7 @@ fn test_cli_export_jsonl() {
     // Each line should be valid JSON
     for line in stdout.trim().lines() {
         let parsed: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("Invalid JSONL line: {}\nError: {}", line, e));
+            .unwrap_or_else(|e| panic!("Invalid JSONL line: {line}\nError: {e}"));
         assert!(parsed.get("uri").is_some());
         assert!(parsed.get("text").is_some());
     }

@@ -101,7 +101,7 @@ pub fn run(
                         let mut types: Vec<_> = stats.file_types.iter().collect();
                         types.sort_by(|a, b| b.1.cmp(a.1));
                         let type_summary: Vec<String> =
-                            types.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+                            types.iter().map(|(k, v)| format!("{k}: {v}")).collect();
                         println!("  {}", type_summary.join("  ").dimmed());
                     }
                 }

@@ -1,7 +1,7 @@
 //! Storage backends for vectors, full-text search, and metadata.
 //!
 //! Provides [`FlatVectorIndex`] (brute-force cosine similarity), optional
-//! [`HnswIndex`] (approximate nearest-neighbor), [`MetadataStore`] (SQLite or JSON),
+//! [`HnswIndex`] (approximate nearest-neighbor), [`MetadataStore`] (`SQLite` or JSON),
 //! full-text search ([`Fts5Store`], [`TantivyStore`], or [`Bm25Store`]),
 //! and [`HybridSearchEngine`] for Reciprocal Rank Fusion of vector + keyword results.
 

@@ -64,7 +64,7 @@ fn print_search_results_human(results: &[SearchResult], show_context: bool) {
         if show_context {
             if let Some(ctx) = read_context_lines(&result.uri, result.byte_range) {
                 for line in &ctx {
-                    println!("     {}", line);
+                    println!("     {line}");
                 }
             } else {
                 print_snippet(result);
@@ -219,7 +219,7 @@ pub fn print_source_list(sources: &[(String, String, u32)], format: &OutputForma
         OutputFormat::Csv => {
             println!("uri,file_type,chunks");
             for (uri, ft, chunks) in sources {
-                println!("{},{},{}", uri, ft, chunks);
+                println!("{uri},{ft},{chunks}");
             }
         }
         OutputFormat::Human => {
@@ -250,15 +250,15 @@ fn print_source_list_human(sources: &[(String, String, u32)]) {
         println!(
             "  {} {} {}",
             display.cyan(),
-            format!("[{}]", ft).dimmed(),
-            format!("({} chunks)", chunks).dimmed(),
+            format!("[{ft}]").dimmed(),
+            format!("({chunks} chunks)").dimmed(),
         );
     }
 }
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{}B", bytes)
+        format!("{bytes}B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1}KB", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
@@ -271,6 +271,7 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_read_context_lines_returns_surrounding_lines() {
@@ -404,7 +405,7 @@ mod tests {
             total_sources: 5,
             total_chunks: 20,
             index_size_bytes: 1024,
-            file_type_counts: Default::default(),
+            file_type_counts: HashMap::new(),
         };
         // Should not panic
         format_stats(&stats, &OutputFormat::Json);
@@ -416,7 +417,7 @@ mod tests {
             total_sources: 5,
             total_chunks: 20,
             index_size_bytes: 1024,
-            file_type_counts: Default::default(),
+            file_type_counts: HashMap::new(),
         };
         // Should not panic
         format_stats(&stats, &OutputFormat::Csv);

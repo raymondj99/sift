@@ -158,7 +158,7 @@ impl Parser for CodeParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "code"
     }
 }

@@ -200,7 +200,7 @@ impl ModelManager {
         self.model_path(model_name).exists()
     }
 
-    /// Download model files from HuggingFace.
+    /// Download model files from `HuggingFace`.
     pub fn download(&self, model_def: &ModelDef) -> SiftResult<()> {
         let dir = self.model_dir(model_def.name);
         std::fs::create_dir_all(&dir)?;
@@ -217,22 +217,22 @@ impl ModelManager {
             }
 
             let url = if *file == "model.onnx" {
-                format!("{}/onnx/model.onnx", base_url)
+                format!("{base_url}/onnx/model.onnx")
             } else {
-                format!("{}/{}", base_url, file)
+                format!("{base_url}/{file}")
             };
 
             info!("Downloading {} from {}", file, url);
 
             let response = ureq::get(&url)
                 .call()
-                .map_err(|e| sift_core::SiftError::Model(format!("Download failed: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Model(format!("Download failed: {e}")))?;
 
             let mut bytes = Vec::new();
             response
                 .into_reader()
                 .read_to_end(&mut bytes)
-                .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {e}")))?;
 
             std::fs::write(&dest, &bytes)?;
             info!("Saved {} ({} bytes)", file, bytes.len());
@@ -260,8 +260,7 @@ impl ModelManager {
     pub fn ensure_model(&self, model_name: &str) -> SiftResult<PathBuf> {
         if !self.is_downloaded(model_name) {
             return Err(sift_core::SiftError::Model(format!(
-                "Model '{}' not found. Run `sift models download {}` first.",
-                model_name, model_name
+                "Model '{model_name}' not found. Run `sift models download {model_name}` first."
             )));
         }
         Ok(self.model_dir(model_name))
@@ -292,14 +291,14 @@ impl ModelManager {
         info!("Downloading ONNX Runtime {} from {}", ORT_VERSION, url);
 
         let response = ureq::get(&url).call().map_err(|e| {
-            sift_core::SiftError::Model(format!("ONNX Runtime download failed: {}", e))
+            sift_core::SiftError::Model(format!("ONNX Runtime download failed: {e}"))
         })?;
 
         let mut bytes = Vec::new();
         response
             .into_reader()
             .read_to_end(&mut bytes)
-            .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {e}")))?;
 
         // The download is a .tgz archive — extract the library file
         extract_ort_lib(&bytes, &lib_path)?;
@@ -354,11 +353,7 @@ fn ort_download_url() -> String {
     };
 
     format!(
-        "https://github.com/microsoft/onnxruntime/releases/download/v{ver}/onnxruntime-{os}-{arch}-{ver}.{ext}",
-        ver = ORT_VERSION,
-        os = os,
-        arch = arch,
-        ext = ext,
+        "https://github.com/microsoft/onnxruntime/releases/download/v{ORT_VERSION}/onnxruntime-{os}-{arch}-{ORT_VERSION}.{ext}",
     )
 }
 
@@ -372,28 +367,27 @@ fn extract_ort_lib(archive_bytes: &[u8], dest: &Path) -> SiftResult<()> {
 
     for entry in archive
         .entries()
-        .map_err(|e| sift_core::SiftError::Model(format!("Failed to read archive: {}", e)))?
+        .map_err(|e| sift_core::SiftError::Model(format!("Failed to read archive: {e}")))?
     {
         let mut entry = entry
-            .map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {e}")))?;
         let path = entry
             .path()
-            .map_err(|e| sift_core::SiftError::Model(format!("Archive path error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Model(format!("Archive path error: {e}")))?;
 
         let path_str = path.to_string_lossy();
         // The library is at lib/libonnxruntime.so (or .dylib) inside the archive
         if path_str.contains(ORT_LIB_FILENAME) && !path_str.ends_with('/') {
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut buf)
-                .map_err(|e| sift_core::SiftError::Model(format!("Extract read error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Model(format!("Extract read error: {e}")))?;
             std::fs::write(dest, &buf)?;
             return Ok(());
         }
     }
 
     Err(sift_core::SiftError::Model(format!(
-        "{} not found in ONNX Runtime archive",
-        ORT_LIB_FILENAME
+        "{ORT_LIB_FILENAME} not found in ONNX Runtime archive"
     )))
 }
 

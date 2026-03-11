@@ -85,7 +85,7 @@ async fn search(
                 .map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Embedding failed: {}", e),
+                        format!("Embedding failed: {e}"),
                     )
                 })?;
             (vec, mode)

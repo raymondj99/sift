@@ -37,7 +37,7 @@ impl TantivyStore {
         let index = match Index::open_in_dir(index_dir) {
             Ok(idx) => idx,
             Err(_) => Index::create_in_dir(index_dir, schema.clone()).map_err(|e| {
-                sift_core::SiftError::Storage(format!("Tantivy create error: {}", e))
+                sift_core::SiftError::Storage(format!("Tantivy create error: {e}"))
             })?,
         };
 
@@ -82,7 +82,7 @@ impl TantivyStore {
     fn get_writer(&self) -> SiftResult<IndexWriter> {
         self.index
             .writer(50_000_000) // 50MB heap
-            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy writer error: {}", e)))
+            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy writer error: {e}")))
     }
 
     fn content_type_from_str(s: &str) -> ContentType {
@@ -108,7 +108,7 @@ impl FullTextStore for TantivyStore {
             let mut doc = doc!(
                 self.uri_field => ec.chunk.source_uri.as_str(),
                 self.text_field => ec.chunk.text.as_str(),
-                self.chunk_index_field => ec.chunk.chunk_index as u64,
+                self.chunk_index_field => u64::from(ec.chunk.chunk_index),
                 self.content_type_field => ec.chunk.content_type.to_string(),
                 self.file_type_field => ec.chunk.file_type.as_str(),
             );
@@ -119,12 +119,12 @@ impl FullTextStore for TantivyStore {
 
             writer
                 .add_document(doc)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy add error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy add error: {e}")))?;
         }
 
         writer
             .commit()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy commit error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy commit error: {e}")))?;
 
         Ok(())
     }
@@ -135,7 +135,7 @@ impl FullTextStore for TantivyStore {
             .reader_builder()
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()
-            .map_err(|e| sift_core::SiftError::Search(format!("Reader error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Search(format!("Reader error: {e}")))?;
 
         let searcher = reader.searcher();
 
@@ -143,18 +143,18 @@ impl FullTextStore for TantivyStore {
             QueryParser::for_index(&self.index, vec![self.text_field, self.title_field]);
         let query = query_parser
             .parse_query(query)
-            .map_err(|e| sift_core::SiftError::Search(format!("Query parse error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Search(format!("Query parse error: {e}")))?;
 
         let top_docs = searcher
             .search(&query, &TopDocs::with_limit(top_k))
-            .map_err(|e| sift_core::SiftError::Search(format!("Search error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Search(format!("Search error: {e}")))?;
 
         let mut results = Vec::with_capacity(top_docs.len());
 
         for (score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher
                 .doc(doc_address)
-                .map_err(|e| sift_core::SiftError::Search(format!("Doc retrieve error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Search(format!("Doc retrieve error: {e}")))?;
 
             let uri = doc
                 .get_first(self.uri_field)
@@ -176,8 +176,7 @@ impl FullTextStore for TantivyStore {
             let content_type = doc
                 .get_first(self.content_type_field)
                 .and_then(|v| v.as_str())
-                .map(Self::content_type_from_str)
-                .unwrap_or(ContentType::Text);
+                .map_or(ContentType::Text, Self::content_type_from_str);
 
             let file_type = doc
                 .get_first(self.file_type_field)
@@ -188,7 +187,7 @@ impl FullTextStore for TantivyStore {
             let title = doc
                 .get_first(self.title_field)
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             results.push(SearchResult {
                 uri,
@@ -213,7 +212,7 @@ impl FullTextStore for TantivyStore {
 
         writer
             .commit()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy commit error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy commit error: {e}")))?;
 
         // Tantivy doesn't return delete count easily, just return 0
         Ok(0)

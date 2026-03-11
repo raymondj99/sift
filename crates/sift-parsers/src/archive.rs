@@ -57,7 +57,7 @@ impl Parser for ArchiveParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "archive"
     }
 }
@@ -66,7 +66,7 @@ fn parse_zip(content: &[u8]) -> SiftResult<(String, usize)> {
     let cursor = Cursor::new(content);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
         path: "zip".to_string(),
-        message: format!("Failed to open ZIP: {}", e),
+        message: format!("Failed to open ZIP: {e}"),
     })?;
 
     let mut output = String::new();
@@ -91,7 +91,7 @@ fn parse_zip(content: &[u8]) -> SiftResult<(String, usize)> {
         let name = file.name().to_string();
 
         if file.size() > MAX_ENTRY_SIZE {
-            let _ = writeln!(output, "--- file: {} (skipped: too large) ---", name);
+            let _ = writeln!(output, "--- file: {name} (skipped: too large) ---");
             entry_count += 1;
             continue;
         }
@@ -110,7 +110,7 @@ fn parse_zip(content: &[u8]) -> SiftResult<(String, usize)> {
         entry_count += 1;
 
         if let Ok(text) = std::str::from_utf8(&buf) {
-            let _ = writeln!(output, "--- file: {} ---", name);
+            let _ = writeln!(output, "--- file: {name} ---");
             output.push_str(text);
             if !text.ends_with('\n') {
                 output.push('\n');
@@ -131,7 +131,7 @@ fn parse_zip(content: &[u8]) -> SiftResult<(String, usize)> {
     Ok((output, entry_count))
 }
 
-/// Stream tar.gz: pipe GzDecoder directly into tar::Archive (no full decompression buffer).
+/// Stream tar.gz: pipe `GzDecoder` directly into `tar::Archive` (no full decompression buffer).
 fn parse_tar_gz(content: &[u8]) -> SiftResult<(String, usize)> {
     let decoder = flate2::read::GzDecoder::new(Cursor::new(content));
     let limited = decoder.take(MAX_TOTAL_SIZE as u64);
@@ -146,7 +146,7 @@ fn extract_tar_entries<R: Read>(reader: R) -> SiftResult<(String, usize)> {
 
     let entries = archive.entries().map_err(|e| sift_core::SiftError::Parse {
         path: "tar".to_string(),
-        message: format!("Failed to read TAR entries: {}", e),
+        message: format!("Failed to read TAR entries: {e}"),
     })?;
 
     for entry in entries {
@@ -161,13 +161,11 @@ fn extract_tar_entries<R: Read>(reader: R) -> SiftResult<(String, usize)> {
         };
 
         let path = entry
-            .path()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "(unknown)".to_string());
+            .path().map_or_else(|_| "(unknown)".to_string(), |p| p.to_string_lossy().to_string());
 
         let size = entry.size();
         if size > MAX_ENTRY_SIZE {
-            let _ = writeln!(output, "--- file: {} (skipped: too large) ---", path);
+            let _ = writeln!(output, "--- file: {path} (skipped: too large) ---");
             entry_count += 1;
             continue;
         }
@@ -192,7 +190,7 @@ fn extract_tar_entries<R: Read>(reader: R) -> SiftResult<(String, usize)> {
         entry_count += 1;
 
         if let Ok(text) = std::str::from_utf8(&buf) {
-            let _ = writeln!(output, "--- file: {} ---", path);
+            let _ = writeln!(output, "--- file: {path} ---");
             output.push_str(text);
             if !text.ends_with('\n') {
                 output.push('\n');
@@ -221,7 +219,7 @@ fn parse_gz(content: &[u8]) -> SiftResult<(String, usize)> {
         .read_to_end(&mut decompressed)
         .map_err(|e| sift_core::SiftError::Parse {
             path: "gz".to_string(),
-            message: format!("Failed to decompress gzip: {}", e),
+            message: format!("Failed to decompress gzip: {e}"),
         })?;
 
     match String::from_utf8(decompressed) {
@@ -401,9 +399,9 @@ mod tests {
     fn test_tar_entry_count_in_metadata() {
         let mut builder = tar::Builder::new(Vec::new());
         for i in 0..5 {
-            let content = format!("content {}", i);
+            let content = format!("content {i}");
             let mut header = tar::Header::new_gnu();
-            header.set_path(format!("file{}.txt", i)).unwrap();
+            header.set_path(format!("file{i}.txt")).unwrap();
             header.set_size(content.len() as u64);
             header.set_cksum();
             builder.append(&header, content.as_bytes()).unwrap();

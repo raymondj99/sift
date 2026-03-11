@@ -49,7 +49,7 @@ impl OnnxEmbedder {
         let tokenizer_path = model_dir.join("tokenizer.json");
 
         let num_cores = std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(4);
 
         let session = Session::builder()
@@ -57,21 +57,20 @@ impl OnnxEmbedder {
                 sift_core::SiftError::Embedding(format!(
                     "ONNX Runtime not found. Install it and set ORT_DYLIB_PATH, \
                      or run `sift models download` which includes the runtime. \
-                     Details: {}",
-                    e
+                     Details: {e}"
                 ))
             })?
             .with_intra_threads(num_cores)
             .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX thread config error: {}", e))
+                sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}"))
             })?
             .with_inter_threads(2)
             .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX thread config error: {}", e))
+                sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}"))
             })?
             .with_execution_providers(select_execution_providers())
             .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("Execution provider config error: {}", e))
+                sift_core::SiftError::Embedding(format!("Execution provider config error: {e}"))
             })?
             .commit_from_file(&model_path)
             .map_err(|e| {
@@ -116,7 +115,9 @@ impl OnnxEmbedder {
                 v.truncate(target_dim);
                 let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                 if norm > 0.0 {
-                    v.iter_mut().for_each(|x| *x /= norm);
+                    for x in &mut v {
+                        *x /= norm;
+                    }
                 }
                 v
             })
@@ -131,7 +132,7 @@ impl OnnxEmbedder {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
-            .map_err(|e| sift_core::SiftError::Embedding(format!("Tokenization failed: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Embedding(format!("Tokenization failed: {e}")))?;
 
         let mut input_ids_batch = Vec::with_capacity(encodings.len());
         let mut attention_mask_batch = Vec::with_capacity(encodings.len());
@@ -153,8 +154,8 @@ impl OnnxEmbedder {
             let token_type_ids = vec![0i64; max_len]; // single-segment, always zero
 
             for i in 0..len {
-                padded_ids[i] = ids[i] as i64;
-                padded_mask[i] = mask[i] as i64;
+                padded_ids[i] = i64::from(ids[i]);
+                padded_mask[i] = i64::from(mask[i]);
             }
 
             input_ids_batch.push(padded_ids);
@@ -230,15 +231,15 @@ impl Embedder for OnnxEmbedder {
 
         let input_ids_array =
             ndarray::Array2::from_shape_vec((batch_size, seq_len), input_ids_flat)
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {e}")))?;
 
         let attention_mask_array =
             ndarray::Array2::from_shape_vec((batch_size, seq_len), attention_mask_flat.clone())
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {e}")))?;
 
         let token_type_ids_array =
             ndarray::Array2::from_shape_vec((batch_size, seq_len), token_type_ids_flat)
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Shape error: {e}")))?;
 
         let outputs = self
             .session
@@ -248,23 +249,23 @@ impl Embedder for OnnxEmbedder {
                     "attention_mask" => attention_mask_array,
                     "token_type_ids" => token_type_ids_array,
                 }
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Input error: {}", e)))?,
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Input error: {e}")))?,
             )
             .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX inference failed: {}", e))
+                sift_core::SiftError::Embedding(format!("ONNX inference failed: {e}"))
             })?;
 
         // Extract the first output tensor (last_hidden_state or token_embeddings)
         // Try named output first, fall back to index-based access
         let output_array = if let Some(v) = outputs.get("last_hidden_state") {
             v.try_extract_tensor::<f32>()
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {}", e)))?
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {e}")))?
         } else {
             // Use the first output by index
             let first = &outputs[0];
             first
                 .try_extract_tensor::<f32>()
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {}", e)))?
+                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {e}")))?
         };
 
         let shape = output_array.shape();

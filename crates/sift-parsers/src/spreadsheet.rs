@@ -42,10 +42,10 @@ impl Parser for SpreadsheetParser {
         let mut workbook =
             open_workbook_auto_from_rs(cursor).map_err(|e| sift_core::SiftError::Parse {
                 path: "spreadsheet".to_string(),
-                message: format!("Failed to open spreadsheet: {}", e),
+                message: format!("Failed to open spreadsheet: {e}"),
             })?;
 
-        let sheet_names: Vec<String> = workbook.sheet_names().to_vec();
+        let sheet_names: Vec<String> = workbook.sheet_names().clone();
         let mut metadata = HashMap::new();
         metadata.insert("sheet_count".to_string(), sheet_names.len().to_string());
         metadata.insert("size_bytes".to_string(), content.len().to_string());
@@ -56,7 +56,7 @@ impl Parser for SpreadsheetParser {
             if sheet_idx > 0 {
                 output.push_str("\n\n");
             }
-            let _ = writeln!(output, "--- Sheet: {} ---", name);
+            let _ = writeln!(output, "--- Sheet: {name} ---");
 
             if let Ok(range) = workbook.worksheet_range(name) {
                 let mut rows = range.rows();
@@ -103,7 +103,7 @@ impl Parser for SpreadsheetParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "spreadsheet"
     }
 }
@@ -122,25 +122,26 @@ fn write_cell(output: &mut String, cell: &Data) {
         Data::Empty => {}
         Data::String(s) => output.push_str(s),
         Data::Int(i) => {
-            let _ = write!(output, "{}", i);
+            let _ = write!(output, "{i}");
         }
         Data::Float(f) => {
+            #[allow(clippy::float_cmp)]
             if *f == f.floor() && f.abs() < 1e15 {
                 let _ = write!(output, "{}", *f as i64);
             } else {
-                let _ = write!(output, "{}", f);
+                let _ = write!(output, "{f}");
             }
         }
         Data::Bool(b) => {
-            let _ = write!(output, "{}", b);
+            let _ = write!(output, "{b}");
         }
         Data::DateTime(dt) => {
-            let _ = write!(output, "{}", dt);
+            let _ = write!(output, "{dt}");
         }
         Data::DateTimeIso(s) => output.push_str(s),
         Data::DurationIso(s) => output.push_str(s),
         Data::Error(e) => {
-            let _ = write!(output, "#ERR:{:?}", e);
+            let _ = write!(output, "#ERR:{e:?}");
         }
     }
 }
@@ -151,17 +152,18 @@ fn cell_to_string(cell: &Data) -> String {
         Data::String(s) => s.clone(),
         Data::Int(i) => i.to_string(),
         Data::Float(f) => {
+            #[allow(clippy::float_cmp)]
             if *f == f.floor() && f.abs() < 1e15 {
                 format!("{}", *f as i64)
             } else {
-                format!("{}", f)
+                format!("{f}")
             }
         }
         Data::Bool(b) => b.to_string(),
-        Data::DateTime(dt) => format!("{}", dt),
+        Data::DateTime(dt) => format!("{dt}"),
         Data::DateTimeIso(s) => s.clone(),
         Data::DurationIso(s) => s.clone(),
-        Data::Error(e) => format!("#ERR:{:?}", e),
+        Data::Error(e) => format!("#ERR:{e:?}"),
     }
 }
 

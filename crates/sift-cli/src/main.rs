@@ -60,7 +60,7 @@ impl ExitCode {
     }
 }
 
-/// Check whether colored output should be used, respecting NO_COLOR and TERM=dumb.
+/// Check whether colored output should be used, respecting `NO_COLOR` and TERM=dumb.
 #[cfg(feature = "fancy")]
 fn use_color() -> bool {
     std::env::var("NO_COLOR").is_err() && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
@@ -294,7 +294,7 @@ fn main() {
     let level = match std::env::var("RUST_LOG").ok().as_deref() {
         Some("trace") => LevelFilter::TRACE,
         Some("debug") => LevelFilter::DEBUG,
-        Some("warn") | Some("warning") => LevelFilter::WARN,
+        Some("warn" | "warning") => LevelFilter::WARN,
         Some("error") => LevelFilter::ERROR,
         Some(_) | None => match cli.verbose {
             0 if cli.quiet => LevelFilter::WARN,
@@ -321,12 +321,12 @@ fn main() {
                     "error": format!("{}", err),
                     "exit_code": code as i32,
                 });
-                eprintln!("{}", obj);
+                eprintln!("{obj}");
             } else {
-                eprintln!("error: {}", err);
+                eprintln!("error: {err}");
                 if std::env::args().any(|a| a == "-v" || a == "-vv" || a == "--verbose") {
                     for cause in err.chain().skip(1) {
-                        eprintln!("  caused by: {}", cause);
+                        eprintln!("  caused by: {cause}");
                     }
                 }
             }
@@ -337,7 +337,7 @@ fn main() {
 
 fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
     let mut config = sift_core::Config::load()?;
-    config.index_name = cli.index.clone();
+    config.index_name.clone_from(&cli.index);
 
     match cli.command {
         Commands::Scan {
@@ -464,19 +464,19 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
     if let Some(num_str) = s_trimmed.strip_suffix('d') {
         let days: i64 = num_str
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{}'", s))?;
+            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
         return Ok(now - days * 86400);
     }
     if let Some(num_str) = s_trimmed.strip_suffix('w') {
         let weeks: i64 = num_str
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{}'", s))?;
+            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
         return Ok(now - weeks * 7 * 86400);
     }
     if let Some(num_str) = s_trimmed.strip_suffix('m') {
         let months: i64 = num_str
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{}'", s))?;
+            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
         return Ok(now - months * 30 * 86400);
     }
 
@@ -484,24 +484,22 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
     let parts: Vec<&str> = s_trimmed.split('-').collect();
     if parts.len() != 3 {
         anyhow::bail!(
-            "invalid date '{}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)",
-            s
+            "invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)"
         );
     }
     let year: i64 = parts[0]
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid year in '{}'", s))?;
+        .map_err(|_| anyhow::anyhow!("invalid year in '{s}'"))?;
     let month: i64 = parts[1]
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid month in '{}'", s))?;
+        .map_err(|_| anyhow::anyhow!("invalid month in '{s}'"))?;
     let day: i64 = parts[2]
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid day in '{}'", s))?;
+        .map_err(|_| anyhow::anyhow!("invalid day in '{s}'"))?;
 
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || year < 1970 {
         anyhow::bail!(
-            "invalid date '{}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)",
-            s
+            "invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)"
         );
     }
 

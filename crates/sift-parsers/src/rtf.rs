@@ -47,7 +47,7 @@ impl Parser for RtfParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "rtf"
     }
 }
@@ -148,7 +148,7 @@ fn strip_rtf(rtf: &str) -> String {
                         // The numeric param was already consumed; parse it from the original
                         let param_str: String = rtf[start..i]
                             .chars()
-                            .skip_while(|c| c.is_ascii_alphabetic())
+                            .skip_while(char::is_ascii_alphabetic)
                             .take_while(|c| c.is_ascii_digit() || *c == '-')
                             .collect();
                         if let Ok(code) = param_str.parse::<i32>() {
@@ -189,7 +189,7 @@ fn strip_rtf(rtf: &str) -> String {
     // Clean up: normalize line breaks and trim
     let output = output
         .lines()
-        .map(|line| line.trim_end())
+        .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -225,7 +225,7 @@ fn decode_win1252(byte: u8) -> char {
         0x97 => '\u{2014}', // Em dash
         0xA0 => '\u{00A0}', // Non-breaking space
         // Latin-1 supplement (0xA0-0xFF maps directly in Unicode)
-        b @ 0xA1..=0xFF => char::from_u32(b as u32).unwrap_or('?'),
+        b @ 0xA1..=0xFF => char::from_u32(u32::from(b)).unwrap_or('?'),
         _ => '?',
     }
 }

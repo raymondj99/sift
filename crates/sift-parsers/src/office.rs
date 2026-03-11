@@ -51,7 +51,7 @@ impl Parser for OfficeParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "office"
     }
 }
@@ -60,7 +60,7 @@ fn parse_docx(content: &[u8]) -> SiftResult<String> {
     let cursor = Cursor::new(content);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
         path: "docx".to_string(),
-        message: format!("Failed to open DOCX zip: {}", e),
+        message: format!("Failed to open DOCX zip: {e}"),
     })?;
 
     let xml = match archive.by_name("word/document.xml") {
@@ -69,7 +69,7 @@ fn parse_docx(content: &[u8]) -> SiftResult<String> {
             std::io::Read::read_to_string(&mut file, &mut buf).map_err(|e| {
                 sift_core::SiftError::Parse {
                     path: "docx".to_string(),
-                    message: format!("Failed to read document.xml: {}", e),
+                    message: format!("Failed to read document.xml: {e}"),
                 }
             })?;
             buf
@@ -77,7 +77,7 @@ fn parse_docx(content: &[u8]) -> SiftResult<String> {
         Err(e) => {
             return Err(sift_core::SiftError::Parse {
                 path: "docx".to_string(),
-                message: format!("Missing word/document.xml: {}", e),
+                message: format!("Missing word/document.xml: {e}"),
             });
         }
     };
@@ -141,7 +141,7 @@ fn parse_pptx(content: &[u8]) -> SiftResult<String> {
     let cursor = Cursor::new(content);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
         path: "pptx".to_string(),
-        message: format!("Failed to open PPTX zip: {}", e),
+        message: format!("Failed to open PPTX zip: {e}"),
     })?;
 
     // Collect slide filenames and sort numerically

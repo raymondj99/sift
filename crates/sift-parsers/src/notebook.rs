@@ -30,13 +30,13 @@ impl Parser for NotebookParser {
     ) -> SiftResult<ParsedDocument> {
         let raw = std::str::from_utf8(content).map_err(|e| sift_core::SiftError::Parse {
             path: "ipynb".to_string(),
-            message: format!("Invalid UTF-8: {}", e),
+            message: format!("Invalid UTF-8: {e}"),
         })?;
 
         let notebook: serde_json::Value =
             serde_json::from_str(raw).map_err(|e| sift_core::SiftError::Parse {
                 path: "ipynb".to_string(),
-                message: format!("Invalid JSON: {}", e),
+                message: format!("Invalid JSON: {e}"),
             })?;
 
         // Detect language from kernelspec metadata
@@ -45,7 +45,7 @@ impl Parser for NotebookParser {
             .and_then(|m| m.get("kernelspec"))
             .and_then(|k| k.get("language"))
             .and_then(|l| l.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let cells = notebook
             .get("cells")
@@ -115,7 +115,7 @@ impl Parser for NotebookParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "notebook"
     }
 }
@@ -200,14 +200,14 @@ mod tests {
     #[test]
     fn test_parse_code_cell() {
         let nb = make_notebook(
-            r##"[{
+            r#"[{
                 "cell_type": "code",
                 "source": "print('hello')\n",
                 "outputs": [
                     {"output_type": "stream", "name": "stdout", "text": "hello\n"}
                 ],
                 "metadata": {}
-            }]"##,
+            }]"#,
         );
 
         let parser = NotebookParser;

@@ -24,19 +24,16 @@ pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResu
             format!("file://{}", abs.display())
         };
 
-        match metadata.remove_source(&uri)? {
-            true => {
-                engine.delete_by_uri(&uri)?;
-                removed += 1;
-                if matches!(format, OutputFormat::Human) {
-                    println!("  {} {}", "Removed".red(), uri.dimmed());
-                }
+        if metadata.remove_source(&uri)? {
+            engine.delete_by_uri(&uri)?;
+            removed += 1;
+            if matches!(format, OutputFormat::Human) {
+                println!("  {} {}", "Removed".red(), uri.dimmed());
             }
-            false => {
-                not_found += 1;
-                if matches!(format, OutputFormat::Human) {
-                    println!("  {} {} (not indexed)", "Skipped".yellow(), path.dimmed());
-                }
+        } else {
+            not_found += 1;
+            if matches!(format, OutputFormat::Human) {
+                println!("  {} {} (not indexed)", "Skipped".yellow(), path.dimmed());
             }
         }
     }
@@ -58,7 +55,7 @@ pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResu
         }
         OutputFormat::Csv => {
             println!("removed,not_found");
-            println!("{},{}", removed, not_found);
+            println!("{removed},{not_found}");
         }
         OutputFormat::Human => {
             println!(

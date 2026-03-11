@@ -3,7 +3,7 @@ use sift_core::SiftResult;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// Content-addressed embedding cache backed by SQLite.
+/// Content-addressed embedding cache backed by `SQLite`.
 /// Maps BLAKE3 hash of text → embedding vector to avoid re-computation.
 pub struct EmbeddingCache {
     conn: Mutex<Connection>,
@@ -15,7 +15,7 @@ impl EmbeddingCache {
     /// Open a persistent cache at the given path. Creates the DB if it doesn't exist.
     pub fn open(path: &Path) -> SiftResult<Self> {
         let conn = Connection::open(path).map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open embedding cache: {}", e))
+            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open embedding cache: {e}"))
         })?;
 
         conn.execute_batch(
@@ -27,7 +27,7 @@ impl EmbeddingCache {
              );",
         )
         .map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {}", e))
+            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {e}"))
         })?;
 
         Ok(Self {
@@ -40,7 +40,7 @@ impl EmbeddingCache {
     /// Create an in-memory cache (for tests).
     pub fn in_memory() -> SiftResult<Self> {
         let conn = Connection::open_in_memory().map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open in-memory cache: {}", e))
+            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open in-memory cache: {e}"))
         })?;
 
         conn.execute_batch(
@@ -50,7 +50,7 @@ impl EmbeddingCache {
              );",
         )
         .map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {}", e))
+            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {e}"))
         })?;
 
         Ok(Self {
@@ -73,19 +73,16 @@ impl EmbeddingCache {
             .optional()
             .ok()?;
 
-        match result {
-            Some(blob) => {
-                if let Ok(mut hits) = self.hits.lock() {
-                    *hits += 1;
-                }
-                Some(bytes_to_f32(&blob))
+        if let Some(blob) = result {
+            if let Ok(mut hits) = self.hits.lock() {
+                *hits += 1;
             }
-            None => {
-                if let Ok(mut misses) = self.misses.lock() {
-                    *misses += 1;
-                }
-                None
+            Some(bytes_to_f32(&blob))
+        } else {
+            if let Ok(mut misses) = self.misses.lock() {
+                *misses += 1;
             }
+            None
         }
     }
 
@@ -223,7 +220,7 @@ mod tests {
         let vecs: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32]).collect();
         let entries: Vec<(&str, &[f32])> = (0..100)
             .map(|i| {
-                let s: &str = Box::leak(format!("text_{}", i).into_boxed_str());
+                let s: &str = Box::leak(format!("text_{i}").into_boxed_str());
                 (s, vecs[i].as_slice())
             })
             .collect();

@@ -503,7 +503,7 @@ pub fn run_scan_pipeline(
             )?;
 
             atomic_indexed.fetch_add(1, Ordering::Relaxed);
-            atomic_chunks.fetch_add(chunk_count as u64, Ordering::Relaxed);
+            atomic_chunks.fetch_add(u64::from(chunk_count), Ordering::Relaxed);
             *file_type_map
                 .entry(store_item.file_type.clone())
                 .or_insert(0) += 1;

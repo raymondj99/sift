@@ -11,7 +11,7 @@ fn make_random_vector(dim: usize, seed: u64) -> Vec<f32> {
 fn make_embedded_chunk(uri: &str, dim: usize, seed: u64) -> EmbeddedChunk {
     EmbeddedChunk {
         chunk: Chunk {
-            text: format!("chunk text for {}", uri),
+            text: format!("chunk text for {uri}"),
             source_uri: uri.to_string(),
             chunk_index: 0,
             content_type: ContentType::Text,
@@ -58,7 +58,7 @@ fn bench_vector_search(c: &mut Criterion) {
     for n in [100, 1_000, 10_000] {
         let store = FlatVectorIndex::new();
         let chunks: Vec<EmbeddedChunk> = (0..n)
-            .map(|i| make_embedded_chunk(&format!("file:///{}.txt", i), dim, i as u64))
+            .map(|i| make_embedded_chunk(&format!("file:///{i}.txt"), dim, i as u64))
             .collect();
         store.insert(&chunks).unwrap();
 
@@ -77,7 +77,7 @@ fn bench_vector_insert(c: &mut Criterion) {
 
     for batch_size in [1, 10, 100] {
         let chunks: Vec<EmbeddedChunk> = (0..batch_size)
-            .map(|i| make_embedded_chunk(&format!("file:///{}.txt", i), dim, i as u64))
+            .map(|i| make_embedded_chunk(&format!("file:///{i}.txt"), dim, i as u64))
             .collect();
 
         group.bench_with_input(

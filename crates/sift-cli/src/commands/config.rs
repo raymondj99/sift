@@ -10,7 +10,7 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
             // Print full config
             let toml_str = toml::to_string_pretty(config)
                 .map_err(|e| sift_core::SiftError::Config(e.to_string()))?;
-            println!("{}", toml_str);
+            println!("{toml_str}");
         }
         (Some(key), None) => {
             // Get a specific value using structured lookup
@@ -23,42 +23,41 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
             // Set a value - update config and save
             let mut config = config.clone();
             match key.as_str() {
-                "default.model" => config.default.model = value.clone(),
+                "default.model" => config.default.model.clone_from(&value),
                 "default.chunk_size" => {
                     config.default.chunk_size = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
                 "default.chunk_overlap" => {
                     config.default.chunk_overlap = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
                 "default.jobs" => {
                     config.default.jobs = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
                 "search.max_results" => {
                     config.search.max_results = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
                 "search.hybrid_alpha" => {
                     config.search.hybrid_alpha = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
-                "server.host" => config.server.host = value.clone(),
+                "server.host" => config.server.host.clone_from(&value),
                 "server.port" => {
                     config.server.port = value
                         .parse()
-                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?
+                        .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
                 _ => {
                     return Err(sift_core::SiftError::Config(format!(
-                        "Unknown config key: {}",
-                        key
+                        "Unknown config key: {key}"
                     )));
                 }
             }

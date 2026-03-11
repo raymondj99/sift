@@ -1,5 +1,6 @@
 use crate::traits::Parser;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for structured data formats: CSV, JSON, JSONL, TOML, YAML.
 pub struct DataParser;
@@ -52,11 +53,11 @@ impl Parser for DataParser {
             title: None,
             language: None,
             content_type: ContentType::Data,
-            metadata: Default::default(),
+            metadata: HashMap::new(),
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "data"
     }
 }
@@ -73,7 +74,7 @@ fn parse_csv(content: &str) -> String {
     let headers: Option<Vec<String>> = reader
         .headers()
         .ok()
-        .map(|h| h.iter().map(|s| s.to_string()).collect());
+        .map(|h| h.iter().map(std::string::ToString::to_string).collect());
 
     for record in reader.records().flatten() {
         let values: Vec<&str> = record.iter().collect();
@@ -135,14 +136,14 @@ fn flatten_json_value(value: &serde_json::Value, prefix: &str) -> String {
                 let new_prefix = if prefix.is_empty() {
                     key.clone()
                 } else {
-                    format!("{}.{}", prefix, key)
+                    format!("{prefix}.{key}")
                 };
                 output.push_str(&flatten_json_value(val, &new_prefix));
             }
         }
         serde_json::Value::Array(arr) => {
             for (i, val) in arr.iter().enumerate() {
-                let new_prefix = format!("{}[{}]", prefix, i);
+                let new_prefix = format!("{prefix}[{i}]");
                 output.push_str(&flatten_json_value(val, &new_prefix));
             }
         }

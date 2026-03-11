@@ -11,7 +11,7 @@ const MAGIC: &[u8; 4] = b"SFT1";
 ///
 /// Stores entries in a compact binary format on disk:
 /// - Header: magic bytes "SFT1" (4), entry count (u64 LE), dimension (u32 LE)
-/// - Per entry: key_len (u32 LE) + key bytes + vector (f32 x dim LE) + meta_len (u32 LE) + meta JSON bytes
+/// - Per entry: `key_len` (u32 LE) + key bytes + vector (f32 x dim LE) + `meta_len` (u32 LE) + meta JSON bytes
 pub struct FlatVectorIndex {
     entries: Mutex<Vec<StoredEntry>>,
 }
@@ -84,33 +84,33 @@ impl FlatVectorIndex {
         let entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
-        let dim = entries.first().map(|e| e.vector.len() as u32).unwrap_or(0);
+        let dim = entries.first().map_or(0, |e| e.vector.len() as u32);
 
         let mut buf: Vec<u8> = Vec::new();
 
         // Header
         buf.write_all(MAGIC)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
         buf.write_all(&(entries.len() as u64).to_le_bytes())
-            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
         buf.write_all(&dim.to_le_bytes())
-            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
 
         // Entries
         for entry in entries.iter() {
             // Key (URI)
             let key_bytes = entry.uri.as_bytes();
             buf.write_all(&(key_bytes.len() as u32).to_le_bytes())
-                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
             buf.write_all(key_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
 
             // Vector (raw f32 LE)
             for &val in &entry.vector {
                 buf.write_all(&val.to_le_bytes())
-                    .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+                    .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
             }
 
             // Metadata (JSON)
@@ -123,11 +123,11 @@ impl FlatVectorIndex {
                 text: entry.text.clone(),
             };
             let meta_bytes = serde_json::to_vec(&meta)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Serialize meta: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Serialize meta: {e}")))?;
             buf.write_all(&(meta_bytes.len() as u32).to_le_bytes())
-                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
             buf.write_all(&meta_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Write error: {e}")))?;
         }
 
         sift_core::atomic_write(path, &buf)?;
@@ -143,7 +143,7 @@ impl FlatVectorIndex {
         let mut magic = [0u8; 4];
         cursor
             .read_exact(&mut magic)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Read magic: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Read magic: {e}")))?;
         if &magic != MAGIC {
             return Err(sift_core::SiftError::Storage(
                 "Invalid binary vector file: bad magic".to_string(),
@@ -153,13 +153,13 @@ impl FlatVectorIndex {
         let mut count_buf = [0u8; 8];
         cursor
             .read_exact(&mut count_buf)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Read count: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Read count: {e}")))?;
         let count = u64::from_le_bytes(count_buf) as usize;
 
         let mut dim_buf = [0u8; 4];
         cursor
             .read_exact(&mut dim_buf)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Read dim: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Read dim: {e}")))?;
         let dim = u32::from_le_bytes(dim_buf) as usize;
 
         let mut entries = Vec::with_capacity(count);
@@ -169,15 +169,15 @@ impl FlatVectorIndex {
             let mut key_len_buf = [0u8; 4];
             cursor
                 .read_exact(&mut key_len_buf)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Read key_len: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Read key_len: {e}")))?;
             let key_len = u32::from_le_bytes(key_len_buf) as usize;
 
             let mut key_bytes = vec![0u8; key_len];
             cursor
                 .read_exact(&mut key_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Read key: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Read key: {e}")))?;
             let uri = String::from_utf8(key_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Invalid UTF-8 key: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Invalid UTF-8 key: {e}")))?;
 
             // Vector
             let mut vector = Vec::with_capacity(dim);
@@ -185,7 +185,7 @@ impl FlatVectorIndex {
                 let mut f_buf = [0u8; 4];
                 cursor
                     .read_exact(&mut f_buf)
-                    .map_err(|e| sift_core::SiftError::Storage(format!("Read vector: {}", e)))?;
+                    .map_err(|e| sift_core::SiftError::Storage(format!("Read vector: {e}")))?;
                 vector.push(f32::from_le_bytes(f_buf));
             }
 
@@ -193,15 +193,15 @@ impl FlatVectorIndex {
             let mut meta_len_buf = [0u8; 4];
             cursor
                 .read_exact(&mut meta_len_buf)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Read meta_len: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Read meta_len: {e}")))?;
             let meta_len = u32::from_le_bytes(meta_len_buf) as usize;
 
             let mut meta_bytes = vec![0u8; meta_len];
             cursor
                 .read_exact(&mut meta_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Read meta: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Read meta: {e}")))?;
             let meta: EntryMeta = serde_json::from_slice(&meta_bytes)
-                .map_err(|e| sift_core::SiftError::Storage(format!("Deserialize meta: {}", e)))?;
+                .map_err(|e| sift_core::SiftError::Storage(format!("Deserialize meta: {e}")))?;
 
             entries.push(StoredEntry {
                 uri,
@@ -226,7 +226,7 @@ impl FlatVectorIndex {
     pub fn load_json(path: &std::path::Path) -> SiftResult<Self> {
         let data = std::fs::read(path)?;
         let serializable: Vec<SerEntry> = serde_json::from_slice(&data)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Deserialize error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Deserialize error: {e}")))?;
 
         let entries: Vec<StoredEntry> = serializable
             .into_iter()
@@ -252,7 +252,7 @@ impl FlatVectorIndex {
         let entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let serializable: Vec<SerEntry> = entries
             .iter()
@@ -269,7 +269,7 @@ impl FlatVectorIndex {
             .collect();
 
         let data = serde_json::to_vec(&serializable)
-            .map_err(|e| sift_core::SiftError::Storage(format!("Serialize error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Serialize error: {e}")))?;
 
         sift_core::atomic_write(path, &data)?;
         Ok(())
@@ -305,7 +305,7 @@ impl FlatVectorIndex {
         let entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         Ok(entries
             .iter()
@@ -336,7 +336,7 @@ impl VectorStore for FlatVectorIndex {
         let mut entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         for ec in chunks {
             entries.push(StoredEntry {
@@ -358,7 +358,7 @@ impl VectorStore for FlatVectorIndex {
         let entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let mut scored: Vec<(f32, &StoredEntry)> = entries
             .iter()
@@ -398,7 +398,7 @@ impl VectorStore for FlatVectorIndex {
         let mut entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let before = entries.len();
         entries.retain(|e| e.uri != uri);
@@ -409,7 +409,7 @@ impl VectorStore for FlatVectorIndex {
         let entries = self
             .entries
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
         Ok(entries.len() as u64)
     }
 }
@@ -772,7 +772,10 @@ mod tests {
     #[test]
     fn test_cosine_zero_vectors() {
         let z = vec![0.0f32; 768];
-        assert_eq!(cosine_similarity(&z, &z), 0.0);
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(cosine_similarity(&z, &z), 0.0);
+        }
     }
 
     mod proptests {

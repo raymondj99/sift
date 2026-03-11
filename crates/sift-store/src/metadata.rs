@@ -11,7 +11,7 @@ pub struct MetadataStore {
 impl MetadataStore {
     pub fn open(path: &Path) -> SiftResult<Self> {
         let conn = Connection::open(path)
-            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite open error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite open error: {e}")))?;
 
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -20,7 +20,7 @@ impl MetadataStore {
              PRAGMA busy_timeout=5000;
              PRAGMA cache_size=-8000;",
         )
-        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite pragma error: {}", e)))?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite pragma error: {e}")))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sources (
@@ -39,7 +39,7 @@ impl MetadataStore {
                 value TEXT NOT NULL
             );",
         )
-        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {}", e)))?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -48,7 +48,7 @@ impl MetadataStore {
 
     pub fn open_in_memory() -> SiftResult<Self> {
         let conn = Connection::open_in_memory()
-            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite error: {e}")))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sources (
@@ -67,7 +67,7 @@ impl MetadataStore {
                 value TEXT NOT NULL
             );",
         )
-        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {}", e)))?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -80,11 +80,11 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT content_hash FROM sources WHERE uri = ?1")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let result: Option<Vec<u8>> = stmt.query_row(params![uri], |row| row.get(0)).ok();
 
@@ -107,11 +107,11 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| sift_core::SiftError::Storage(format!("System clock error: {}", e)))?
+            .map_err(|e| sift_core::SiftError::Storage(format!("System clock error: {e}")))?
             .as_secs() as i64;
 
         conn.execute(
@@ -132,10 +132,10 @@ impl MetadataStore {
                 file_type,
                 modified_at,
                 now,
-                chunk_count as i64,
+                i64::from(chunk_count),
             ],
         )
-        .map_err(|e| sift_core::SiftError::Storage(format!("Upsert error: {}", e)))?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("Upsert error: {e}")))?;
 
         Ok(())
     }
@@ -145,11 +145,11 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let rows = conn
             .execute("DELETE FROM sources WHERE uri = ?1", params![uri])
-            .map_err(|e| sift_core::SiftError::Storage(format!("Delete error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Delete error: {e}")))?;
 
         Ok(rows > 0)
     }
@@ -159,11 +159,11 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let total_sources: u64 = conn
             .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let total_chunks: u64 = conn
             .query_row(
@@ -171,11 +171,11 @@ impl MetadataStore {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT file_type, COUNT(*) FROM sources GROUP BY file_type")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let file_type_counts = stmt
             .query_map([], |row| {
@@ -183,8 +183,8 @@ impl MetadataStore {
                 let count: u64 = row.get(1)?;
                 Ok((ft, count))
             })
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?
-            .filter_map(|r| r.ok())
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?
+            .filter_map(std::result::Result::ok)
             .collect();
 
         Ok(IndexStats {
@@ -200,11 +200,11 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT uri, file_type, chunk_count FROM sources ORDER BY uri")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let results = stmt
             .query_map([], |row| {
@@ -214,8 +214,8 @@ impl MetadataStore {
                     row.get::<_, u32>(2)?,
                 ))
             })
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?
-            .filter_map(|r| r.ok())
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?
+            .filter_map(std::result::Result::ok)
             .collect();
 
         Ok(results)
@@ -243,14 +243,14 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         conn.execute(
             "INSERT INTO index_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )
-        .map_err(|e| sift_core::SiftError::Storage(format!("Meta set error: {}", e)))?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("Meta set error: {e}")))?;
 
         Ok(())
     }
@@ -263,16 +263,16 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT uri FROM sources WHERE modified_at >= ?1")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let uris = stmt
             .query_map(params![after_ts], |row| row.get::<_, String>(0))
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?
-            .filter_map(|r| r.ok())
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?
+            .filter_map(std::result::Result::ok)
             .collect();
 
         Ok(uris)
@@ -283,7 +283,7 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let result = conn
             .query_row(
@@ -296,23 +296,23 @@ impl MetadataStore {
         Ok(result)
     }
 
-    /// Load all known (uri, content_hash) pairs into memory for fast batch lookups.
+    /// Load all known (uri, `content_hash`) pairs into memory for fast batch lookups.
     pub fn load_all_hashes(&self) -> SiftResult<std::collections::HashMap<String, Vec<u8>>> {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT uri, content_hash FROM sources")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?;
 
         let map = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
             })
-            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {}", e)))?
-            .filter_map(|r| r.ok())
+            .map_err(|e| sift_core::SiftError::Storage(format!("Query error: {e}")))?
+            .filter_map(std::result::Result::ok)
             .collect();
 
         Ok(map)
@@ -323,9 +323,9 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
         conn.execute_batch("BEGIN IMMEDIATE")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Begin transaction: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Begin transaction: {e}")))?;
         Ok(())
     }
 
@@ -334,9 +334,9 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
         conn.execute_batch("COMMIT")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Commit transaction: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Commit transaction: {e}")))?;
         Ok(())
     }
 
@@ -345,9 +345,9 @@ impl MetadataStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {e}")))?;
         conn.execute_batch("ROLLBACK")
-            .map_err(|e| sift_core::SiftError::Storage(format!("Rollback transaction: {}", e)))?;
+            .map_err(|e| sift_core::SiftError::Storage(format!("Rollback transaction: {e}")))?;
         Ok(())
     }
 }
@@ -621,7 +621,7 @@ mod tests {
         for i in 0..100 {
             store
                 .upsert_source(
-                    &format!("file:///test_{}.txt", i),
+                    &format!("file:///test_{i}.txt"),
                     &hash,
                     10,
                     "txt",
@@ -645,7 +645,7 @@ mod tests {
         store.begin_transaction().unwrap();
         for i in 0..50 {
             store
-                .upsert_source(&format!("file:///{}.txt", i), &hash, 10, "txt", None, 1)
+                .upsert_source(&format!("file:///{i}.txt"), &hash, 10, "txt", None, 1)
                 .unwrap();
         }
         store.commit_transaction().unwrap();
@@ -654,7 +654,7 @@ mod tests {
         store.begin_transaction().unwrap();
         for i in 50..100 {
             store
-                .upsert_source(&format!("file:///{}.txt", i), &hash, 10, "txt", None, 1)
+                .upsert_source(&format!("file:///{i}.txt"), &hash, 10, "txt", None, 1)
                 .unwrap();
         }
         store.commit_transaction().unwrap();

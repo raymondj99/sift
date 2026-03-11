@@ -32,7 +32,7 @@ impl Parser for EpubParser {
         let mut archive =
             zip::ZipArchive::new(cursor).map_err(|e| sift_core::SiftError::Parse {
                 path: "epub".to_string(),
-                message: format!("Failed to open EPUB zip: {}", e),
+                message: format!("Failed to open EPUB zip: {e}"),
             })?;
 
         // Try to extract the title from the OPF metadata file
@@ -91,7 +91,7 @@ impl Parser for EpubParser {
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "epub"
     }
 }
@@ -285,10 +285,9 @@ mod tests {
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>{}</dc:title>
+    <dc:title>{t}</dc:title>
   </metadata>
-</package>"#,
-                t
+</package>"#
             );
             writer.write_all(opf.as_bytes()).unwrap();
         }
@@ -296,7 +295,7 @@ mod tests {
         // Write chapters
         for (name, content) in chapters {
             writer
-                .start_file(format!("OEBPS/{}", name), options)
+                .start_file(format!("OEBPS/{name}"), options)
                 .unwrap();
             writer.write_all(content.as_bytes()).unwrap();
         }

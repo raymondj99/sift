@@ -65,7 +65,7 @@ impl Chunker for FixedChunker {
         chunks
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "fixed"
     }
 }
@@ -124,8 +124,7 @@ mod tests {
         for (chunk, _) in &chunks {
             assert!(
                 !chunk.starts_with(' '),
-                "Chunk should not start with space: {:?}",
-                chunk
+                "Chunk should not start with space: {chunk:?}"
             );
         }
     }

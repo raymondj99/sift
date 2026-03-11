@@ -1,5 +1,6 @@
 use crate::traits::Parser;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
+use std::collections::HashMap;
 
 /// Parser for HTML and XML files.
 pub struct WebParser;
@@ -49,11 +50,11 @@ impl Parser for WebParser {
             title,
             language: None,
             content_type: ContentType::Text,
-            metadata: Default::default(),
+            metadata: HashMap::new(),
         })
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "web"
     }
 }

@@ -108,14 +108,14 @@ impl Config {
     pub fn num_jobs(&self) -> usize {
         if self.default.jobs == 0 {
             std::thread::available_parallelism()
-                .map(|n| n.get())
+                .map(std::num::NonZero::get)
                 .unwrap_or(4)
         } else {
             self.default.jobs
         }
     }
 
-    /// Look up a dotted config key (e.g. "search.max_results") and return its
+    /// Look up a dotted config key (e.g. "`search.max_results`") and return its
     /// TOML-formatted value string, or `None` if the key is not recognized.
     pub fn get_value(&self, key: &str) -> Option<String> {
         match key {
