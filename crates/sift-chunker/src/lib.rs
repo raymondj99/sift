@@ -4,6 +4,8 @@
 //! [`RecursiveChunker`] (recursive character text splitter), and optionally
 //! [`CodeChunker`] (AST-aware, via tree-sitter) behind the `ast` feature flag.
 
+pub mod error;
+
 #[cfg(feature = "ast")]
 pub mod code;
 pub mod fixed;
@@ -16,6 +18,7 @@ pub use code::CodeChunker;
 pub use fixed::FixedChunker;
 pub use recursive::RecursiveChunker;
 pub use semantic::SemanticChunker;
+pub use error::ChunkerError;
 pub use traits::Chunker;
 
 use sift_core::ContentType;

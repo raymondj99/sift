@@ -6,6 +6,7 @@
 //!
 //! Most parsers are feature-gated to minimize binary size.
 
+pub mod error;
 pub mod registry;
 pub mod traits;
 
@@ -32,5 +33,6 @@ mod spreadsheet;
 mod text;
 mod web;
 
+pub use error::ParseError;
 pub use registry::ParserRegistry;
 pub use traits::Parser;

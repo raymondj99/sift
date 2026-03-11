@@ -52,10 +52,12 @@ impl ExitCode {
             }
             sift_core::SiftError::Storage(_) => ExitCode::StorageError,
             sift_core::SiftError::Io(_) => ExitCode::StorageError,
-            sift_core::SiftError::Parse { .. } => ExitCode::GeneralError,
-            sift_core::SiftError::Search(_) => ExitCode::GeneralError,
-            sift_core::SiftError::Source(_) => ExitCode::GeneralError,
-            sift_core::SiftError::Other(_) => ExitCode::GeneralError,
+            sift_core::SiftError::WithPath { source, .. } => Self::from_sift_error(source),
+            sift_core::SiftError::Partial(_) => ExitCode::GeneralError,
+            sift_core::SiftError::Parse { .. }
+            | sift_core::SiftError::Search(_)
+            | sift_core::SiftError::Source(_)
+            | sift_core::SiftError::Other(_) => ExitCode::GeneralError,
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 
 pub type SiftResult<T> = Result<T, SiftError>;
@@ -30,4 +31,36 @@ pub enum SiftError {
 
     #[error("{0}")]
     Other(#[from] anyhow::Error),
+
+    #[error("Error processing {path}: {source}")]
+    WithPath {
+        path: PathBuf,
+        #[source]
+        source: Box<SiftError>,
+    },
+
+    #[error("Multiple errors ({} total)", .0.len())]
+    Partial(Vec<SiftError>),
+}
+
+impl SiftError {
+    pub fn with_path(self, path: impl Into<PathBuf>) -> Self {
+        SiftError::WithPath {
+            path: path.into(),
+            source: Box::new(self),
+        }
+    }
+
+    pub fn is_partial(&self) -> bool {
+        matches!(self, SiftError::Partial(_))
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            SiftError::Config(_) => 3,
+            SiftError::Model(_) => 4,
+            SiftError::Storage(_) => 5,
+            _ => 1,
+        }
+    }
 }

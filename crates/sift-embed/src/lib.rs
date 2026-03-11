@@ -6,6 +6,8 @@
 //!
 //! Requires the ONNX Runtime shared library at runtime (`ORT_DYLIB_PATH`).
 
+pub mod error;
+
 #[cfg(feature = "sqlite")]
 pub mod cache;
 #[cfg(not(feature = "sqlite"))]
@@ -22,6 +24,7 @@ pub use cache::EmbeddingCache;
 pub use json_cache::EmbeddingCache;
 pub use models::{optimal_batch_size, ModelManager, QuantizationType};
 pub use onnx::OnnxEmbedder;
+pub use error::EmbeddingError;
 pub use traits::Embedder;
 #[cfg(feature = "vision")]
 pub use vision::VisionEmbedder;

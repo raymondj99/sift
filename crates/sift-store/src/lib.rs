@@ -5,6 +5,8 @@
 //! full-text search ([`Fts5Store`], [`TantivyStore`], or [`Bm25Store`]),
 //! and [`HybridSearchEngine`] for Reciprocal Rank Fusion of vector + keyword results.
 
+pub mod error;
+
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
 pub mod bm25;
 pub mod flat;
@@ -35,6 +37,7 @@ pub use json_metadata::MetadataStore;
 pub use metadata::{MetadataStore, TransactionGuard};
 #[cfg(feature = "fulltext")]
 pub use tantivy_store::TantivyStore;
+pub use error::StorageError;
 pub use traits::{FullTextStore, VectorIndex, VectorStore};
 
 /// Default vector store type alias.
