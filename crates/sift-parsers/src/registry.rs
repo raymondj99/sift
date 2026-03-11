@@ -138,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "data")]
     fn test_registry_routes_json() {
         let registry = ParserRegistry::new();
         let doc = registry
@@ -202,6 +203,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "office")]
     fn test_registry_routes_docx() {
         let registry = ParserRegistry::new();
         assert!(registry.can_parse(
@@ -226,6 +228,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "archive")]
     fn test_registry_routes_zip() {
         let registry = ParserRegistry::new();
         assert!(registry.can_parse(Some("application/zip"), Some("zip")));
