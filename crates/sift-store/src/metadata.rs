@@ -680,14 +680,7 @@ mod tests {
         store.begin_transaction().unwrap();
         for i in 0..100 {
             store
-                .upsert_source(
-                    &format!("file:///test_{i}.txt"),
-                    &hash,
-                    10,
-                    "txt",
-                    None,
-                    1,
-                )
+                .upsert_source(&format!("file:///test_{i}.txt"), &hash, 10, "txt", None, 1)
                 .unwrap();
         }
         store.commit_transaction().unwrap();

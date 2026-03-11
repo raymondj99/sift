@@ -160,8 +160,10 @@ fn extract_tar_entries<R: Read>(reader: R) -> SiftResult<(String, usize)> {
             Err(_) => continue,
         };
 
-        let path = entry
-            .path().map_or_else(|_| "(unknown)".to_string(), |p| p.to_string_lossy().to_string());
+        let path = entry.path().map_or_else(
+            |_| "(unknown)".to_string(),
+            |p| p.to_string_lossy().to_string(),
+        );
 
         let size = entry.size();
         if size > MAX_ENTRY_SIZE {

@@ -20,11 +20,11 @@ pub mod vision;
 
 #[cfg(feature = "sqlite")]
 pub use cache::EmbeddingCache;
+pub use error::EmbeddingError;
 #[cfg(not(feature = "sqlite"))]
 pub use json_cache::EmbeddingCache;
 pub use models::{optimal_batch_size, ModelManager, QuantizationType};
 pub use onnx::OnnxEmbedder;
-pub use error::EmbeddingError;
 pub use traits::Embedder;
 #[cfg(feature = "vision")]
 pub use vision::VisionEmbedder;

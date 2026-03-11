@@ -25,6 +25,7 @@ pub mod traits;
 
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
 pub use bm25::Bm25Store;
+pub use error::StorageError;
 pub use flat::{ExportEntry, FlatVectorIndex};
 #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
 pub use fts5::Fts5Store;
@@ -37,7 +38,6 @@ pub use json_metadata::MetadataStore;
 pub use metadata::{MetadataStore, TransactionGuard};
 #[cfg(feature = "fulltext")]
 pub use tantivy_store::TantivyStore;
-pub use error::StorageError;
 pub use traits::{CollectSink, FullTextStore, SearchSink, VectorIndex, VectorStore};
 
 #[cfg(test)]

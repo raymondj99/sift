@@ -351,10 +351,7 @@ mod tests {
         let chunks = chunker.chunk(text);
         assert!(chunks.len() >= 2);
         for (chunk_text, _) in &chunks {
-            assert!(
-                chunk_text.len() <= 10,
-                "Chunk '{chunk_text}' exceeds limit"
-            );
+            assert!(chunk_text.len() <= 10, "Chunk '{chunk_text}' exceeds limit");
         }
     }
 

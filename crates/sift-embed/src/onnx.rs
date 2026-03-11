@@ -61,13 +61,9 @@ impl OnnxEmbedder {
                 ))
             })?
             .with_intra_threads(num_cores)
-            .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}"))
-            })?
+            .map_err(|e| sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}")))?
             .with_inter_threads(2)
-            .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}"))
-            })?
+            .map_err(|e| sift_core::SiftError::Embedding(format!("ONNX thread config error: {e}")))?
             .with_execution_providers(select_execution_providers())
             .map_err(|e| {
                 sift_core::SiftError::Embedding(format!("Execution provider config error: {e}"))
@@ -251,9 +247,7 @@ impl Embedder for OnnxEmbedder {
                 }
                 .map_err(|e| sift_core::SiftError::Embedding(format!("Input error: {e}")))?,
             )
-            .map_err(|e| {
-                sift_core::SiftError::Embedding(format!("ONNX inference failed: {e}"))
-            })?;
+            .map_err(|e| sift_core::SiftError::Embedding(format!("ONNX inference failed: {e}")))?;
 
         // Extract the first output tensor (last_hidden_state or token_embeddings)
         // Try named output first, fall back to index-based access

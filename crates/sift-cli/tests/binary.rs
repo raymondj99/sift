@@ -1,8 +1,8 @@
-use assert_cmd::Command;
+use assert_cmd::{cargo_bin, Command};
 use predicates::prelude::*;
 
 fn sift_cmd() -> Command {
-    Command::cargo_bin("sift").unwrap()
+    Command::new(cargo_bin!("sift"))
 }
 
 #[test]
@@ -39,7 +39,12 @@ fn test_scan_nonexistent_path_succeeds_with_zero() {
     let dir = tempfile::TempDir::new().unwrap();
     let idx = format!("test-scan-{}", std::process::id());
     sift_cmd()
-        .args(["--index", &idx, "scan", "/nonexistent/path/that/does/not/exist"])
+        .args([
+            "--index",
+            &idx,
+            "scan",
+            "/nonexistent/path/that/does/not/exist",
+        ])
         .env("SIFT_DATA_DIR", dir.path())
         .assert()
         .success()

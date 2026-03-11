@@ -35,7 +35,9 @@ impl CodeChunker {
             None => return self.fallback_chunk(text),
         };
 
-        let ts_language = if let Some(l) = lang_for_extension(lang) { l } else {
+        let ts_language = if let Some(l) = lang_for_extension(lang) {
+            l
+        } else {
             debug!("No tree-sitter grammar for language: {}", lang);
             return self.fallback_chunk(text);
         };

@@ -252,11 +252,11 @@ pub fn preprocess_image(rgb: &image::RgbImage, size: u32) -> Vec<f32> {
             let idx = (y * size + x) as usize;
 
             // Channel 0: Red
-            chw[idx] = (pixel[0] as f32 / 255.0 - CLIP_MEAN[0]) / CLIP_STD[0];
+            chw[idx] = (f32::from(pixel[0]) / 255.0 - CLIP_MEAN[0]) / CLIP_STD[0];
             // Channel 1: Green
-            chw[npixels + idx] = (pixel[1] as f32 / 255.0 - CLIP_MEAN[1]) / CLIP_STD[1];
+            chw[npixels + idx] = (f32::from(pixel[1]) / 255.0 - CLIP_MEAN[1]) / CLIP_STD[1];
             // Channel 2: Blue
-            chw[2 * npixels + idx] = (pixel[2] as f32 / 255.0 - CLIP_MEAN[2]) / CLIP_STD[2];
+            chw[2 * npixels + idx] = (f32::from(pixel[2]) / 255.0 - CLIP_MEAN[2]) / CLIP_STD[2];
         }
     }
 
@@ -448,7 +448,7 @@ mod tests {
 
     /// Full integration test for `embed_image` -- requires a real model on disk.
     #[test]
-    #[ignore]
+    #[ignore = "requires a real ONNX model on disk"]
     fn test_embed_image_integration() {
         // This test requires a Nomic Embed Vision ONNX model at the specified path.
         let model_dir = Path::new("/tmp/test-models/nomic-embed-vision");
@@ -486,7 +486,7 @@ mod tests {
 
     /// Batch embedding integration test -- requires a real model on disk.
     #[test]
-    #[ignore]
+    #[ignore = "requires a real ONNX model on disk"]
     fn test_embed_image_batch_integration() {
         let model_dir = Path::new("/tmp/test-models/nomic-embed-vision");
         let embedder = VisionEmbedder::load(model_dir, "nomic-embed-vision-v1.5", 768)

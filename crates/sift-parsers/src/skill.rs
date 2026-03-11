@@ -214,7 +214,10 @@ allowed-tools: Bash Read Edit
     fn test_raw_map_contains_all_keys() {
         let content = "---\nname: test\ncustom-field: custom value\n---\n";
         let (fm, _) = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.raw.get("custom-field").map(String::as_str), Some("custom value"));
+        assert_eq!(
+            fm.raw.get("custom-field").map(String::as_str),
+            Some("custom value")
+        );
     }
 
     #[test]

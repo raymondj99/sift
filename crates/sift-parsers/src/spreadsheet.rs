@@ -124,7 +124,8 @@ fn write_cell(output: &mut String, cell: &Data) {
         Data::Int(i) => {
             let _ = write!(output, "{i}");
         }
-        Data::Float(f) => {
+        Data::Float(f) =>
+        {
             #[allow(clippy::float_cmp)]
             if *f == f.floor() && f.abs() < 1e15 {
                 let _ = write!(output, "{}", *f as i64);
@@ -151,7 +152,8 @@ fn cell_to_string(cell: &Data) -> String {
         Data::Empty => String::new(),
         Data::String(s) => s.clone(),
         Data::Int(i) => i.to_string(),
-        Data::Float(f) => {
+        Data::Float(f) =>
+        {
             #[allow(clippy::float_cmp)]
             if *f == f.floor() && f.abs() < 1e15 {
                 format!("{}", *f as i64)

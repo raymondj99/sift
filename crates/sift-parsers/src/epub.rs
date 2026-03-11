@@ -294,9 +294,7 @@ mod tests {
 
         // Write chapters
         for (name, content) in chapters {
-            writer
-                .start_file(format!("OEBPS/{name}"), options)
-                .unwrap();
+            writer.start_file(format!("OEBPS/{name}"), options).unwrap();
             writer.write_all(content.as_bytes()).unwrap();
         }
 

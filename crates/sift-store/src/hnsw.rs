@@ -155,7 +155,7 @@ impl HnswIndex {
         let meta: HashMap<u64, EntryMeta> = serde_json::from_slice(&meta_bytes)
             .map_err(|e| SiftError::Storage(format!("usearch: read meta: {e}")))?;
 
-        let next_label = meta.keys().copied().max().map(|k| k + 1).unwrap_or(0);
+        let next_label = meta.keys().copied().max().map_or(0, |k| k + 1);
 
         // Infer dimensions from any entry's vector (we will get it from the loaded index).
         // Create options with 0 dimensions; load will override.

@@ -9,7 +9,7 @@ use std::io::Cursor;
 #[cfg(feature = "audio")]
 use symphonia::core::formats::FormatOptions;
 #[cfg(feature = "audio")]
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
 #[cfg(feature = "audio")]
 use symphonia::core::meta::MetadataOptions;
 #[cfg(feature = "audio")]
@@ -99,7 +99,7 @@ impl Parser for AudioParser {
 
         // Wrap the content bytes in a MediaSourceStream for symphonia.
         let cursor = Cursor::new(content.to_vec());
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+        let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let hint = Self::build_hint(mime_type, extension);
 
         let format_opts = FormatOptions::default();
@@ -109,19 +109,19 @@ impl Parser for AudioParser {
             symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts);
 
         match probe_result {
-            Ok(mut probed) => self.build_from_probe(&mut probed, label, extension),
+            Ok(mut probed) => Self::build_from_probe(&mut probed, label, extension),
             Err(e) => {
                 debug!(
                     error = %e,
                     ext = ?extension,
                     "Symphonia probe failed, falling back to basic metadata"
                 );
-                self.build_fallback(label, extension, content.len())
+                Self::build_fallback(label, extension, content.len())
             }
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "audio"
     }
 }
@@ -130,7 +130,6 @@ impl Parser for AudioParser {
 impl AudioParser {
     /// Build a `ParsedDocument` from a successful symphonia probe.
     fn build_from_probe(
-        &self,
         probed: &mut symphonia::core::probe::ProbeResult,
         label: &str,
         extension: Option<&str>,
@@ -182,7 +181,7 @@ impl AudioParser {
             if let Some(n_frames) = codec_params.n_frames {
                 if let Some(rate) = codec_params.sample_rate {
                     if rate > 0 {
-                        let seconds = n_frames as f64 / rate as f64;
+                        let seconds = n_frames as f64 / f64::from(rate);
                         let formatted = format_duration(seconds);
                         metadata.insert("duration_seconds".to_string(), format!("{:.2}", seconds));
                         metadata.insert("duration".to_string(), formatted.clone());
@@ -218,7 +217,6 @@ impl AudioParser {
     /// This ensures audio files are still indexed with at least extension-level
     /// information rather than causing a pipeline error.
     fn build_fallback(
-        &self,
         label: &str,
         extension: Option<&str>,
         size_bytes: usize,
@@ -281,7 +279,7 @@ fn extract_tags(
         let key = if let Some(std_key) = tag.std_key {
             format!("{:?}", std_key)
         } else {
-            tag.key.to_string()
+            tag.key.clone()
         };
         let value = tag.value.to_string();
 

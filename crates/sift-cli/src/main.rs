@@ -494,9 +494,7 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
     // Parse ISO 8601 date: YYYY-MM-DD
     let parts: Vec<&str> = s_trimmed.split('-').collect();
     if parts.len() != 3 {
-        anyhow::bail!(
-            "invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)"
-        );
+        anyhow::bail!("invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)");
     }
     let year: i64 = parts[0]
         .parse()
@@ -509,9 +507,7 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
         .map_err(|_| anyhow::anyhow!("invalid day in '{s}'"))?;
 
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || year < 1970 {
-        anyhow::bail!(
-            "invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)"
-        );
+        anyhow::bail!("invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)");
     }
 
     // Days from epoch to date using the standard algorithm

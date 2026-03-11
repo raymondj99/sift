@@ -15,10 +15,10 @@ pub mod traits;
 
 #[cfg(feature = "ast")]
 pub use code::CodeChunker;
+pub use error::ChunkerError;
 pub use fixed::FixedChunker;
 pub use recursive::RecursiveChunker;
 pub use semantic::SemanticChunker;
-pub use error::ChunkerError;
 pub use traits::Chunker;
 
 use sift_core::ContentType;

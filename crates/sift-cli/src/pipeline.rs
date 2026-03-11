@@ -204,6 +204,7 @@ struct StoreItem {
 /// ```text
 /// [Discover+Filter] → chan(64) → [Parse+Chunk (rayon)] → chan(128) → [Embed (batch)] → chan(128) → [Store]
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn run_scan_pipeline(
     config: &Config,
     options: &ScanOptions,
@@ -683,7 +684,7 @@ fn embed_image_chunks(
     }
 
     // Fallback: use text embedder on the metadata text, or zero vectors
-    let dims = text_embedder.map(|e| e.dimensions()).unwrap_or(768);
+    let dims = text_embedder.map_or(768, |e| e.dimensions());
     if let Some(emb) = text_embedder {
         chunks
             .iter()

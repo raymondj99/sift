@@ -79,6 +79,7 @@ impl Clone for SiftMcpServer {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for SiftMcpServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SiftMcpServer")
@@ -367,13 +368,12 @@ impl SiftMcpServer {
 #[tool_handler]
 impl ServerHandler for SiftMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "Sift is a universal file indexing and semantic search engine. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Sift is a universal file indexing and semantic search engine. \
                  Use sift_status to check what's indexed, sift_search to find content, \
                  and sift_search_skills to discover agent skills."
-                    .to_string(),
-            )
+                .to_string(),
+        )
     }
 }
 
@@ -402,7 +402,7 @@ impl SiftMcpServer {
         // Fall back to keyword-only with a zero vector
         let fallback = match mode {
             SearchMode::VectorOnly | SearchMode::Hybrid => SearchMode::KeywordOnly,
-            other => other,
+            other @ SearchMode::KeywordOnly => other,
         };
         (vec![0.0f32; 768], fallback)
     }
@@ -503,7 +503,11 @@ pub async fn run_stdio_server(config: Config) -> anyhow::Result<()> {
 
 /// Create an internal MCP error.
 fn internal_err(msg: String) -> rmcp::ErrorData {
-    rmcp::ErrorData::new(rmcp::model::ErrorCode::INTERNAL_ERROR, msg, None::<serde_json::Value>)
+    rmcp::ErrorData::new(
+        rmcp::model::ErrorCode::INTERNAL_ERROR,
+        msg,
+        None::<serde_json::Value>,
+    )
 }
 
 /// Round a float to 2 decimal places.

@@ -369,8 +369,8 @@ fn extract_ort_lib(archive_bytes: &[u8], dest: &Path) -> SiftResult<()> {
         .entries()
         .map_err(|e| sift_core::SiftError::Model(format!("Failed to read archive: {e}")))?
     {
-        let mut entry = entry
-            .map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {e}")))?;
+        let mut entry =
+            entry.map_err(|e| sift_core::SiftError::Model(format!("Archive entry error: {e}")))?;
         let path = entry
             .path()
             .map_err(|e| sift_core::SiftError::Model(format!("Archive path error: {e}")))?;
