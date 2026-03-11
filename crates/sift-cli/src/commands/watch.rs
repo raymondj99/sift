@@ -2,7 +2,7 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use sift_core::{Config, ScanOptions, SiftResult};
+use sift_core::{CancellationToken, Config, ScanOptions, SiftResult};
 use sift_server::WatchDaemon;
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -42,6 +42,7 @@ pub fn run(config: &Config, path: Option<PathBuf>, debounce: u64) -> SiftResult<
                     let embedder_ref: Option<&dyn sift_core::Embedder> = None;
                     #[cfg(feature = "vision")]
                     let vision_embedder = crate::pipeline::load_vision_embedder();
+                    let token = CancellationToken::new();
                     match crate::pipeline::run_scan_pipeline(
                         &config,
                         &options,
@@ -50,6 +51,7 @@ pub fn run(config: &Config, path: Option<PathBuf>, debounce: u64) -> SiftResult<
                         embedder_ref,
                         #[cfg(feature = "vision")]
                         vision_embedder.as_ref(),
+                        &token,
                         false,
                     ) {
                         Ok(stats) => {
