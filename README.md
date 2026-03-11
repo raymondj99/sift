@@ -1,5 +1,9 @@
 # sift
 
+[![CI](https://github.com/raymondj99/sift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/raymondj99/sift/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/raymondj99/sift/graph/badge.svg)](https://codecov.io/gh/raymondj99/sift)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+
 **Point at anything. Search everything.**
 
 `sift` is a fast CLI tool that indexes files and makes them searchable from a single binary. Written in Rust with a modular feature-gated architecture — build only what you need, from a 6.6 MB floor to a full-featured 17 MB binary.
