@@ -40,6 +40,23 @@ pub use tantivy_store::TantivyStore;
 pub use error::StorageError;
 pub use traits::{CollectSink, FullTextStore, SearchSink, VectorIndex, VectorStore};
 
+#[cfg(test)]
+pub mod test_utils;
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! store_test {
+    ($name:ident, $body:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<$name _flat>]() {
+                let store = $crate::test_utils::create_test_flat_vector_store();
+                ($body)(&store);
+            }
+        }
+    };
+}
+
 /// Default vector store type alias.
 ///
 /// When the `hnsw` feature is enabled, this uses the approximate

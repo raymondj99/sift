@@ -229,6 +229,10 @@ enum Commands {
         action: Option<ModelsAction>,
     },
 
+    /// Start MCP server on stdio (for AI agent integration)
+    #[cfg(feature = "mcp")]
+    Mcp,
+
     /// Start HTTP API server
     #[cfg(feature = "serve")]
     Serve {
@@ -426,6 +430,11 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
         #[cfg(feature = "embeddings")]
         Commands::Models { action } => {
             commands::models::run(action)?;
+        }
+
+        #[cfg(feature = "mcp")]
+        Commands::Mcp => {
+            commands::mcp::run(&config)?;
         }
 
         #[cfg(feature = "serve")]

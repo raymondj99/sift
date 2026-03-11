@@ -1,0 +1,27 @@
+[package]
+name = "sift-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Opt out of the parent workspace so cargo-fuzz can manage this crate independently.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sift-parsers = { path = "../crates/sift-parsers", default-features = false, features = ["data"] }
+sift-chunker = { path = "../crates/sift-chunker", default-features = false }
+tempfile = "3"
+
+[[bin]]
+name = "fuzz_csv"
+path = "fuzz_targets/fuzz_csv.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_semantic_chunker"
+path = "fuzz_targets/fuzz_semantic_chunker.rs"
+doc = false

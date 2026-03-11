@@ -112,6 +112,7 @@ http-body-util = "0.1"
 assert_cmd = "2"
 predicates = "3"
 proptest = "1"
+paste = "1"
 
 # Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -124,6 +125,7 @@ sift-chunker = { path = "crates/sift-chunker", default-features = false }
 sift-embed = { path = "crates/sift-embed", default-features = false }
 sift-store = { path = "crates/sift-store", default-features = false }
 sift-server = { path = "crates/sift-server" }
+sift-mcp = { path = "crates/sift-mcp", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

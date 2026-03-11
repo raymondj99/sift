@@ -35,20 +35,21 @@ archive = ["sift-parsers/archive"]
 data = ["sift-parsers/data"]
 audio = ["sift-parsers/audio"]
 # Embedding & search
-embeddings = ["dep:sift-embed"]
+embeddings = ["dep:sift-embed", "sift-mcp?/embeddings"]
 vision = ["embeddings", "sift-embed/vision"]
-fulltext = ["sift-store/fulltext"]
-fts5 = ["sift-store/fts5"]
-sqlite = ["sift-store/sqlite", "sift-embed?/sqlite"]
-hnsw = ["sift-store/hnsw"]
+fulltext = ["sift-store/fulltext", "sift-mcp?/fulltext"]
+fts5 = ["sift-store/fts5", "sift-mcp?/fts5"]
+sqlite = ["sift-store/sqlite", "sift-embed?/sqlite", "sift-mcp?/sqlite"]
+hnsw = ["sift-store/hnsw", "sift-mcp?/hnsw"]
 simd = ["sift-store/simd"]
 # Server & UI
 serve = ["dep:sift-server", "dep:tokio"]
+mcp = ["dep:sift-mcp", "dep:tokio"]
 completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
 # Profiles
 standard = ["ast", "documents", "data-formats", "email", "archive", "fts5", "sqlite", "embeddings", "fancy"]
-full = ["standard", "serve", "hnsw", "fulltext", "vision", "audio", "simd", "completions"]
+full = ["standard", "serve", "mcp", "hnsw", "fulltext", "vision", "audio", "simd", "completions"]
 
 [dependencies]
 sift-core = { workspace = true }
@@ -58,6 +59,7 @@ sift-chunker = { workspace = true, default-features = false }
 sift-embed = { workspace = true, default-features = false, optional = true }
 sift-store = { workspace = true, default-features = false }
 sift-server = { workspace = true, optional = true }
+sift-mcp = { workspace = true, optional = true }
 
 clap = { workspace = true }
 clap_complete = { workspace = true, optional = true }

@@ -26,3 +26,5 @@ Thumbs.db
 
 # Benchmark results
 /benchsuite/results/
+fuzz/target/
+fuzz/Cargo.lock

@@ -8,6 +8,7 @@
 
 pub mod error;
 pub mod registry;
+pub mod skill;
 pub mod traits;
 
 #[cfg(feature = "archive")]

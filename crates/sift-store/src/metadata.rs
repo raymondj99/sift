@@ -141,6 +141,7 @@ impl MetadataStore {
     }
 
     /// Batch upsert multiple source records in a single transaction.
+    #[allow(clippy::type_complexity)]
     pub fn upsert_batch(
         &self,
         items: &[(&str, &[u8; 32], u64, &str, Option<i64>, u32)],

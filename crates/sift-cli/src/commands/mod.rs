@@ -1,6 +1,8 @@
 pub mod config;
 pub mod export;
 pub mod list;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "embeddings")]
 pub mod models;
 pub mod remove;
