@@ -708,13 +708,4 @@ fn embed_image_chunks(
     }
 }
 
-#[derive(Default)]
-pub struct ScanStats {
-    pub discovered: u64,
-    pub skipped: u64,
-    pub indexed: u64,
-    pub chunks: u64,
-    pub errors: u64,
-    pub cache_hits: u64,
-    pub file_types: std::collections::HashMap<String, u64>,
-}
+pub use sift_core::pipeline::ScanStats;

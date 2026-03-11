@@ -9,6 +9,7 @@ members = [
     "crates/sift-embed",
     "crates/sift-store",
     "crates/sift-server",
+    "crates/sift-mcp",
 ]
 
 [workspace.package]
@@ -92,6 +93,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Audio processing
 symphonia = { version = "0.5", features = ["mp3", "flac", "pcm", "isomp4", "aac"] }
 symphonia-core = "0.5"
+
+# MCP
+rmcp = { version = "1", features = ["server", "transport-io"] }
+schemars = "1"
 
 # Utilities
 uuid = { version = "1", features = ["v7"] }

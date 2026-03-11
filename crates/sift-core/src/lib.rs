@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod error;
+pub mod pipeline;
 pub mod types;
 pub mod util;
 

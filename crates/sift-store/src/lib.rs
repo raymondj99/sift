@@ -38,7 +38,7 @@ pub use metadata::{MetadataStore, TransactionGuard};
 #[cfg(feature = "fulltext")]
 pub use tantivy_store::TantivyStore;
 pub use error::StorageError;
-pub use traits::{FullTextStore, VectorIndex, VectorStore};
+pub use traits::{CollectSink, FullTextStore, SearchSink, VectorIndex, VectorStore};
 
 /// Default vector store type alias.
 ///
