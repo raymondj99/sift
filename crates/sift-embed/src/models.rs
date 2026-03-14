@@ -376,8 +376,16 @@ fn extract_ort_lib(archive_bytes: &[u8], dest: &Path) -> SiftResult<()> {
             .map_err(|e| sift_core::SiftError::Model(format!("Archive path error: {e}")))?;
 
         let path_str = path.to_string_lossy();
-        // The library is at lib/libonnxruntime.so (or .dylib) inside the archive
-        if path_str.contains(ORT_LIB_FILENAME) && !path_str.ends_with('/') {
+        // Match the real dylib, not the unversioned symlink that shares the same
+        // base name. On macOS the archive contains both:
+        //   lib/libonnxruntime.1.20.1.dylib  ← regular file (what we want)
+        //   lib/libonnxruntime.dylib          ← symlink, 0 bytes (skip)
+        // Checking entry_type().is_file() skips symlinks on all platforms.
+        let is_regular_file = entry.header().entry_type().is_file();
+        let name_matches = path_str.contains("libonnxruntime") && path_str.ends_with(
+            if cfg!(target_os = "windows") { ".dll" } else if cfg!(target_os = "macos") { ".dylib" } else { ".so" }
+        );
+        if is_regular_file && name_matches {
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut buf)
                 .map_err(|e| sift_core::SiftError::Model(format!("Extract read error: {e}")))?;
