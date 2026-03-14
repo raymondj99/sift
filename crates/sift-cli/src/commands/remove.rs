@@ -69,3 +69,36 @@ pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResu
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{with_home, HOME_MUTEX};
+    use crate::OutputFormat;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_remove_not_found_human() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let paths = vec!["/nonexistent/file.txt".to_string()];
+            let result = run(&config, &paths, &OutputFormat::Human);
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_remove_already_uri_prefixed() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            // file:// prefix should be preserved as-is
+            let paths = vec!["file:///some/path/that/was/not/indexed.txt".to_string()];
+            let result = run(&config, &paths, &OutputFormat::Human);
+            assert!(result.is_ok());
+        });
+    }
+}

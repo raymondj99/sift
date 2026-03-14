@@ -47,3 +47,4 @@ symphonia-core = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+zip = { workspace = true }

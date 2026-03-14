@@ -16,3 +16,24 @@ impl From<ChunkerError> for sift_core::SiftError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunker_error_converts_to_sift_error() {
+        let chunker_err = ChunkerError::InvalidConfig("bad config".into());
+        let sift_err: sift_core::SiftError = chunker_err.into();
+        match sift_err {
+            sift_core::SiftError::Parse { path, message } => {
+                assert!(path.is_empty(), "path should be empty");
+                assert!(
+                    message.contains("bad config"),
+                    "message should contain original error"
+                );
+            }
+            other => panic!("expected Parse variant, got: {other:?}"),
+        }
+    }
+}

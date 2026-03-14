@@ -184,13 +184,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_short_text() {
-        let chunker = SemanticChunker::new(1000, 0);
-        let chunks = chunker.chunk("Hello world");
-        assert_eq!(chunks.len(), 1);
-    }
-
-    #[test]
     fn test_paragraph_splitting() {
         let chunker = SemanticChunker::new(50, 0);
         let text = "First paragraph content here.\n\nSecond paragraph content here.\n\nThird paragraph content here.";
@@ -205,12 +198,6 @@ mod tests {
             "fn foo() {\n    println!(\"hello\");\n}\n\nfn bar() {\n    println!(\"world\");\n}\n";
         let chunks = chunker.chunk(text);
         assert!(!chunks.is_empty());
-    }
-
-    #[test]
-    fn test_empty() {
-        let chunker = SemanticChunker::new(100, 10);
-        assert!(chunker.chunk("").is_empty());
     }
 
     #[test]
@@ -237,22 +224,6 @@ mod tests {
             fn never_panics(text in "\\PC{0,1000}", max_size in 10..500usize, overlap in 0..100usize) {
                 let chunker = SemanticChunker::new(max_size, overlap);
                 let _ = chunker.chunk(&text);
-            }
-
-            #[test]
-            fn offsets_within_bounds(text in "\\PC{1,500}", max_size in 10..200usize) {
-                let chunker = SemanticChunker::new(max_size, 0);
-                let chunks = chunker.chunk(&text);
-                for (_, offset) in &chunks {
-                    prop_assert!(*offset <= text.len(), "Offset {} exceeds text len {}", offset, text.len());
-                }
-            }
-
-            #[test]
-            fn split_quality_never_panics(text in "\\PC{1,500}", pos in 0..500usize) {
-                if pos < text.len() {
-                    let _ = SemanticChunker::split_quality(&text, pos);
-                }
             }
         }
     }

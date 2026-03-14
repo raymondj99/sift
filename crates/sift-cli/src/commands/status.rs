@@ -48,3 +48,31 @@ fn dir_size(path: &std::path::Path) -> u64 {
         .map(|m| m.len())
         .sum()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{with_home, HOME_MUTEX};
+    use crate::OutputFormat;
+    use tempfile::TempDir;
+
+    // When no metadata file exists, all three formats print a "no index" message and return Ok.
+    #[test]
+    fn test_status_no_index_human() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            assert!(run(&config, &OutputFormat::Human).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_dir_size_with_files() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "world!!").unwrap();
+        let size = dir_size(tmp.path());
+        assert_eq!(size, 12, "total bytes should be 5 + 7 = 12");
+    }
+}

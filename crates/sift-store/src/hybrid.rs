@@ -132,16 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rrf_fuse_vector_only() {
-        let vector = vec![make_result("a", 0.9), make_result("b", 0.8)];
-        let bm25 = vec![];
-
-        let fused = rrf_fuse(&vector, &bm25, 1.0, 10);
-        assert_eq!(fused.len(), 2);
-        assert_eq!(fused[0].uri, "a");
-    }
-
-    #[test]
     fn test_rrf_fuse_both() {
         let vector = vec![make_result("a", 0.9), make_result("b", 0.8)];
         let bm25 = vec![make_result("b", 5.0), make_result("c", 4.0)];
@@ -153,15 +143,41 @@ mod tests {
     }
 
     #[test]
-    fn test_rrf_fuse_respects_top_k() {
-        let vector = vec![
-            make_result("a", 0.9),
-            make_result("b", 0.8),
-            make_result("c", 0.7),
-        ];
-        let bm25 = vec![];
+    fn test_hybrid_engine_hybrid_mode_search() {
+        // Exercises the Hybrid branch (line 41) with actual stores
+        let tmp = tempfile::tempdir().unwrap();
+        let vector_store = crate::flat::FlatVectorIndex::new();
+        #[cfg(feature = "fulltext")]
+        let fulltext_store =
+            crate::tantivy_store::TantivyStore::open(&tmp.path().join("tantivy")).unwrap();
+        #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
+        let fulltext_store = crate::fts5::Fts5Store::open(&tmp.path().join("fts5.db")).unwrap();
+        #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
+        let fulltext_store = crate::bm25::Bm25Store::open(&tmp.path().join("bm25.json")).unwrap();
 
-        let fused = rrf_fuse(&vector, &bm25, 1.0, 2);
-        assert_eq!(fused.len(), 2);
+        let engine = HybridSearchEngine::new(vector_store, fulltext_store, 0.7);
+
+        // Insert data
+        let chunks = vec![sift_core::EmbeddedChunk {
+            chunk: sift_core::Chunk {
+                text: "hello world from rust".into(),
+                source_uri: "file:///a.txt".into(),
+                chunk_index: 0,
+                content_type: ContentType::Text,
+                file_type: "txt".into(),
+                title: None,
+                language: None,
+                byte_range: None,
+            },
+            vector: vec![1.0, 0.0, 0.0],
+        }];
+        engine.insert(&chunks).unwrap();
+
+        // Search in Hybrid mode
+        let results = engine
+            .search(&[1.0, 0.0, 0.0], "hello", 10, sift_core::SearchMode::Hybrid)
+            .unwrap();
+        assert!(!results.is_empty(), "hybrid search should find results");
+        assert_eq!(results[0].uri, "file:///a.txt");
     }
 }

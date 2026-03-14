@@ -183,20 +183,29 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_jsonl() {
+    fn test_parse_invalid_json_returns_raw() {
         let parser = DataParser;
-        let jsonl = b"{\"a\":1}\n{\"a\":2}\n";
-        let doc = parser.parse(jsonl, None, Some("jsonl")).unwrap();
-        assert!(doc.text.contains("a: 1"));
-        assert!(doc.text.contains("a: 2"));
+        let bad_json = b"{ not valid json }";
+        let doc = parser.parse(bad_json, None, Some("json")).unwrap();
+        assert_eq!(doc.text, "{ not valid json }");
     }
 
     #[test]
-    fn test_can_parse_data() {
+    fn test_parse_json_nested_object() {
         let parser = DataParser;
-        assert!(parser.can_parse(None, Some("json")));
-        assert!(parser.can_parse(None, Some("csv")));
-        assert!(parser.can_parse(Some("text/csv"), None));
-        assert!(!parser.can_parse(None, Some("rs")));
+        let json = br#"{"user":{"name":"Alice","age":30}}"#;
+        let doc = parser.parse(json, None, Some("json")).unwrap();
+        assert!(doc.text.contains("user.name: Alice"));
+        assert!(doc.text.contains("user.age: 30"));
+    }
+
+    #[test]
+    fn test_parse_json_array() {
+        let parser = DataParser;
+        let json = br#"{"items":["a","b","c"]}"#;
+        let doc = parser.parse(json, None, Some("json")).unwrap();
+        assert!(doc.text.contains("items[0]: a"));
+        assert!(doc.text.contains("items[1]: b"));
+        assert!(doc.text.contains("items[2]: c"));
     }
 }

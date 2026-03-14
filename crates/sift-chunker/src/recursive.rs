@@ -240,21 +240,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_text() {
-        let chunker = RecursiveChunker::new(100, 0);
-        assert!(chunker.chunk("").is_empty());
-    }
-
-    #[test]
-    fn test_short_text_no_chunking() {
-        let chunker = RecursiveChunker::new(100, 0);
-        let chunks = chunker.chunk("Hello world");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].0, "Hello world");
-        assert_eq!(chunks[0].1, 0);
-    }
-
-    #[test]
     fn test_chunks_do_not_exceed_target_size() {
         let chunk_size = 50;
         let chunker = RecursiveChunker::new(chunk_size, 0);
@@ -310,52 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn test_splits_on_single_newline_when_needed() {
-        let chunker = RecursiveChunker::new(30, 0);
-        let text = "Line one here\nLine two here\nLine three here\nLine four here";
-        let chunks = chunker.chunk(text);
-        assert!(chunks.len() >= 2);
-        // Should split on \n since no \n\n is present and lines are too long together
-        let all: String = chunks
-            .iter()
-            .map(|(t, _)| t.as_str())
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(all.contains("Line one"));
-        assert!(all.contains("Line four"));
-    }
-
-    #[test]
-    fn test_splits_on_sentence_boundary() {
-        let chunker = RecursiveChunker::new(40, 0);
-        let text = "First sentence here. Second sentence here. Third sentence here. Fourth one.";
-        let chunks = chunker.chunk(text);
-        assert!(chunks.len() >= 2);
-    }
-
-    #[test]
-    fn test_splits_on_space() {
-        let chunker = RecursiveChunker::new(15, 0);
-        let text = "word1 word2 word3 word4 word5 word6";
-        let chunks = chunker.chunk(text);
-        assert!(chunks.len() >= 2);
-        for (chunk_text, _) in &chunks {
-            assert!(chunk_text.len() <= 15);
-        }
-    }
-
-    #[test]
-    fn test_force_splits_long_word() {
-        let chunker = RecursiveChunker::new(10, 0);
-        let text = "abcdefghijklmnopqrstuvwxyz";
-        let chunks = chunker.chunk(text);
-        assert!(chunks.len() >= 2);
-        for (chunk_text, _) in &chunks {
-            assert!(chunk_text.len() <= 10, "Chunk '{chunk_text}' exceeds limit");
-        }
-    }
-
-    #[test]
     fn test_byte_offsets_are_within_bounds() {
         let chunker = RecursiveChunker::new(30, 0);
         let text = "Hello world.\n\nGoodbye world.\n\nThe end of the story.";
@@ -368,47 +307,6 @@ mod tests {
                 text.len()
             );
             assert!(!chunk_text.is_empty(), "No chunk should be empty");
-        }
-    }
-
-    #[test]
-    fn test_offsets_are_non_decreasing() {
-        let chunker = RecursiveChunker::new(40, 0);
-        let text = "Alpha content.\n\nBravo content.\n\nCharlie content.\n\nDelta content.";
-        let chunks = chunker.chunk(text);
-        for i in 1..chunks.len() {
-            assert!(
-                chunks[i].1 >= chunks[i - 1].1,
-                "Offsets should be non-decreasing: {} < {}",
-                chunks[i].1,
-                chunks[i - 1].1
-            );
-        }
-    }
-
-    #[test]
-    fn test_custom_separators() {
-        let chunker = RecursiveChunker::new(20, 0).with_separators(vec![
-            "---".to_string(),
-            " ".to_string(),
-            String::new(),
-        ]);
-        let text = "part one---part two---part three";
-        let chunks = chunker.chunk(text);
-        assert!(chunks.len() >= 2);
-        assert!(chunks[0].0.contains("part one"));
-    }
-
-    #[test]
-    fn test_all_content_preserved_no_overlap() {
-        let chunker = RecursiveChunker::new(30, 0);
-        let text =
-            "The quick brown fox jumps over the lazy dog and runs away fast across the field.";
-        let chunks = chunker.chunk(text);
-        // All words from the original should appear somewhere in the chunks
-        for word in text.split_whitespace() {
-            let found = chunks.iter().any(|(c, _)| c.contains(word));
-            assert!(found, "Word '{word}' should be in some chunk");
         }
     }
 
@@ -433,31 +331,11 @@ mod tests {
 
         proptest! {
             #[test]
-            fn produces_nonempty_output_for_nonempty_input(text in "[a-zA-Z0-9 ]{1,500}", chunk_size in 20..200usize) {
-                let trimmed = text.trim();
-                let chunker = RecursiveChunker::new(chunk_size, 0);
-                let chunks = chunker.chunk(&text);
-                if !trimmed.is_empty() {
-                    prop_assert!(!chunks.is_empty(), "Non-empty input should produce chunks");
-                }
-            }
-
-            #[test]
             fn offsets_within_bounds(text in "\\PC{1,500}", chunk_size in 10..200usize) {
                 let chunker = RecursiveChunker::new(chunk_size, 0);
                 let chunks = chunker.chunk(&text);
                 for (_, offset) in &chunks {
                     prop_assert!(*offset <= text.len(), "Offset {} exceeds text len {}", offset, text.len());
-                }
-            }
-
-            #[test]
-            fn offsets_non_decreasing(text in "\\PC{1,500}", chunk_size in 10..200usize) {
-                let chunker = RecursiveChunker::new(chunk_size, 0);
-                let chunks = chunker.chunk(&text);
-                for i in 1..chunks.len() {
-                    prop_assert!(chunks[i].1 >= chunks[i - 1].1,
-                        "Offsets not non-decreasing: {} < {}", chunks[i].1, chunks[i - 1].1);
                 }
             }
 

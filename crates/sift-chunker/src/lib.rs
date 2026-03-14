@@ -59,3 +59,32 @@ pub fn chunker_for_content_with_strategy(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunker_for_content_text_uses_semantic() {
+        let chunker = chunker_for_content(ContentType::Text, 512, 64);
+        assert_eq!(chunker.name(), "semantic");
+    }
+
+    #[test]
+    fn recursive_strategy_always_uses_recursive_chunker() {
+        for content_type in [
+            ContentType::Text,
+            ContentType::Code,
+            ContentType::Data,
+            ContentType::Image,
+        ] {
+            let chunker =
+                chunker_for_content_with_strategy(content_type, 512, 64, ChunkStrategy::Recursive);
+            assert_eq!(
+                chunker.name(),
+                "recursive",
+                "Recursive strategy should produce recursive chunker for {content_type:?}"
+            );
+        }
+    }
+}

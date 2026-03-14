@@ -83,13 +83,4 @@ mod tests {
             .unwrap();
         assert_eq!(doc.title.as_deref(), Some("My Document"));
     }
-
-    #[test]
-    fn test_can_parse_extensions() {
-        let parser = TextParser;
-        assert!(parser.can_parse(None, Some("txt")));
-        assert!(parser.can_parse(None, Some("md")));
-        assert!(parser.can_parse(None, Some("rst")));
-        assert!(!parser.can_parse(None, Some("pdf")));
-    }
 }

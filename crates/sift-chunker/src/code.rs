@@ -984,4 +984,346 @@ impl MyStruct {
         let result = prepend_scope_comment(text, &path);
         assert_eq!(result, "fn foo() {}");
     }
+
+    // ---------------------------------------------------------------
+    // Chunker trait: name() method
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_code_chunker_trait_name() {
+        let chunker = CodeChunker::new(500, 0);
+        let trait_obj: &dyn Chunker = &chunker;
+        assert_eq!(trait_obj.name(), "code");
+    }
+
+    #[test]
+    fn test_chunker_trait_chunk_falls_back_to_semantic() {
+        let chunker = CodeChunker::new(50, 0);
+        let trait_obj: &dyn Chunker = &chunker;
+        // Without language info, Chunker::chunk falls back to semantic
+        let text = "First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph here.";
+        let chunks = trait_obj.chunk(text);
+        assert!(!chunks.is_empty());
+        let t = all_text(&chunks);
+        assert!(t.contains("First paragraph"));
+    }
+
+    // ---------------------------------------------------------------
+    // Overlap logic in merge_definitions (lines 96-105)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_overlap_in_merge_definitions() {
+        // Use overlap > 0 and enough functions to force splitting
+        let chunker = CodeChunker::new(80, 30);
+        let code = "\
+fn alpha() {
+    let x = 1;
+    let y = 2;
+}
+
+fn beta() {
+    let a = 10;
+    let b = 20;
+}
+
+fn gamma() {
+    let p = 100;
+    let q = 200;
+}
+";
+        let chunks = chunker.chunk_with_language(code, Some("rs"));
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks with small max_chunk_size, got {}",
+            chunks.len()
+        );
+        // All functions should be present across all chunks
+        let t = all_text(&chunks);
+        assert!(t.contains("fn alpha"));
+        assert!(t.contains("fn gamma"));
+    }
+
+    // ---------------------------------------------------------------
+    // Epilogue text after last definition (line 136)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_epilogue_after_last_definition() {
+        let chunker = CodeChunker::new(120, 0);
+        let code = "\
+fn main() {
+    println!(\"hello\");
+}
+
+// This is a long trailing comment that serves as an epilogue
+// and should be captured as a separate chunk if it's > 10 bytes
+";
+        let chunks = chunker.chunk_with_language(code, Some("rs"));
+        let t = all_text(&chunks);
+        assert!(t.contains("fn main"));
+        // The trailing comment may or may not become its own chunk
+        // depending on size, but the test exercises the epilogue path
+    }
+
+    // ---------------------------------------------------------------
+    // No definitions found -> fallback (line 60)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_no_definitions_falls_back_to_semantic() {
+        // Use Rust parser but content that has no recognized definitions
+        // (just use statements that exceed chunk size)
+        let chunker = CodeChunker::new(60, 0);
+        let code = "\
+use std::io;
+use std::fs;
+use std::path::Path;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::cell::RefCell;
+";
+        let chunks = chunker.chunk_with_language(code, Some("rs"));
+        assert!(!chunks.is_empty());
+        let t = all_text(&chunks);
+        assert!(t.contains("use std::io"));
+    }
+
+    // ---------------------------------------------------------------
+    // find_line_start (lines 457-462)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_find_line_start_at_beginning() {
+        assert_eq!(find_line_start("hello\nworld", 0), 0);
+    }
+
+    #[test]
+    fn test_find_line_start_within_first_line() {
+        // pos=3 in "hello\nworld" => no newline before pos, so returns 0
+        assert_eq!(find_line_start("hello\nworld", 3), 0);
+    }
+
+    #[test]
+    fn test_find_line_start_within_second_line() {
+        // pos=8 in "hello\nworld" => newline at 5, so line starts at 6
+        assert_eq!(find_line_start("hello\nworld", 8), 6);
+    }
+
+    #[test]
+    fn test_find_line_start_at_newline() {
+        // pos=5 is the newline itself in "hello\nworld"
+        // search in text[..5] = "hello", no newline found -> 0
+        assert_eq!(find_line_start("hello\nworld", 5), 0);
+    }
+
+    #[test]
+    fn test_find_line_start_past_end() {
+        // pos beyond text.len() should be clamped
+        let text = "abc\ndef";
+        let result = find_line_start(text, 100);
+        assert_eq!(result, 4); // newline at 3, so line starts at 4
+    }
+
+    // ---------------------------------------------------------------
+    // build_scope_header with empty scope_paths (line 439)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_build_scope_header_empty_paths() {
+        let defs = vec![Definition {
+            start_byte: 0,
+            end_byte: 10,
+            scope_path: None,
+        }];
+        let result = build_scope_header(&defs, &[0]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_build_scope_header_single_path() {
+        let defs = vec![Definition {
+            start_byte: 0,
+            end_byte: 10,
+            scope_path: Some("fn foo".to_string()),
+        }];
+        let result = build_scope_header(&defs, &[0]);
+        assert_eq!(result.unwrap(), "fn foo");
+    }
+
+    #[test]
+    fn test_build_scope_header_multiple_paths() {
+        let defs = vec![
+            Definition {
+                start_byte: 0,
+                end_byte: 10,
+                scope_path: Some("fn foo".to_string()),
+            },
+            Definition {
+                start_byte: 10,
+                end_byte: 20,
+                scope_path: Some("fn bar".to_string()),
+            },
+        ];
+        let result = build_scope_header(&defs, &[0, 1]);
+        assert_eq!(result.unwrap(), "fn foo, fn bar");
+    }
+
+    // ---------------------------------------------------------------
+    // prepend_scope_comment with empty string path
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_prepend_scope_comment_with_empty_path() {
+        let text = "fn foo() {}";
+        let path = Some(String::new());
+        let result = prepend_scope_comment(text, &path);
+        // Empty path should not prepend anything
+        assert_eq!(result, "fn foo() {}");
+    }
+
+    // ---------------------------------------------------------------
+    // is_method_like coverage (line 252)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_is_method_like_known_kinds() {
+        assert!(is_method_like("function_item"));
+        assert!(is_method_like("function_definition"));
+        assert!(is_method_like("function_declaration"));
+        assert!(is_method_like("method_definition"));
+        assert!(is_method_like("method_declaration"));
+        assert!(is_method_like("constructor_declaration"));
+    }
+
+    #[test]
+    fn test_is_method_like_unknown_kinds() {
+        assert!(!is_method_like("struct_item"));
+        assert!(!is_method_like("unknown"));
+        assert!(!is_method_like(""));
+    }
+
+    // ---------------------------------------------------------------
+    // is_container_node coverage
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_is_container_node_known_kinds() {
+        assert!(is_container_node("impl_item"));
+        assert!(is_container_node("trait_item"));
+        assert!(is_container_node("mod_item"));
+        assert!(is_container_node("class_definition"));
+        assert!(is_container_node("class_declaration"));
+        assert!(is_container_node("interface_declaration"));
+        assert!(is_container_node("enum_declaration"));
+    }
+
+    #[test]
+    fn test_is_container_node_unknown_kinds() {
+        assert!(!is_container_node("function_item"));
+        assert!(!is_container_node(""));
+    }
+
+    // ---------------------------------------------------------------
+    // Python decorated definitions (lines 318-324)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_python_decorated_definition_scope_path() {
+        let chunker = CodeChunker::new(80, 0);
+        let code = "\
+import os
+
+@staticmethod
+def decorated_func(x):
+    return x * 2
+
+def another_func():
+    pass
+
+def yet_another():
+    return 42
+";
+        let chunks = chunker.chunk_with_language(code, Some("py"));
+        assert!(!chunks.is_empty());
+        let t = all_text(&chunks);
+        // The decorated function should still be found
+        assert!(t.contains("decorated_func") || t.contains("another_func"));
+    }
+
+    // ---------------------------------------------------------------
+    // TypeScript/JS export statement (line 334)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_js_export_statement_scope() {
+        let chunker = CodeChunker::new(120, 0);
+        let code = "\
+export const API_URL = 'https://api.example.com/very/long/url/endpoint';
+
+export function fetchData(id) {
+    return fetch(API_URL + '/' + id);
+}
+
+export function processData(data) {
+    return data.map(x => x * 2);
+}
+";
+        let chunks = chunker.chunk_with_language(code, Some("js"));
+        assert!(!chunks.is_empty());
+        let t = all_text(&chunks);
+        assert!(t.contains("fetchData") || t.contains("processData"));
+    }
+
+    // ---------------------------------------------------------------
+    // Rust generic type in impl (lines 368-369)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_rust_impl_with_generic_type() {
+        let chunker = CodeChunker::new(120, 0);
+        let code = "\
+struct Wrapper<T> {
+    inner: T,
+}
+
+impl<T> Wrapper<T> {
+    fn new(inner: T) -> Self {
+        Wrapper { inner }
+    }
+}
+
+fn standalone() {
+    let x = 1;
+}
+";
+        let chunks = chunker.chunk_with_language(code, Some("rs"));
+        assert!(!chunks.is_empty());
+        let t = all_text(&chunks);
+        assert!(t.contains("Wrapper"));
+    }
+
+    // ---------------------------------------------------------------
+    // Large code that triggers sub-chunking of oversized chunks
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_oversized_definition_gets_sub_chunked() {
+        let chunker = CodeChunker::new(80, 0);
+        // Create a function with a very long body
+        let mut code = String::from("fn tiny() { let t = 1; }\n\nfn huge() {\n");
+        for i in 0..30 {
+            use std::fmt::Write as FmtWrite;
+            writeln!(code, "    let var_{i} = {i};").unwrap();
+        }
+        code.push_str("}\n\nfn small() { let s = 2; }\n");
+
+        let chunks = chunker.chunk_with_language(&code, Some("rs"));
+        assert!(
+            chunks.len() >= 3,
+            "Expected oversized function to be sub-chunked, got {} chunks",
+            chunks.len()
+        );
+    }
 }

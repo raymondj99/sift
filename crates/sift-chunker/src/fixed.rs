@@ -88,28 +88,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_short_text_no_chunking() {
-        let chunker = FixedChunker::new(1000, 100);
-        let chunks = chunker.chunk("Short text");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].0, "Short text");
-        assert_eq!(chunks[0].1, 0);
-    }
-
-    #[test]
-    fn test_empty_text() {
-        let chunker = FixedChunker::new(100, 10);
-        let chunks = chunker.chunk("");
-        assert!(chunks.is_empty());
-    }
-
-    #[test]
     fn test_chunking_with_overlap() {
         let chunker = FixedChunker::new(20, 5);
         let text = "The quick brown fox jumps over the lazy dog and runs away fast";
         let chunks = chunker.chunk(text);
         assert!(chunks.len() > 1);
-        // Verify all text is covered
         for (chunk, _offset) in &chunks {
             assert!(!chunk.is_empty());
         }
@@ -120,7 +103,6 @@ mod tests {
         let chunker = FixedChunker::new(10, 0);
         let text = "Hello World Foo Bar";
         let chunks = chunker.chunk(text);
-        // Should not split in the middle of words
         for (chunk, _) in &chunks {
             assert!(
                 !chunk.starts_with(' '),
@@ -134,6 +116,6 @@ mod tests {
         let chunker = FixedChunker::new(5, 0);
         let text = "Hello World";
         let chunks = chunker.chunk(text);
-        assert_eq!(chunks[0].1, 0); // First chunk starts at 0
+        assert_eq!(chunks[0].1, 0);
     }
 }

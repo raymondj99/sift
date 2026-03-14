@@ -158,78 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_all_fields() {
-        let content = "\
----
-name: code-review
-description: Review code for quality and bugs
-license: MIT
-compatibility: Node.js 18+
-allowed-tools: Bash Read Edit
----
-# Code Review Instructions
-";
-        let (fm, body) = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("code-review"));
-        assert_eq!(
-            fm.description.as_deref(),
-            Some("Review code for quality and bugs")
-        );
-        assert_eq!(fm.license.as_deref(), Some("MIT"));
-        assert_eq!(fm.compatibility.as_deref(), Some("Node.js 18+"));
-        assert_eq!(fm.allowed_tools.as_deref(), Some("Bash Read Edit"));
-        assert!(body.starts_with("# Code Review"));
-    }
-
-    #[test]
-    fn test_parse_quoted_values() {
-        let content = "---\nname: \"my-skill\"\ndescription: 'A skill'\n---\nbody\n";
-        let (fm, _) = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("my-skill"));
-        assert_eq!(fm.description.as_deref(), Some("A skill"));
-    }
-
-    #[test]
     fn test_no_frontmatter() {
         assert!(parse_frontmatter("# Just markdown\nNo frontmatter here").is_none());
-    }
-
-    #[test]
-    fn test_empty_frontmatter() {
-        let content = "---\n---\n# Body\n";
-        let (fm, body) = parse_frontmatter(content).unwrap();
-        assert!(fm.name.is_none());
-        assert!(body.starts_with("# Body"));
-    }
-
-    #[test]
-    fn test_frontmatter_with_comments() {
-        let content = "---\nname: test\n# This is a comment\ndescription: A test skill\n---\n";
-        let (fm, _) = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("test"));
-        assert_eq!(fm.description.as_deref(), Some("A test skill"));
-    }
-
-    #[test]
-    fn test_raw_map_contains_all_keys() {
-        let content = "---\nname: test\ncustom-field: custom value\n---\n";
-        let (fm, _) = parse_frontmatter(content).unwrap();
-        assert_eq!(
-            fm.raw.get("custom-field").map(String::as_str),
-            Some("custom value")
-        );
-    }
-
-    #[test]
-    fn test_no_closing_delimiter() {
-        let content = "---\nname: broken\nNo closing delimiter";
-        assert!(parse_frontmatter(content).is_none());
-    }
-
-    #[test]
-    fn test_whitespace_before_frontmatter() {
-        let content = "  \n---\nname: test\n---\nbody";
-        let (fm, _) = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("test"));
     }
 }

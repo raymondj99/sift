@@ -74,3 +74,67 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{with_home, HOME_MUTEX};
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_config_set_default_model() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            config.ensure_dirs().unwrap();
+            assert!(run(
+                &config,
+                Some("default.model".into()),
+                Some("custom-model".into())
+            )
+            .is_ok());
+        });
+    }
+
+    #[test]
+    fn test_config_set_invalid_chunk_size_errors() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let result = run(
+                &config,
+                Some("default.chunk_size".into()),
+                Some("not_a_number".into()),
+            );
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn test_config_set_unknown_key_errors() {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let result = run(&config, Some("unknown.key".into()), Some("value".into()));
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("Unknown config key"),
+                "expected 'Unknown config key' in: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_config_value_without_key_errors() {
+        // (None, Some(value)) is not a valid invocation
+        let config = sift_core::Config::default();
+        let result = run(&config, None, Some("value".into()));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Must specify a key"));
+    }
+}

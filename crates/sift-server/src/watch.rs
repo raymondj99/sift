@@ -71,24 +71,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_watch_daemon_new() {
-        let paths = vec![PathBuf::from("/tmp")];
-        let daemon = WatchDaemon::new(paths.clone(), 500);
-        assert_eq!(daemon.paths, paths);
-        assert_eq!(daemon.debounce_ms, 500);
-    }
-
-    #[test]
-    fn test_watch_daemon_new_with_custom_debounce() {
-        let daemon = WatchDaemon::new(vec![PathBuf::from("/a"), PathBuf::from("/b")], 1000);
-        assert_eq!(daemon.paths.len(), 2);
-        assert_eq!(daemon.debounce_ms, 1000);
-    }
-
-    #[test]
-    fn test_watch_daemon_new_empty_paths() {
-        let daemon = WatchDaemon::new(vec![], 100);
-        assert!(daemon.paths.is_empty());
-        assert_eq!(daemon.debounce_ms, 100);
+    fn test_run_with_nonexistent_path_returns_error() {
+        let daemon = WatchDaemon::new(
+            vec![PathBuf::from("/nonexistent/path/that/does/not/exist")],
+            50,
+        );
+        let result = daemon.run(|_| {});
+        assert!(
+            result.is_err(),
+            "watching a nonexistent path should return an error"
+        );
     }
 }

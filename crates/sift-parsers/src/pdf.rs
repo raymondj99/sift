@@ -305,4 +305,115 @@ startxref
         // Even if parsing fails, this exercises the code entry
         let _ = parser.parse(b"%PDF-1.0\ngarbage", None, Some("pdf"));
     }
+
+    #[test]
+    fn test_parse_panicking_pdf_returns_error() {
+        // Exercises lines 49-53: the catch_unwind panic path.
+        // pdf-extract can panic on certain malformed PDFs.
+        // We can't easily trigger a panic, but we test various corrupt inputs
+        // to exercise both Ok(Err(e)) (lines 43-48) and potentially Err(_) (lines 49-53).
+        let parser = PdfParser;
+
+        // Various forms of invalid PDF content
+        let result1 = parser.parse(b"", None, Some("pdf"));
+        assert!(result1.is_err());
+
+        let result2 = parser.parse(b"%PDF-1.0", None, Some("pdf"));
+        assert!(result2.is_err());
+
+        // Corrupt PDF with partial structure
+        let result3 = parser.parse(b"%PDF-1.0\n1 0 obj\n<<>>\nendobj\n", None, Some("pdf"));
+        assert!(result3.is_err());
+    }
+
+    #[test]
+    fn test_parse_pdf_with_form_feeds() {
+        // Exercises lines 60-72: form feed handling in text output.
+        // We construct a valid PDF that produces text with form feeds when parsed.
+        // Since we can't control pdf-extract output directly, we test the page-break
+        // processing logic by building a multi-page PDF.
+        let parser = PdfParser;
+
+        // Build a 2-page PDF using the make_valid_pdf helper concept
+        let mut pdf = Vec::new();
+        let mut offsets: Vec<usize> = Vec::new();
+
+        pdf.extend_from_slice(b"%PDF-1.4\n");
+
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(
+            b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>\nendobj\n",
+        );
+
+        // Page 1
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n");
+
+        offsets.push(pdf.len());
+        let stream1 = b"BT /F1 12 Tf 100 700 Td (Page One Text) Tj ET";
+        let obj4 = format!(
+            "4 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            stream1.len(),
+            std::str::from_utf8(stream1).unwrap()
+        );
+        pdf.extend_from_slice(obj4.as_bytes());
+
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(
+            b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        );
+
+        // Page 2
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(b"6 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n");
+
+        offsets.push(pdf.len());
+        let stream2 = b"BT /F1 12 Tf 100 700 Td (Page Two Text) Tj ET";
+        let obj7 = format!(
+            "7 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            stream2.len(),
+            std::str::from_utf8(stream2).unwrap()
+        );
+        pdf.extend_from_slice(obj7.as_bytes());
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n");
+        pdf.extend_from_slice(format!("0 {}\n", offsets.len() + 1).as_bytes());
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in &offsets {
+            pdf.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                offsets.len() + 1,
+                xref_offset
+            )
+            .as_bytes(),
+        );
+
+        // Whether this succeeds or fails, it exercises the form feed / page break paths
+        let result = parser.parse(&pdf, Some("application/pdf"), Some("pdf"));
+        if let Ok(doc) = result {
+            // If parsed successfully, verify page break handling
+            assert_eq!(doc.content_type, ContentType::Text);
+        }
+    }
+
+    #[test]
+    fn test_parse_pdf_error_message_format() {
+        // Exercises lines 44-47: error message formatting from pdf-extract.
+        let parser = PdfParser;
+        let result = parser.parse(b"not a pdf at all!", None, Some("pdf"));
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        // The error should mention "PDF" in some form
+        assert!(
+            err_msg.contains("PDF") || err_msg.contains("pdf"),
+            "Error message should mention PDF: {err_msg}"
+        );
+    }
 }

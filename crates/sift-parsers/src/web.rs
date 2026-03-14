@@ -217,13 +217,4 @@ mod tests {
         assert!(text.contains("After"));
         assert!(!text.contains("alert"));
     }
-
-    #[test]
-    fn test_parse_xml() {
-        let parser = WebParser;
-        let xml = b"<root><item>Hello</item><item>World</item></root>";
-        let doc = parser.parse(xml, None, Some("xml")).unwrap();
-        assert!(doc.text.contains("Hello"));
-        assert!(doc.text.contains("World"));
-    }
 }

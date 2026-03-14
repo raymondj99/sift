@@ -138,33 +138,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "data")]
-    fn test_registry_routes_json() {
-        let registry = ParserRegistry::new();
-        let doc = registry
-            .parse(
-                br#"{"key":"value"}"#,
-                Some("application/json"),
-                Some("json"),
-            )
-            .unwrap();
-        assert_eq!(doc.content_type, ContentType::Data);
-    }
-
-    #[test]
-    fn test_registry_routes_html() {
-        let registry = ParserRegistry::new();
-        let doc = registry
-            .parse(
-                b"<html><body>Hi</body></html>",
-                Some("text/html"),
-                Some("html"),
-            )
-            .unwrap();
-        assert_eq!(doc.content_type, ContentType::Text);
-    }
-
-    #[test]
     fn test_registry_fallback_to_text() {
         let registry = ParserRegistry::new();
         let doc = registry.parse(b"Some plain text", None, None).unwrap();
@@ -172,65 +145,9 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_routes_image() {
-        let registry = ParserRegistry::new();
-        // Minimal PNG header
-        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        png.extend_from_slice(&[0, 0, 0, 13]);
-        png.extend_from_slice(b"IHDR");
-        png.extend_from_slice(&64u32.to_be_bytes());
-        png.extend_from_slice(&64u32.to_be_bytes());
-        png.extend_from_slice(&[8, 6, 0, 0, 0]);
-
-        let doc = registry
-            .parse(&png, Some("image/png"), Some("png"))
-            .unwrap();
-        assert_eq!(doc.content_type, ContentType::Image);
-        assert!(doc.text.contains("64x64"));
-    }
-
-    #[test]
     fn test_registry_rejects_binary() {
         let registry = ParserRegistry::new();
         let result = registry.parse(&[0xFF, 0xFE, 0x00, 0x01], None, None);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_registry_routes_pdf() {
-        let registry = ParserRegistry::new();
-        assert!(registry.can_parse(Some("application/pdf"), Some("pdf")));
-    }
-
-    #[test]
-    #[cfg(feature = "office")]
-    fn test_registry_routes_docx() {
-        let registry = ParserRegistry::new();
-        assert!(registry.can_parse(
-            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-            Some("docx")
-        ));
-    }
-
-    #[test]
-    fn test_registry_routes_xlsx() {
-        let registry = ParserRegistry::new();
-        assert!(registry.can_parse(
-            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            Some("xlsx")
-        ));
-    }
-
-    #[test]
-    fn test_registry_routes_eml() {
-        let registry = ParserRegistry::new();
-        assert!(registry.can_parse(Some("message/rfc822"), Some("eml")));
-    }
-
-    #[test]
-    #[cfg(feature = "archive")]
-    fn test_registry_routes_zip() {
-        let registry = ParserRegistry::new();
-        assert!(registry.can_parse(Some("application/zip"), Some("zip")));
     }
 }

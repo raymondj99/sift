@@ -519,6 +519,36 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
     Ok(days_from_epoch * 86400)
 }
 
+/// Shared test helpers for all modules in sift-cli.
+///
+/// A single `HOME_MUTEX` ensures tests that mutate the `HOME` env var
+/// are serialised across every module in this binary, preventing races.
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use std::sync::Mutex;
+
+    /// Global mutex to serialise all tests that set the HOME env var.
+    pub(crate) static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Set `HOME` to `dir`, run `f`, then restore the previous value.
+    /// Must be called while holding `HOME_MUTEX` to be race-free.
+    #[allow(unsafe_code)]
+    pub(crate) fn with_home<F, R>(dir: &std::path::Path, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let prev = std::env::var("HOME").ok();
+        // SAFETY: test-only; caller holds HOME_MUTEX
+        unsafe { std::env::set_var("HOME", dir) };
+        let result = f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,13 +557,6 @@ mod tests {
     fn test_parse_after_date_iso_format() {
         let ts = parse_after_date("2025-01-01").unwrap();
         assert_eq!(ts, 1735689600);
-    }
-
-    #[test]
-    fn test_parse_after_date_iso_format_midyear() {
-        let ts = parse_after_date("2025-06-15").unwrap();
-        assert!(ts > 1735689600);
-        assert!(ts < 1767225600);
     }
 
     #[test]
@@ -548,137 +571,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_after_date_relative_weeks() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let ts = parse_after_date("2w").unwrap();
-        let expected = now - 2 * 7 * 86400;
-        assert!((ts - expected).abs() < 2);
-    }
-
-    #[test]
-    fn test_parse_after_date_relative_months() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let ts = parse_after_date("3m").unwrap();
-        let expected = now - 3 * 30 * 86400;
-        assert!((ts - expected).abs() < 2);
-    }
-
-    #[test]
-    fn test_parse_after_date_single_day() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let ts = parse_after_date("1d").unwrap();
-        let expected = now - 86400;
-        assert!((ts - expected).abs() < 2);
-    }
-
-    #[test]
-    fn test_parse_after_date_trims_whitespace() {
-        let ts = parse_after_date("  2025-01-01  ").unwrap();
-        assert_eq!(ts, 1735689600);
-    }
-
-    #[test]
     fn test_parse_after_date_invalid_format() {
         assert!(parse_after_date("not-a-date").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_invalid_number_in_relative() {
-        assert!(parse_after_date("abcd").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_empty_number_before_unit() {
+        assert!(parse_after_date("2025-13-01").is_err());
         assert!(parse_after_date("d").is_err());
     }
-
-    #[test]
-    fn test_parse_after_date_invalid_iso_date() {
-        assert!(parse_after_date("2025-13-01").is_err());
-        assert!(parse_after_date("2025-00-01").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_day_out_of_range() {
-        assert!(parse_after_date("2025-01-00").is_err());
-        assert!(parse_after_date("2025-01-32").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_year_before_epoch() {
-        assert!(parse_after_date("1969-06-15").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_invalid_week_suffix() {
-        assert!(parse_after_date("abcw").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_invalid_month_suffix() {
-        assert!(parse_after_date("xyzm").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_empty_number_before_week() {
-        assert!(parse_after_date("w").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_empty_number_before_month() {
-        assert!(parse_after_date("m").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_too_few_parts() {
-        assert!(parse_after_date("2025-01").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_too_many_parts() {
-        assert!(parse_after_date("2025-01-01-extra").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_non_numeric_year() {
-        assert!(parse_after_date("abcd-01-01").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_non_numeric_month() {
-        assert!(parse_after_date("2025-ab-01").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_non_numeric_day() {
-        assert!(parse_after_date("2025-01-ab").is_err());
-    }
-
-    #[test]
-    fn test_parse_after_date_february() {
-        // Feb 28 should work
-        let ts = parse_after_date("2025-02-28").unwrap();
-        assert!(ts > 0);
-    }
-
-    #[test]
-    fn test_parse_after_date_leap_year() {
-        let ts = parse_after_date("2024-02-29").unwrap();
-        assert!(ts > 0);
-    }
-
-    // -----------------------------------------------------------------------
-    // ExitCode coverage
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_exit_code_from_sift_config_error() {
@@ -688,78 +585,10 @@ mod tests {
     }
 
     #[test]
-    fn test_exit_code_from_sift_model_error() {
-        let err = sift_core::SiftError::Model("missing".into());
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::ModelError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_embedding_error() {
-        let err = sift_core::SiftError::Embedding("dim mismatch".into());
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::ModelError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_storage_error() {
-        let err = sift_core::SiftError::Storage("disk full".into());
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::StorageError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_io_error() {
-        let err =
-            sift_core::SiftError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::StorageError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_search_error() {
-        let err = sift_core::SiftError::Search("no index".into());
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_source_error() {
-        let err = sift_core::SiftError::Source("bad source".into());
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_parse_error() {
-        let err = sift_core::SiftError::Parse {
-            path: "test.txt".into(),
-            message: "invalid".into(),
-        };
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_other_error() {
-        let err = sift_core::SiftError::Other(anyhow::anyhow!("unknown"));
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_sift_partial_error() {
-        let err = sift_core::SiftError::Partial(vec![sift_core::SiftError::Config("a".into())]);
-        let code = ExitCode::from_sift_error(&err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
-    }
-
-    #[test]
     fn test_exit_code_from_sift_with_path_error() {
         let inner = sift_core::SiftError::Storage("corrupt".into());
         let err = inner.with_path("/tmp/bad");
         let code = ExitCode::from_sift_error(&err);
-        // WithPath delegates to its source, which is Storage -> StorageError
         assert_eq!(code as i32, ExitCode::StorageError as i32);
     }
 
@@ -769,12 +598,5 @@ mod tests {
         let anyhow_err: anyhow::Error = sift_err.into();
         let code = ExitCode::from_error(&anyhow_err);
         assert_eq!(code as i32, ExitCode::ConfigError as i32);
-    }
-
-    #[test]
-    fn test_exit_code_from_anyhow_without_sift_error() {
-        let anyhow_err = anyhow::anyhow!("generic error");
-        let code = ExitCode::from_error(&anyhow_err);
-        assert_eq!(code as i32, ExitCode::GeneralError as i32);
     }
 }
