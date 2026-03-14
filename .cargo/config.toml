@@ -1,0 +1,12 @@
+[build]
+# sccache: caches rustc invocations across `cargo clean` runs.
+# First install: brew install sccache
+# Then uncomment the line below. Subsequent "cold" builds complete in <10s
+# because every dep compilation is a cache hit keyed on inputs + rustc version.
+# rustc-wrapper = "sccache"
+
+[target.aarch64-apple-darwin]
+# LLVM lld is not included in the brew LLVM package for arm64 (only clangd/clang).
+# The system Apple ld64 on Sequoia is already quite fast. If lld is ever
+# available, enable it here to get another 2-5s off the final link:
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]

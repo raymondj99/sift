@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 sift-core = { workspace = true }
-sift-store = { workspace = true, features = ["fulltext", "sqlite"] }
+sift-store = { workspace = true, features = ["fts5", "sqlite"] }
 
 axum = { workspace = true }
 tokio = { workspace = true, features = ["net"] }

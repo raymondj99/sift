@@ -13,6 +13,10 @@ path = "src/main.rs"
 
 [features]
 default = ["fts5", "sqlite", "documents", "data-formats", "archive", "fancy"]
+# Enable jemalloc allocator. Improves throughput in production but takes ~34s
+# to compile from C source, so it is NOT in the default dev feature set.
+# Enable for release/benchmarking: cargo build --release --features jemalloc
+jemalloc = ["dep:tikv-jemallocator"]
 # Coarse feature groups
 documents = ["pdf", "office", "epub"]
 data-formats = ["spreadsheets", "data"]
@@ -49,7 +53,7 @@ completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
 # Profiles
 standard = ["ast", "documents", "data-formats", "email", "archive", "fts5", "sqlite", "embeddings", "fancy"]
-full = ["standard", "serve", "mcp", "hnsw", "fulltext", "vision", "audio", "simd", "completions"]
+full = ["standard", "serve", "mcp", "hnsw", "fulltext", "vision", "audio", "simd", "completions", "jemalloc"]
 
 [dependencies]
 sift-core = { workspace = true }
@@ -80,7 +84,7 @@ ctrlc = { workspace = true }
 fs4 = { workspace = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
+tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

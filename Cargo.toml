@@ -11,6 +11,18 @@ members = [
     "crates/sift-server",
     "crates/sift-mcp",
 ]
+# Fast default build: excludes sift-server (pulls in tantivy ~43s) and
+# sift-embed (pulls in tokenizers+onig_sys ~20s). Use `cargo build --workspace`
+# or `cargo build -p sift-server` to build those explicitly.
+default-members = [
+    "crates/sift-cli",
+    "crates/sift-core",
+    "crates/sift-sources",
+    "crates/sift-parsers",
+    "crates/sift-chunker",
+    "crates/sift-store",
+    "crates/sift-mcp",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -43,7 +55,7 @@ indicatif = "0.17"
 colored = "2"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32" }
 tantivy = "0.22"
 usearch = "2"
 
@@ -53,7 +65,7 @@ tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 
 # Network
-ureq = "2"
+ureq = { version = "2", default-features = false, features = ["native-tls"] }
 
 # Web server
 axum = "0.8"
@@ -160,6 +172,14 @@ needless_raw_string_hashes = "allow"
 option_if_let_else = "allow"
 str_split_at_newline = "allow"
 ref_option = "allow"
+
+[profile.dev]
+# Line tables only — saves ~20-30% compile time vs full DWARF (debug = 2).
+# Full backtraces still work; you lose variable inspection in lldb/gdb.
+debug = 1
+# macOS: leave DWARF in .o files instead of running dsymutil at link time.
+# Dramatically speeds up the final link step.
+split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 opt-level = 1

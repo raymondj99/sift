@@ -7,11 +7,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sift_core::{Embedder, IndexStats, SearchMode};
-use sift_store::{HybridSearchEngine, MetadataStore, SimpleVectorStore, TantivyStore};
+use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
 use std::sync::Arc;
 
 pub struct AppState {
-    pub engine: HybridSearchEngine<SimpleVectorStore, TantivyStore>,
+    pub engine: HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
     pub metadata: MetadataStore,
     pub embedder: Option<Box<dyn Embedder>>,
 }
@@ -158,7 +158,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use http_body_util::BodyExt;
-    use sift_store::{HybridSearchEngine, MetadataStore, SimpleVectorStore, TantivyStore};
+    use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
     use tower::ServiceExt;
 
     struct TestHarness {
@@ -170,8 +170,8 @@ mod tests {
         fn new() -> Self {
             let dir = tempfile::TempDir::new().unwrap();
             let vector_store = SimpleVectorStore::new();
-            let tantivy_store = TantivyStore::open(dir.path()).unwrap();
-            let engine = HybridSearchEngine::new(vector_store, tantivy_store, 0.7);
+            let fts_store = DefaultFullTextStore::open(&dir.path().join("search.db")).unwrap();
+            let engine = HybridSearchEngine::new(vector_store, fts_store, 0.7);
             let metadata = MetadataStore::open_in_memory().unwrap();
 
             let state = Arc::new(AppState {
@@ -387,8 +387,8 @@ mod tests {
     fn harness_with_embedder() -> TestHarness {
         let dir = tempfile::TempDir::new().unwrap();
         let vector_store = SimpleVectorStore::new();
-        let tantivy_store = TantivyStore::open(dir.path()).unwrap();
-        let engine = HybridSearchEngine::new(vector_store, tantivy_store, 0.7);
+        let fts_store = DefaultFullTextStore::open(&dir.path().join("search.db")).unwrap();
+        let engine = HybridSearchEngine::new(vector_store, fts_store, 0.7);
         let metadata = MetadataStore::open_in_memory().unwrap();
 
         let state = Arc::new(AppState {
