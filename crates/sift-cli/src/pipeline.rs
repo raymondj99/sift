@@ -275,6 +275,9 @@ pub fn run_scan_pipeline(
 
     let chunk_size = config.default.chunk_size;
     let chunk_overlap = config.default.chunk_overlap;
+    let max_file_size = options
+        .max_file_size
+        .unwrap_or(config.default.max_file_size);
 
     // Build the rayon pool for the parse stage.
     let pool = rayon::ThreadPoolBuilder::new()
@@ -346,6 +349,19 @@ pub fn run_scan_pipeline(
                     if token.is_cancelled() {
                         return;
                     }
+                    // Guard against oversized files that may have bypassed
+                    // discovery filters (e.g. file grew between discover and read).
+                    if item.size > max_file_size {
+                        debug!(
+                            "Skipping {} (too large: {} bytes)",
+                            item.path.display(),
+                            item.size
+                        );
+                        atomic_errors.fetch_add(1, Ordering::Relaxed);
+                        pb.inc(1);
+                        return;
+                    }
+
                     // Read file content
                     let content = match std::fs::read(&item.path) {
                         Ok(c) => c,
@@ -590,7 +606,7 @@ fn embed_text_chunks_atomic(
                     .map(|&i| batch_chunks[i].text.as_str())
                     .collect();
 
-                let new_vectors = match emb.embed_batch(&texts_to_embed) {
+                let mut new_vectors = match emb.embed_batch(&texts_to_embed) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("Embedding failed for batch: {}. Using zero vectors.", e);
@@ -598,14 +614,19 @@ fn embed_text_chunks_atomic(
                     }
                 };
 
-                // Store new vectors in cache and fill in the gaps
-                let mut cache_batch: Vec<(&str, &[f32])> = Vec::new();
-                for (j, &idx) in need_embed.iter().enumerate() {
-                    cached_vectors[idx] = Some(new_vectors[j].clone());
-                    cache_batch.push((batch_chunks[idx].text.as_str(), &new_vectors[j]));
-                }
+                // Store new vectors in cache (borrows), then move into slots.
                 if let Some(ref cache) = cache {
+                    let cache_batch: Vec<(&str, &[f32])> = need_embed
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &idx)| {
+                            (batch_chunks[idx].text.as_str(), new_vectors[j].as_slice())
+                        })
+                        .collect();
                     cache.put_batch(&cache_batch);
+                }
+                for (j, &idx) in need_embed.iter().enumerate() {
+                    cached_vectors[idx] = Some(std::mem::take(&mut new_vectors[j]));
                 }
             }
 

@@ -155,47 +155,48 @@ impl RecursiveChunker {
         result
     }
 
-    /// Compute byte offsets for each chunk within the original text.
-    /// Because overlap prepends content from the previous chunk, we
-    /// search for the non-overlapping part of each chunk to determine
-    /// its position.
+    /// Compute byte offsets for each chunk by scanning through the original
+    /// text once with a cursor, rather than calling `text.find()` per chunk.
+    /// This is O(n) where n = text length, avoiding the previous O(n × m)
+    /// substring search.
     fn compute_offsets(&self, text: &str, chunks: &[String]) -> Vec<usize> {
+        if chunks.is_empty() {
+            return vec![];
+        }
+
         let mut offsets = Vec::with_capacity(chunks.len());
-        let mut search_from: usize = 0;
+        let mut cursor: usize = 0;
 
-        for chunk in chunks {
-            // For chunks with overlap, the "new" content starts after the
-            // overlap portion. But the byte offset should point to where
-            // this chunk's content begins in the original text.
-            // We find the chunk's non-overlap content in the source.
-            if self.chunk_overlap > 0 && !offsets.is_empty() {
-                // The overlap portion came from the previous chunk;
-                // the new content starts after `chunk_overlap` chars.
-                let chunk_chars: Vec<char> = chunk.chars().collect();
-                let new_start = self.chunk_overlap.min(chunk_chars.len());
-                let new_content: String = chunk_chars[new_start..].iter().collect();
-
-                if let Some(pos) = text[search_from..].find(&new_content) {
-                    let offset = search_from + pos;
-                    // The chunk actually starts `chunk_overlap` chars before
-                    // the new content. Compute byte offset of the overlap start.
-                    let byte_overlap: usize =
-                        chunk_chars[..new_start].iter().map(|c| c.len_utf8()).sum();
-                    let actual_offset = offset.saturating_sub(byte_overlap);
-                    offsets.push(actual_offset);
-                    search_from = offset;
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i == 0 || self.chunk_overlap == 0 {
+                // First chunk or no overlap: locate directly.
+                if let Some(pos) = text[cursor..].find(chunk.as_str()) {
+                    offsets.push(cursor + pos);
+                    cursor = cursor + pos + chunk.len();
                 } else {
-                    // Fallback: approximate from search_from
-                    offsets.push(search_from);
+                    offsets.push(cursor);
                 }
             } else {
-                // No overlap for the first chunk; find it directly.
-                if let Some(pos) = text[search_from..].find(chunk.as_str()) {
-                    offsets.push(search_from + pos);
-                    search_from = search_from + pos + chunk.len();
+                // With overlap: skip the overlap prefix and locate the new content.
+                // The new content starts after `chunk_overlap` chars of the overlap prefix.
+                let new_byte_start: usize = chunk
+                    .char_indices()
+                    .nth(self.chunk_overlap)
+                    .map_or(chunk.len(), |(idx, _)| idx);
+                let new_content = &chunk[new_byte_start..];
+
+                if !new_content.is_empty() {
+                    if let Some(pos) = text[cursor..].find(new_content) {
+                        let new_offset = cursor + pos;
+                        // The chunk starts `overlap` chars before the new content.
+                        let actual_offset = new_offset.saturating_sub(new_byte_start);
+                        offsets.push(actual_offset);
+                        cursor = new_offset;
+                    } else {
+                        offsets.push(cursor);
+                    }
                 } else {
-                    // Fallback: use current search position
-                    offsets.push(search_from);
+                    offsets.push(cursor);
                 }
             }
         }

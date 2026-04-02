@@ -41,12 +41,19 @@ pub fn run(
         (vec![0.0f32; 768], SearchMode::KeywordOnly)
     };
 
-    let mut results = engine.search(
-        &query_vector,
-        &options.query,
-        options.max_results,
-        effective_mode,
-    )?;
+    // Over-fetch when filters are active so post-filtering doesn't
+    // reduce the result count below max_results.
+    let has_filters = options.file_type.is_some()
+        || options.path_glob.is_some()
+        || options.after.is_some()
+        || options.threshold > 0.0;
+    let fetch_k = if has_filters {
+        options.max_results * 5
+    } else {
+        options.max_results
+    };
+
+    let mut results = engine.search(&query_vector, &options.query, fetch_k, effective_mode)?;
 
     // Apply threshold filter
     results.retain(|r| r.score >= options.threshold);
@@ -90,6 +97,9 @@ pub fn run(
         let allowed = metadata.uris_modified_after(after_ts)?;
         results.retain(|r| allowed.contains(&r.uri));
     }
+
+    // Truncate to requested max after all filters have been applied.
+    results.truncate(options.max_results);
 
     output::format_search_results(&results, format, options.context);
 
