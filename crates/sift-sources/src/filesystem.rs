@@ -181,9 +181,12 @@ impl Source for FilesystemSource {
                             .any(|ft| extension.as_deref() == Some(ft.as_str()));
                         if !ext_matches {
                             let ext_mime = FilesystemSource::mime_from_extension(path);
-                            let mime_matches = file_types
-                                .iter()
-                                .any(|ft| ext_mime.is_some_and(|m| m.contains(ft.as_str())));
+                            let mime_matches = file_types.iter().any(|ft| {
+                                ext_mime.is_some_and(|m| {
+                                    m.split(&['/', '-', '.', '+'][..])
+                                        .any(|seg| seg == ft.as_str())
+                                })
+                            });
                             if !mime_matches {
                                 return ignore::WalkState::Continue;
                             }
@@ -282,6 +285,44 @@ mod tests {
         let items = source.discover(&options).unwrap();
         assert_eq!(items.len(), 1);
         assert!(items[0].uri.contains("small.txt"));
+    }
+
+    #[test]
+    fn test_file_type_filter_exact_extension_match() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("code.rs"), "fn main() {}").unwrap();
+        fs::write(dir.path().join("notes.rst"), "=== Title ===").unwrap();
+        fs::write(dir.path().join("script.r"), "x <- 1").unwrap();
+
+        let source = FilesystemSource::new();
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            file_types: vec!["rs".to_string()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert_eq!(items.len(), 1, "only .rs should match, not .rst or .r");
+        assert!(items[0].uri.contains("code.rs"));
+    }
+
+    #[test]
+    fn test_file_type_filter_mime_segment_match() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("app.js"), "console.log('hi')").unwrap();
+        fs::write(dir.path().join("style.css"), "body {}").unwrap();
+
+        let source = FilesystemSource::new();
+        // "javascript" isn't a file extension but is a MIME segment in text/javascript
+        let options = ScanOptions {
+            paths: vec![dir.path().to_path_buf()],
+            file_types: vec!["javascript".to_string()],
+            ..Default::default()
+        };
+
+        let items = source.discover(&options).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].uri.contains("app.js"));
     }
 
     #[test]

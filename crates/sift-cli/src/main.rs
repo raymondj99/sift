@@ -145,6 +145,10 @@ enum Commands {
         /// Number of parallel workers (0 = auto)
         #[arg(short, long, default_value = "0", env = "SIFT_JOBS")]
         jobs: usize,
+
+        /// Remove index entries for files that no longer exist on disk
+        #[arg(long)]
+        prune: bool,
     },
 
     /// Semantic search across indexed data
@@ -372,6 +376,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             model,
             dry_run,
             jobs,
+            prune,
         } => {
             let options = sift_core::ScanOptions {
                 paths,
@@ -384,7 +389,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
                 dry_run,
                 jobs: if jobs == 0 { config.num_jobs() } else { jobs },
             };
-            commands::scan::run(&config, &options, model.as_deref(), format, cli.quiet)?;
+            commands::scan::run(&config, &options, model.as_deref(), format, cli.quiet, prune)?;
         }
 
         Commands::Search {

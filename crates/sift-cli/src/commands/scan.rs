@@ -4,6 +4,10 @@ use crate::{pipeline, OutputFormat};
 #[cfg(feature = "fancy")]
 use colored::*;
 use sift_core::{CancellationToken, Config, ScanOptions, SiftResult};
+use sift_store::FullTextStore;
+#[cfg(feature = "hnsw")]
+use sift_store::VectorIndex;
+use tracing::info;
 
 pub fn run(
     config: &Config,
@@ -11,6 +15,7 @@ pub fn run(
     model: Option<&str>,
     format: &OutputFormat,
     quiet: bool,
+    prune: bool,
 ) -> SiftResult<()> {
     if options.dry_run && !quiet && *format == OutputFormat::Human {
         println!("{}", "Dry run — no files will be indexed".yellow());
@@ -39,7 +44,7 @@ pub fn run(
     })
     .ok(); // best-effort; may fail if already registered
 
-    let stats = pipeline::run_scan_pipeline(
+    let mut stats = pipeline::run_scan_pipeline(
         config,
         options,
         &engine,
@@ -50,6 +55,23 @@ pub fn run(
         &token,
         quiet,
     )?;
+
+    // Prune stale entries (files deleted from disk since last scan)
+    if prune && !options.dry_run {
+        let stale = metadata.find_stale_sources()?;
+        if !stale.is_empty() {
+            info!("Pruning {} stale sources", stale.len());
+            for uri in &stale {
+                metadata.remove_source(uri)?;
+                engine.delete_by_uri(uri)?;
+            }
+            // Persist the pruned stores
+            let vector_path = config.index_dir()?.join("vectors.bin");
+            engine.vector_store.save(&vector_path)?;
+            engine.fulltext_store.flush()?;
+            stats.pruned = stale.len() as u64;
+        }
+    }
 
     match format {
         OutputFormat::Json => {
@@ -62,20 +84,22 @@ pub fn run(
                     "chunks": stats.chunks,
                     "errors": stats.errors,
                     "cache_hits": stats.cache_hits,
+                    "pruned": stats.pruned,
                     "file_types": stats.file_types,
                 })
             );
         }
         OutputFormat::Csv => {
-            println!("discovered,indexed,skipped,chunks,errors,cache_hits");
+            println!("discovered,indexed,skipped,chunks,errors,cache_hits,pruned");
             println!(
-                "{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{}",
                 stats.discovered,
                 stats.indexed,
                 stats.skipped,
                 stats.chunks,
                 stats.errors,
                 stats.cache_hits,
+                stats.pruned,
             );
         }
         OutputFormat::Human => {
@@ -98,6 +122,18 @@ pub fn run(
                             stats.errors.to_string().dimmed().to_string()
                         },
                     );
+
+                    if stats.pruned > 0 {
+                        println!(
+                            "  {} stale {} pruned",
+                            stats.pruned.to_string().yellow(),
+                            if stats.pruned == 1 {
+                                "source"
+                            } else {
+                                "sources"
+                            },
+                        );
+                    }
 
                     if stats.cache_hits > 0 {
                         println!(

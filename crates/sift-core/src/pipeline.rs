@@ -27,6 +27,7 @@ pub struct ScanStats {
     pub chunks: u64,
     pub errors: u64,
     pub cache_hits: u64,
+    pub pruned: u64,
     pub file_types: std::collections::HashMap<String, u64>,
 }
 
@@ -44,6 +45,7 @@ mod tests {
         assert_eq!(stats.chunks, 0);
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.cache_hits, 0);
+        assert_eq!(stats.pruned, 0);
         assert!(stats.file_types.is_empty());
     }
 
