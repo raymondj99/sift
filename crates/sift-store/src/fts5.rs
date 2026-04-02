@@ -116,14 +116,15 @@ impl FullTextStore for Fts5Store {
             .lock()
             .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
 
-        // bm25() returns negative scores (lower = more relevant).
-        // Negate for positive scores consistent with other stores.
+        // FTS5 `rank` is a pre-computed alias for bm25(), computed once per
+        // row instead of re-evaluating in both SELECT and ORDER BY.
+        // `rank` is negative (lower = more relevant), so we negate it.
         let mut stmt = conn
             .prepare(
-                "SELECT uri, text, chunk_index, content_type, file_type, title, -bm25(chunks_fts)
+                "SELECT uri, text, chunk_index, content_type, file_type, title, -rank
                  FROM chunks_fts
                  WHERE chunks_fts MATCH ?1
-                 ORDER BY bm25(chunks_fts)
+                 ORDER BY rank
                  LIMIT ?2",
             )
             .map_err(|e| sift_core::SiftError::Search(format!("FTS5 query error: {}", e)))?;

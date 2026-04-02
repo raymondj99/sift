@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["fts5", "sqlite"]
+default = ["fts5", "sqlite", "hnsw"]
 sqlite = ["sift-store/sqlite"]
 fts5 = ["sqlite", "sift-store/fts5"]
 fulltext = ["sift-store/fulltext"]

@@ -12,7 +12,7 @@ name = "sift"
 path = "src/main.rs"
 
 [features]
-default = ["fts5", "sqlite", "documents", "data-formats", "archive", "fancy"]
+default = ["fts5", "sqlite", "hnsw", "documents", "data-formats", "archive", "fancy"]
 # Enable jemalloc allocator. Improves throughput in production but takes ~34s
 # to compile from C source, so it is NOT in the default dev feature set.
 # Enable for release/benchmarking: cargo build --release --features jemalloc
@@ -52,7 +52,7 @@ mcp = ["dep:sift-mcp", "dep:tokio"]
 completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
 # Profiles
-standard = ["ast", "documents", "data-formats", "email", "archive", "fts5", "sqlite", "embeddings", "fancy"]
+standard = ["ast", "documents", "data-formats", "email", "archive", "fts5", "sqlite", "hnsw", "embeddings", "fancy"]
 full = ["standard", "serve", "mcp", "hnsw", "fulltext", "vision", "audio", "simd", "completions", "jemalloc"]
 
 [dependencies]

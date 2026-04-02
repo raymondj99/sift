@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sift_core::{IndexStats, SiftError, SiftResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct SourceRecord {
@@ -40,7 +40,7 @@ impl Inner {
 /// JSON-file-backed metadata store for tracking indexed sources.
 /// Used as a lightweight fallback when the `sqlite` feature is disabled.
 pub struct MetadataStore {
-    inner: Mutex<Inner>,
+    inner: RwLock<Inner>,
 }
 
 impl MetadataStore {
@@ -55,7 +55,7 @@ impl MetadataStore {
         };
 
         Ok(Self {
-            inner: Mutex::new(Inner {
+            inner: RwLock::new(Inner {
                 data,
                 path: Some(path.to_path_buf()),
             }),
@@ -64,7 +64,7 @@ impl MetadataStore {
 
     pub fn open_in_memory() -> SiftResult<Self> {
         Ok(Self {
-            inner: Mutex::new(Inner {
+            inner: RwLock::new(Inner {
                 data: StoreData::default(),
                 path: None,
             }),
@@ -74,7 +74,7 @@ impl MetadataStore {
     pub fn check_source(&self, uri: &str, content_hash: &[u8; 32]) -> SiftResult<Option<bool>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         match inner.data.sources.get(uri) {
@@ -94,7 +94,7 @@ impl MetadataStore {
     ) -> SiftResult<()> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         let now = std::time::SystemTime::now()
@@ -119,7 +119,7 @@ impl MetadataStore {
     pub fn remove_source(&self, uri: &str) -> SiftResult<bool> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         let existed = inner.data.sources.remove(uri).is_some();
@@ -132,7 +132,7 @@ impl MetadataStore {
     pub fn stats(&self) -> SiftResult<IndexStats> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         let total_sources = inner.data.sources.len() as u64;
@@ -161,7 +161,7 @@ impl MetadataStore {
     pub fn list_sources(&self) -> SiftResult<Vec<(String, String, u32)>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         let mut sources: Vec<(String, String, u32)> = inner
@@ -193,7 +193,7 @@ impl MetadataStore {
     pub fn set_meta(&self, key: &str, value: &str) -> SiftResult<()> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         inner.data.meta.insert(key.to_string(), value.to_string());
@@ -203,7 +203,7 @@ impl MetadataStore {
     pub fn get_meta(&self, key: &str) -> SiftResult<Option<String>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         Ok(inner.data.meta.get(key).cloned())
@@ -215,7 +215,7 @@ impl MetadataStore {
     ) -> SiftResult<std::collections::HashSet<String>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| SiftError::Storage(format!("Lock error: {}", e)))?;
 
         let uris = inner

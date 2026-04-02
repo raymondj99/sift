@@ -4,6 +4,11 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// SQLite-backed metadata store for tracking indexed sources.
+///
+/// Uses a single [`Mutex`]-protected connection.  `rusqlite::Connection` is
+/// `Send` but **not** `Sync` (it contains `RefCell`), so `RwLock` is not
+/// an option.  For concurrent readers, a connection pool (multiple WAL-mode
+/// connections) would be the next step.
 pub struct MetadataStore {
     conn: Mutex<Connection>,
 }
