@@ -259,10 +259,12 @@ mod tests {
 
     #[test]
     fn test_notebook_skips_raw_cells() {
-        let nb = make_notebook(r#"[
+        let nb = make_notebook(
+            r#"[
             {"cell_type": "raw", "source": "raw content", "metadata": {}},
             {"cell_type": "code", "source": "x = 1\n", "outputs": [], "metadata": {}}
-        ]"#);
+        ]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(!doc.text.contains("raw content"));
@@ -272,10 +274,12 @@ mod tests {
 
     #[test]
     fn test_notebook_skips_empty_source() {
-        let nb = make_notebook(r#"[
+        let nb = make_notebook(
+            r#"[
             {"cell_type": "code", "source": "", "outputs": [], "metadata": {}},
             {"cell_type": "code", "source": "y = 2\n", "outputs": [], "metadata": {}}
-        ]"#);
+        ]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.text.contains("y = 2"));
@@ -284,14 +288,16 @@ mod tests {
 
     #[test]
     fn test_notebook_execute_result_output() {
-        let nb = make_notebook(r#"[{
+        let nb = make_notebook(
+            r#"[{
             "cell_type": "code",
             "source": "42\n",
             "outputs": [
                 {"output_type": "execute_result", "data": {"text/plain": "42"}, "metadata": {}}
             ],
             "metadata": {}
-        }]"#);
+        }]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.text.contains("42"));
@@ -300,12 +306,14 @@ mod tests {
 
     #[test]
     fn test_notebook_array_source() {
-        let nb = make_notebook(r#"[{
+        let nb = make_notebook(
+            r#"[{
             "cell_type": "code",
             "source": ["line1\n", "line2\n"],
             "outputs": [],
             "metadata": {}
-        }]"#);
+        }]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.text.contains("line1"));
@@ -314,14 +322,16 @@ mod tests {
 
     #[test]
     fn test_notebook_array_output_text() {
-        let nb = make_notebook(r#"[{
+        let nb = make_notebook(
+            r#"[{
             "cell_type": "code",
             "source": "code\n",
             "outputs": [
                 {"output_type": "stream", "name": "stdout", "text": ["line A\n", "line B\n"]}
             ],
             "metadata": {}
-        }]"#);
+        }]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.text.contains("line A"));
@@ -337,10 +347,12 @@ mod tests {
 
     #[test]
     fn test_notebook_multiple_cells_spacing() {
-        let nb = make_notebook(r#"[
+        let nb = make_notebook(
+            r#"[
             {"cell_type": "code", "source": "a = 1\n", "outputs": [], "metadata": {}},
             {"cell_type": "code", "source": "b = 2\n", "outputs": [], "metadata": {}}
-        ]"#);
+        ]"#,
+        );
         let parser = NotebookParser;
         let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
         assert!(doc.text.contains("a = 1"));

@@ -347,7 +347,7 @@ mod tests {
     fn test_parse_jpeg_dimensions() {
         // Build a minimal JPEG with SOF0 marker: FFD8 ... FFC0 (len)(precision)(h=64)(w=128)
         let mut jpeg = vec![0xFF, 0xD8]; // SOI
-        // APP0 marker (filler) — length 0x0004 means 4 bytes including the length field
+                                         // APP0 marker (filler) — length 0x0004 means 4 bytes including the length field
         jpeg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00]);
         // SOF0 marker with enough data: marker(2) + len(2) + precision(1) + h(2) + w(2) + padding
         jpeg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
@@ -450,7 +450,8 @@ mod tests {
 
         // BMP
         let mut bmp = vec![0u8; 26];
-        bmp[0] = b'B'; bmp[1] = b'M';
+        bmp[0] = b'B';
+        bmp[1] = b'M';
         bmp[18..22].copy_from_slice(&100u32.to_le_bytes());
         bmp[22..26].copy_from_slice(&100u32.to_le_bytes());
         let doc = parser.parse(&bmp, Some("image/bmp"), Some("bmp")).unwrap();

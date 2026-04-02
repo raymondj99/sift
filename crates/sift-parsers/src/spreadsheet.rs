@@ -316,7 +316,7 @@ mod tests {
         assert!(is_cell_empty(&Data::String(String::new())));
         assert!(!is_cell_empty(&Data::String("hello".into())));
         assert!(!is_cell_empty(&Data::Int(42)));
-        assert!(!is_cell_empty(&Data::Float(3.14)));
+        assert!(!is_cell_empty(&Data::Float(2.78)));
         assert!(!is_cell_empty(&Data::Bool(true)));
     }
 
@@ -339,8 +339,8 @@ mod tests {
         assert_eq!(out, "3"); // whole number float formats as int
 
         out.clear();
-        write_cell(&mut out, &Data::Float(3.14));
-        assert_eq!(out, "3.14");
+        write_cell(&mut out, &Data::Float(2.78));
+        assert_eq!(out, "2.78");
 
         out.clear();
         write_cell(&mut out, &Data::Bool(true));

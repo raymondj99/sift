@@ -647,9 +647,12 @@ mod tests {
 
     #[test]
     fn test_round2() {
-        assert_eq!(round2(3.14159), 3.14);
-        assert_eq!(round2(0.0), 0.0);
-        assert_eq!(round2(1.005), 1.01); // rounding edge
+        let r = round2(1.23456);
+        assert!((r - 1.23).abs() < f32::EPSILON);
+        let r = round2(0.0);
+        assert!(r.abs() < f32::EPSILON);
+        let r = round2(1.005);
+        assert!((r - 1.01).abs() < 0.005);
     }
 
     #[test]

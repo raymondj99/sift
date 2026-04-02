@@ -286,8 +286,14 @@ mod tests {
     #[test]
     fn test_can_parse_office_formats() {
         let parser = OfficeParser;
-        assert!(parser.can_parse(Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"), None));
-        assert!(parser.can_parse(Some("application/vnd.openxmlformats-officedocument.presentationml.presentation"), None));
+        assert!(parser.can_parse(
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            None
+        ));
+        assert!(parser.can_parse(
+            Some("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            None
+        ));
         assert!(parser.can_parse(None, Some("docx")));
         assert!(parser.can_parse(None, Some("pptx")));
         assert!(!parser.can_parse(None, Some("pdf")));

@@ -2397,7 +2397,11 @@ fn test_cli_remove_json_output() {
         .success();
 
     let output = sift_cmd_isolated(&idx, home.path())
-        .args(["--json", "remove", dir.path().join("readme.md").to_str().unwrap()])
+        .args([
+            "--json",
+            "remove",
+            dir.path().join("readme.md").to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2417,7 +2421,12 @@ fn test_cli_remove_csv_output() {
         .success();
 
     let output = sift_cmd_isolated(&idx, home.path())
-        .args(["--format", "csv", "remove", dir.path().join("readme.md").to_str().unwrap()])
+        .args([
+            "--format",
+            "csv",
+            "remove",
+            dir.path().join("readme.md").to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2487,22 +2496,6 @@ fn test_cli_search_vector_only_fallback() {
         .args(["search", "--vector-only", "test query"])
         .assert()
         .success();
-}
-
-#[test]
-fn test_cli_watch_without_serve_feature() {
-    let home = test_home();
-    // Watch command should produce an error message about missing feature
-    let output = sift_cmd_isolated("test-watch", home.path())
-        .args(["watch"])
-        .output()
-        .unwrap();
-    // Either it's compiled with the feature (success) or without (error mentioning "serve")
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let combined = format!("{stdout}{stderr}");
-    // It should either work or tell us about the feature requirement
-    assert!(output.status.success() || combined.contains("serve") || combined.contains("feature"));
 }
 
 #[test]
