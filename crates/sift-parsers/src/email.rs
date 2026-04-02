@@ -272,4 +272,77 @@ mod tests {
             2
         );
     }
+
+    #[test]
+    fn test_can_parse_email_formats() {
+        let parser = EmailParser;
+        assert!(parser.can_parse(Some("message/rfc822"), None));
+        assert!(parser.can_parse(Some("application/mbox"), None));
+        assert!(parser.can_parse(None, Some("eml")));
+        assert!(parser.can_parse(None, Some("mbox")));
+        assert!(!parser.can_parse(None, Some("txt")));
+    }
+
+    #[test]
+    fn test_email_parser_name() {
+        assert_eq!(EmailParser.name(), "email");
+    }
+
+    #[test]
+    fn test_parse_eml_html_body_fallback() {
+        let parser = EmailParser;
+        // Email with only HTML body (no text/plain)
+        let eml = b"From: alice@example.com\r\nSubject: HTML Only\r\nContent-Type: text/html\r\n\r\n<html><body><p>Hello</p><p>World</p></body></html>\r\n";
+        let doc = parser.parse(eml, None, Some("eml")).unwrap();
+        assert!(doc.text.contains("Subject: HTML Only"));
+        assert!(doc.text.contains("Hello"));
+    }
+
+    #[test]
+    fn test_strip_html_tags() {
+        let result = strip_html_tags("<p>Hello</p><br><b>World</b>");
+        assert!(result.contains("Hello"));
+        assert!(result.contains("World"));
+        assert!(!result.contains('<'));
+    }
+
+    #[test]
+    fn test_strip_html_tags_whitespace() {
+        let result = strip_html_tags("<div>\n  <p>Text</p>\n  \n</div>");
+        // Should collapse blank lines and strip leading whitespace
+        assert!(result.contains("Text"));
+        assert!(!result.contains("div"));
+    }
+
+    #[test]
+    fn test_format_address_variants() {
+        use std::borrow::Cow;
+
+        let with_both = mail_parser::Addr::new(Some("Alice"), "alice@example.com");
+        assert_eq!(format_address(&with_both), "Alice <alice@example.com>");
+
+        let email_only = mail_parser::Addr::new(None::<&str>, "bob@example.com");
+        assert_eq!(format_address(&email_only), "bob@example.com");
+
+        let name_only = mail_parser::Addr {
+            name: Some(Cow::Borrowed("Carol")),
+            address: None,
+        };
+        assert_eq!(format_address(&name_only), "Carol");
+
+        let neither = mail_parser::Addr {
+            name: None,
+            address: None,
+        };
+        assert_eq!(format_address(&neither), "(unknown)");
+    }
+
+    #[test]
+    fn test_parse_mbox_empty_messages_skipped() {
+        let parser = EmailParser;
+        let mbox = b"From sender@example.com Mon Jan 01 12:00:00 2024\r\nFrom: alice@example.com\r\nSubject: Only One\r\n\r\nContent.\r\n\n\n\n";
+        let doc = parser.parse(mbox, None, Some("mbox")).unwrap();
+        assert!(doc.text.contains("Only One"));
+        assert_eq!(doc.metadata.get("message_count").unwrap(), "1");
+    }
 }

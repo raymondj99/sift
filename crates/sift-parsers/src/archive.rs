@@ -276,4 +276,100 @@ mod tests {
         assert!(doc.text.contains("--- file: hello.txt ---"));
         assert!(doc.text.contains("Hello from zip!"));
     }
+
+    #[test]
+    fn test_can_parse_archive_formats() {
+        let parser = ArchiveParser;
+        assert!(parser.can_parse(Some("application/zip"), None));
+        assert!(parser.can_parse(Some("application/x-tar"), None));
+        assert!(parser.can_parse(Some("application/gzip"), None));
+        assert!(parser.can_parse(None, Some("tar")));
+        assert!(parser.can_parse(None, Some("gz")));
+        assert!(parser.can_parse(None, Some("tgz")));
+        assert!(!parser.can_parse(None, Some("pdf")));
+    }
+
+    #[test]
+    fn test_archive_parser_name() {
+        assert_eq!(ArchiveParser.name(), "archive");
+    }
+
+    #[test]
+    fn test_parse_tar_gz() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let content = b"gzipped tar content";
+        let mut header = tar::Header::new_gnu();
+        header.set_path("file.txt").unwrap();
+        header.set_size(content.len() as u64);
+        header.set_cksum();
+        builder.append(&header, &content[..]).unwrap();
+        let tar_data = builder.into_inner().unwrap();
+
+        // Gzip compress the tar
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&tar_data).unwrap();
+        let gz_data = encoder.finish().unwrap();
+
+        let parser = ArchiveParser;
+        let doc = parser.parse(&gz_data, None, Some("tgz")).unwrap();
+        assert!(doc.text.contains("file.txt"));
+        assert!(doc.text.contains("gzipped tar content"));
+    }
+
+    #[test]
+    fn test_parse_gz_text() {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"plain gzipped text content").unwrap();
+        let gz_data = encoder.finish().unwrap();
+
+        let parser = ArchiveParser;
+        let doc = parser.parse(&gz_data, None, Some("gz")).unwrap();
+        assert!(doc.text.contains("plain gzipped text content"));
+    }
+
+    #[test]
+    fn test_parse_zip_with_binary_file() {
+        use std::io::Write;
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut writer = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        writer.start_file("data.bin", opts).unwrap();
+        writer.write_all(&[0xFF, 0xFE, 0x00, 0x01, 0x80]).unwrap();
+        writer.start_file("readme.txt", opts).unwrap();
+        writer.write_all(b"A text file").unwrap();
+        let data = writer.finish().unwrap().into_inner();
+
+        let parser = ArchiveParser;
+        let doc = parser.parse(&data, None, Some("zip")).unwrap();
+        assert!(doc.text.contains("readme.txt"));
+        assert!(doc.text.contains("A text file"));
+        assert!(doc.text.contains("binary"));
+    }
+
+    #[test]
+    fn test_parse_zip_with_directory() {
+        use std::io::Write;
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut writer = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        writer.add_directory("subdir/", opts).unwrap();
+        writer.start_file("subdir/file.txt", opts).unwrap();
+        writer.write_all(b"nested content").unwrap();
+        let data = writer.finish().unwrap().into_inner();
+
+        let parser = ArchiveParser;
+        let doc = parser.parse(&data, None, Some("zip")).unwrap();
+        assert!(doc.text.contains("nested content"));
+    }
+
+    #[test]
+    fn test_parse_invalid_zip() {
+        let parser = ArchiveParser;
+        let result = parser.parse(b"not a zip file", None, Some("zip"));
+        assert!(result.is_err());
+    }
 }

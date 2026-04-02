@@ -603,6 +603,27 @@ fn read_context_snippet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate the HOME env var.
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Run `f` with HOME pointed at `dir`, then restore.
+    #[allow(unsafe_code)]
+    fn with_home<F, R>(dir: &std::path::Path, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", dir) };
+        let result = f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        result
+    }
 
     #[test]
     fn test_truncate_text_long() {
@@ -622,5 +643,188 @@ mod tests {
     fn test_internal_err() {
         let err = internal_err("test error".into());
         assert_eq!(err.message, "test error");
+    }
+
+    #[test]
+    fn test_round2() {
+        assert_eq!(round2(3.14159), 3.14);
+        assert_eq!(round2(0.0), 0.0);
+        assert_eq!(round2(1.005), 1.01); // rounding edge
+    }
+
+    #[test]
+    fn test_truncate_text_short() {
+        let result = truncate_text("hi", 10);
+        assert_eq!(result, "hi");
+    }
+
+    #[test]
+    fn test_format_bytes_gb() {
+        let result = format_bytes(2 * 1024 * 1024 * 1024);
+        assert_eq!(result, "2.0GB");
+    }
+
+    #[test]
+    fn test_dir_size_computes_total() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "world!!").unwrap();
+        let size = dir_size(tmp.path());
+        assert_eq!(size, 12); // 5 + 7
+    }
+
+    #[test]
+    fn test_format_line_range_no_byte_range() {
+        let result = format_line_range(None, "/nonexistent");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_line_range_missing_file() {
+        let result = format_line_range(Some((0, 10)), "/nonexistent/file.txt");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_line_range_with_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("test.txt");
+        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let result = format_line_range(Some((6, 11)), path.to_str().unwrap());
+        assert!(!result.is_empty()); // Should produce "2-2" or similar
+    }
+
+    #[test]
+    fn test_read_context_snippet_missing_file() {
+        let result = read_context_snippet("file:///nonexistent.txt", Some((0, 10)), 2);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_context_snippet_no_byte_range() {
+        let result = read_context_snippet("file:///some/file.txt", None, 2);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_context_snippet_non_file_uri() {
+        let result = read_context_snippet("https://example.com", Some((0, 10)), 2);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_context_snippet_with_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("code.rs");
+        std::fs::write(&path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+        let uri = format!("file://{}", path.display());
+        let result = read_context_snippet(&uri, Some((0, 11)), 1);
+        assert!(result.is_some());
+        let snippet = result.unwrap();
+        assert!(snippet.contains("fn main()"));
+    }
+
+    #[test]
+    fn test_server_new_and_debug() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let debug = format!("{:?}", server);
+            assert!(debug.contains("SiftMcpServer"));
+        });
+    }
+
+    #[test]
+    fn test_server_clone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let cloned = server.clone();
+            let debug = format!("{:?}", cloned);
+            assert!(debug.contains("SiftMcpServer"));
+        });
+    }
+
+    #[test]
+    fn test_embed_query_fallback_to_keyword() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let (vec, mode) = server.embed_query("test query", SearchMode::Hybrid);
+            assert_eq!(mode, SearchMode::KeywordOnly);
+            assert_eq!(vec.len(), 768);
+            assert!(vec.iter().all(|&v| v == 0.0));
+        });
+    }
+
+    #[test]
+    fn test_embed_query_keyword_stays_keyword() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let (_, mode) = server.embed_query("test", SearchMode::KeywordOnly);
+            assert_eq!(mode, SearchMode::KeywordOnly);
+        });
+    }
+
+    #[test]
+    fn test_sift_status_empty_index() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let result = server.sift_status().unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["total_files"], 0);
+                assert_eq!(parsed["total_chunks"], 0);
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    #[test]
+    fn test_sift_search_empty_index() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchRequest {
+                query: "test query".to_string(),
+                limit: Some(5),
+                offset: None,
+                mode: Some("keyword".to_string()),
+                path: None,
+                file_type: None,
+                context: None,
+            };
+            let result = server.sift_search(Parameters(req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["total"], 0);
+                assert_eq!(parsed["query_mode"], "keyword");
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    #[test]
+    fn test_get_info() {
+        use rmcp::ServerHandler;
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let info = server.get_info();
+            assert!(info.instructions.is_some());
+        });
     }
 }

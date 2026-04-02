@@ -282,4 +282,81 @@ mod tests {
         assert!(text.contains("Slide Title"));
         assert!(text.contains("Bullet point one"));
     }
+
+    #[test]
+    fn test_can_parse_office_formats() {
+        let parser = OfficeParser;
+        assert!(parser.can_parse(Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"), None));
+        assert!(parser.can_parse(Some("application/vnd.openxmlformats-officedocument.presentationml.presentation"), None));
+        assert!(parser.can_parse(None, Some("docx")));
+        assert!(parser.can_parse(None, Some("pptx")));
+        assert!(!parser.can_parse(None, Some("pdf")));
+        assert!(!parser.can_parse(None, None));
+    }
+
+    #[test]
+    fn test_office_parser_name() {
+        let parser = OfficeParser;
+        assert_eq!(parser.name(), "office");
+    }
+
+    #[test]
+    fn test_parse_pptx_via_parser_trait() {
+        use std::io::{Cursor, Write};
+        let parser = OfficeParser;
+        // Build a minimal PPTX (ZIP with slide XML)
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("ppt/slides/slide1.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Title</a:t></a:r></a:p><a:p><a:r><a:t>Body text</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#).unwrap();
+        zip.start_file("ppt/slides/slide2.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#).unwrap();
+        let data = zip.finish().unwrap().into_inner();
+        let doc = parser.parse(&data, None, Some("pptx")).unwrap();
+        assert!(doc.text.contains("Title"));
+        assert!(doc.text.contains("Second slide"));
+        assert!(doc.text.contains("Slide 1"));
+        assert!(doc.text.contains("Slide 2"));
+    }
+
+    #[test]
+    fn test_parse_docx_via_parser_trait() {
+        use std::io::{Cursor, Write};
+        let parser = OfficeParser;
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("word/document.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>World</w:t></w:r></w:p><w:p><w:r><w:br/></w:r><w:r><w:t>Line two</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        let data = zip.finish().unwrap().into_inner();
+        let doc = parser.parse(&data, None, Some("docx")).unwrap();
+        assert!(doc.text.contains("Hello"));
+        assert!(doc.text.contains("World"));
+        assert!(doc.text.contains("Line two"));
+        assert_eq!(doc.content_type, ContentType::Text);
+    }
+
+    #[test]
+    fn test_parse_docx_missing_document_xml() {
+        use std::io::Cursor;
+        let parser = OfficeParser;
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("other.xml", opts).unwrap();
+        let data = zip.finish().unwrap().into_inner();
+        let result = parser.parse(&data, None, Some("docx"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_zip_as_docx() {
+        let parser = OfficeParser;
+        let result = parser.parse(b"not a zip", None, Some("docx"));
+        assert!(result.is_err());
+    }
 }

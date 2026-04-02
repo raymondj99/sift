@@ -297,4 +297,63 @@ mod tests {
         assert_eq!(doc.content_type, ContentType::Data);
         assert_eq!(doc.metadata.get("sheet_count").unwrap(), "1");
     }
+
+    #[test]
+    fn test_spreadsheet_parser_name() {
+        assert_eq!(SpreadsheetParser.name(), "spreadsheet");
+    }
+
+    #[test]
+    fn test_parse_invalid_spreadsheet() {
+        let parser = SpreadsheetParser;
+        let result = parser.parse(b"not a spreadsheet", None, Some("xlsx"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_cell_empty() {
+        assert!(is_cell_empty(&Data::Empty));
+        assert!(is_cell_empty(&Data::String(String::new())));
+        assert!(!is_cell_empty(&Data::String("hello".into())));
+        assert!(!is_cell_empty(&Data::Int(42)));
+        assert!(!is_cell_empty(&Data::Float(3.14)));
+        assert!(!is_cell_empty(&Data::Bool(true)));
+    }
+
+    #[test]
+    fn test_write_cell_types() {
+        let mut out = String::new();
+        write_cell(&mut out, &Data::Empty);
+        assert!(out.is_empty());
+
+        out.clear();
+        write_cell(&mut out, &Data::String("hello".into()));
+        assert_eq!(out, "hello");
+
+        out.clear();
+        write_cell(&mut out, &Data::Int(42));
+        assert_eq!(out, "42");
+
+        out.clear();
+        write_cell(&mut out, &Data::Float(3.0));
+        assert_eq!(out, "3"); // whole number float formats as int
+
+        out.clear();
+        write_cell(&mut out, &Data::Float(3.14));
+        assert_eq!(out, "3.14");
+
+        out.clear();
+        write_cell(&mut out, &Data::Bool(true));
+        assert_eq!(out, "true");
+    }
+
+    #[test]
+    fn test_cell_to_string_types() {
+        assert_eq!(cell_to_string(&Data::Empty), "");
+        assert_eq!(cell_to_string(&Data::String("hi".into())), "hi");
+        assert_eq!(cell_to_string(&Data::Int(7)), "7");
+        assert_eq!(cell_to_string(&Data::Float(2.0)), "2"); // whole number
+        assert_eq!(cell_to_string(&Data::Float(2.5)), "2.5");
+        assert_eq!(cell_to_string(&Data::Bool(false)), "false");
+    }
 }

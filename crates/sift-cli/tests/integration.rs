@@ -2266,3 +2266,270 @@ fn test_config_set_invalid_value() {
         .assert()
         .failure();
 }
+
+// ============================================================================
+// Additional Coverage Tests
+// ============================================================================
+
+#[test]
+fn test_cli_scan_json_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-json-scan-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--json", "scan", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed = parse_json_stdout(&String::from_utf8(output.stdout).unwrap());
+    assert!(parsed["indexed"].as_u64().unwrap() > 0);
+    assert!(parsed["discovered"].as_u64().unwrap() > 0);
+    assert!(parsed.get("file_types").is_some());
+}
+
+#[test]
+fn test_cli_scan_csv_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-csv-scan-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--format", "csv", "scan", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("discovered,indexed,skipped,chunks,errors,cache_hits,pruned"));
+}
+
+#[test]
+fn test_cli_scan_prune() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-prune-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    // Scan
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Delete a file
+    let files: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .collect();
+    if let Some(f) = files.first() {
+        std::fs::remove_file(f.path()).unwrap();
+    }
+
+    // Re-scan with --prune
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["scan", "--prune", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("pruned"));
+}
+
+#[test]
+fn test_cli_scan_prune_json_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-prune-json-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Delete a file
+    let files: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .collect();
+    if let Some(f) = files.first() {
+        std::fs::remove_file(f.path()).unwrap();
+    }
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--json", "scan", "--prune", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed = parse_json_stdout(&String::from_utf8(output.stdout).unwrap());
+    assert!(parsed["pruned"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn test_cli_list_csv_after_scan() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-csv-list-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--format", "csv", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("uri,file_type,chunks"));
+}
+
+#[test]
+fn test_cli_remove_json_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-rm-json-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--json", "remove", dir.path().join("readme.md").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed = parse_json_stdout(&String::from_utf8(output.stdout).unwrap());
+    assert_eq!(parsed["removed"], 1);
+}
+
+#[test]
+fn test_cli_remove_csv_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-rm-csv-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["--format", "csv", "remove", dir.path().join("readme.md").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("removed,not_found"));
+}
+
+#[test]
+fn test_cli_config_set_server_host() {
+    let home = test_home();
+    let idx = format!("cli-cfg-host-{}", uuid::Uuid::now_v7());
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["config", "server.host", "0.0.0.0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("server.host"));
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["config", "server.host"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0.0.0.0"));
+}
+
+#[test]
+fn test_cli_config_set_server_port() {
+    let home = test_home();
+    let idx = format!("cli-cfg-port-{}", uuid::Uuid::now_v7());
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["config", "server.port", "9090"])
+        .assert()
+        .success();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["config", "server.port"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("9090"));
+}
+
+#[test]
+fn test_cli_config_set_ignore_patterns() {
+    let home = test_home();
+    let idx = format!("cli-cfg-ign-{}", uuid::Uuid::now_v7());
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["config", "ignore.patterns", "*.log,*.tmp"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_cli_search_vector_only_fallback() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-vec-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // --vector-only without embeddings should fall back gracefully
+    sift_cmd_isolated(&idx, home.path())
+        .args(["search", "--vector-only", "test query"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_cli_watch_without_serve_feature() {
+    let home = test_home();
+    // Watch command should produce an error message about missing feature
+    let output = sift_cmd_isolated("test-watch", home.path())
+        .args(["watch"])
+        .output()
+        .unwrap();
+    // Either it's compiled with the feature (success) or without (error mentioning "serve")
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let combined = format!("{stdout}{stderr}");
+    // It should either work or tell us about the feature requirement
+    assert!(output.status.success() || combined.contains("serve") || combined.contains("feature"));
+}
+
+#[test]
+fn test_cli_scan_quiet_mode() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-quiet-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .args(["-q", "scan", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    // Quiet mode should produce no stdout
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.trim().is_empty());
+}
+
+#[test]
+fn test_cli_scan_dry_run_output() {
+    let dir = setup_cli_corpus();
+    let idx = format!("cli-dryrun-out-{}", uuid::Uuid::now_v7());
+    let home = test_home();
+
+    sift_cmd_isolated(&idx, home.path())
+        .args(["scan", "--dry-run", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would index"));
+}

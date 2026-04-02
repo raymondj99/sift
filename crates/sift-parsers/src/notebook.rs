@@ -234,4 +234,117 @@ mod tests {
         let result = parser.parse(b"not json", None, Some("ipynb"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_can_parse_notebook() {
+        let parser = NotebookParser;
+        assert!(parser.can_parse(Some("application/x-ipynb+json"), None));
+        assert!(parser.can_parse(None, Some("ipynb")));
+        assert!(!parser.can_parse(None, Some("json")));
+        assert!(!parser.can_parse(None, None));
+    }
+
+    #[test]
+    fn test_notebook_parser_name() {
+        assert_eq!(NotebookParser.name(), "notebook");
+    }
+
+    #[test]
+    fn test_notebook_missing_cells() {
+        let parser = NotebookParser;
+        let nb = r#"{"metadata": {}, "nbformat": 4}"#;
+        let result = parser.parse(nb.as_bytes(), None, Some("ipynb"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_notebook_skips_raw_cells() {
+        let nb = make_notebook(r#"[
+            {"cell_type": "raw", "source": "raw content", "metadata": {}},
+            {"cell_type": "code", "source": "x = 1\n", "outputs": [], "metadata": {}}
+        ]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(!doc.text.contains("raw content"));
+        assert!(doc.text.contains("x = 1"));
+        assert_eq!(doc.metadata.get("cell_count").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_notebook_skips_empty_source() {
+        let nb = make_notebook(r#"[
+            {"cell_type": "code", "source": "", "outputs": [], "metadata": {}},
+            {"cell_type": "code", "source": "y = 2\n", "outputs": [], "metadata": {}}
+        ]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("y = 2"));
+        assert_eq!(doc.metadata.get("cell_count").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_notebook_execute_result_output() {
+        let nb = make_notebook(r#"[{
+            "cell_type": "code",
+            "source": "42\n",
+            "outputs": [
+                {"output_type": "execute_result", "data": {"text/plain": "42"}, "metadata": {}}
+            ],
+            "metadata": {}
+        }]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("42"));
+        assert!(doc.text.contains("output"));
+    }
+
+    #[test]
+    fn test_notebook_array_source() {
+        let nb = make_notebook(r#"[{
+            "cell_type": "code",
+            "source": ["line1\n", "line2\n"],
+            "outputs": [],
+            "metadata": {}
+        }]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("line1"));
+        assert!(doc.text.contains("line2"));
+    }
+
+    #[test]
+    fn test_notebook_array_output_text() {
+        let nb = make_notebook(r#"[{
+            "cell_type": "code",
+            "source": "code\n",
+            "outputs": [
+                {"output_type": "stream", "name": "stdout", "text": ["line A\n", "line B\n"]}
+            ],
+            "metadata": {}
+        }]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("line A"));
+        assert!(doc.text.contains("line B"));
+    }
+
+    #[test]
+    fn test_notebook_invalid_utf8() {
+        let parser = NotebookParser;
+        let result = parser.parse(&[0xFF, 0xFE, 0x00], None, Some("ipynb"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_notebook_multiple_cells_spacing() {
+        let nb = make_notebook(r#"[
+            {"cell_type": "code", "source": "a = 1\n", "outputs": [], "metadata": {}},
+            {"cell_type": "code", "source": "b = 2\n", "outputs": [], "metadata": {}}
+        ]"#);
+        let parser = NotebookParser;
+        let doc = parser.parse(nb.as_bytes(), None, Some("ipynb")).unwrap();
+        assert!(doc.text.contains("a = 1"));
+        assert!(doc.text.contains("b = 2"));
+        assert_eq!(doc.metadata.get("cell_count").unwrap(), "2");
+    }
 }
