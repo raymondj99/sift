@@ -389,7 +389,14 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
                 dry_run,
                 jobs: if jobs == 0 { config.num_jobs() } else { jobs },
             };
-            commands::scan::run(&config, &options, model.as_deref(), format, cli.quiet, prune)?;
+            commands::scan::run(
+                &config,
+                &options,
+                model.as_deref(),
+                format,
+                cli.quiet,
+                prune,
+            )?;
         }
 
         Commands::Search {

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-commit hook that mirrors CI checks.
+# Activate: git config core.hooksPath .githooks
+set -e
+
+echo "pre-commit: cargo fmt"
+cargo fmt --all -- --check
+
+echo "pre-commit: cargo clippy"
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "pre-commit: cargo deny"
+cargo deny check
+
+echo "pre-commit: cargo test"
+cargo test --workspace --lib --bins
+
+echo "pre-commit: all checks passed"
