@@ -55,6 +55,10 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
                         .parse()
                         .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
+                "ignore.patterns" => {
+                    config.ignore.patterns =
+                        value.split(',').map(|s| s.trim().to_string()).collect();
+                }
                 _ => {
                     return Err(sift_core::SiftError::Config(format!(
                         "Unknown config key: {key}"

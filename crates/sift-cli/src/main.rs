@@ -201,6 +201,10 @@ enum Commands {
         debounce: u64,
     },
 
+    /// Watch filesystem for changes and re-index [requires: --features serve]
+    #[cfg(not(feature = "serve"))]
+    Watch {},
+
     /// Show index statistics and health
     Status,
 
@@ -229,8 +233,16 @@ enum Commands {
         action: Option<ModelsAction>,
     },
 
+    /// List, download, or manage embedding models [requires: --features embeddings]
+    #[cfg(not(feature = "embeddings"))]
+    Models {},
+
     /// Start MCP server on stdio (for AI agent integration)
     #[cfg(feature = "mcp")]
+    Mcp,
+
+    /// Start MCP server on stdio [requires: --features mcp]
+    #[cfg(not(feature = "mcp"))]
     Mcp,
 
     /// Start HTTP API server
@@ -244,6 +256,10 @@ enum Commands {
         #[arg(long, default_value = "7820")]
         port: u16,
     },
+
+    /// Start HTTP API server [requires: --features serve]
+    #[cfg(not(feature = "serve"))]
+    Serve {},
 
     /// Export index data as JSONL
     Export {
@@ -411,6 +427,11 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             commands::watch::run(&config, path, debounce)?;
         }
 
+        #[cfg(not(feature = "serve"))]
+        Commands::Watch { .. } => {
+            anyhow::bail!("The `watch` command requires the `serve` feature.\n  Rebuild with: cargo install sift --features serve");
+        }
+
         Commands::Status => {
             commands::status::run(&config, format)?;
         }
@@ -432,9 +453,19 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             commands::models::run(action)?;
         }
 
+        #[cfg(not(feature = "embeddings"))]
+        Commands::Models { .. } => {
+            anyhow::bail!("The `models` command requires the `embeddings` feature.\n  Rebuild with: cargo install sift --features embeddings");
+        }
+
         #[cfg(feature = "mcp")]
         Commands::Mcp => {
             commands::mcp::run(&config)?;
+        }
+
+        #[cfg(not(feature = "mcp"))]
+        Commands::Mcp => {
+            anyhow::bail!("The `mcp` command requires the `mcp` feature.\n  Rebuild with: cargo install sift --features mcp");
         }
 
         #[cfg(feature = "serve")]
@@ -442,6 +473,11 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| anyhow::anyhow!("Failed to start async runtime: {}", e))?;
             rt.block_on(commands::serve::run(&config, &host, port))?;
+        }
+
+        #[cfg(not(feature = "serve"))]
+        Commands::Serve { .. } => {
+            anyhow::bail!("The `serve` command requires the `serve` feature.\n  Rebuild with: cargo install sift --features serve");
         }
 
         Commands::Export {

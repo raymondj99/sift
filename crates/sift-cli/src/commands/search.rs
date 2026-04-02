@@ -56,20 +56,32 @@ pub fn run(
         results.retain(|r| r.file_type == *ft);
     }
 
-    // Apply path glob filter
+    // Apply path filter (substring match, or glob if pattern contains wildcards)
     if let Some(ref pattern) = options.path_glob {
-        if let Ok(glob) = globset::GlobBuilder::new(pattern)
-            .literal_separator(false)
-            .build()
-        {
-            let matcher = glob.compile_matcher();
+        let has_glob_chars =
+            pattern.contains('*') || pattern.contains('?') || pattern.contains('[');
+        if has_glob_chars {
+            if let Ok(glob) = globset::GlobBuilder::new(pattern)
+                .literal_separator(false)
+                .build()
+            {
+                let matcher = glob.compile_matcher();
+                results.retain(|r| {
+                    let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
+                    matcher.is_match(path)
+                });
+            } else {
+                results.retain(|r| {
+                    let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
+                    path.contains(pattern.as_str())
+                });
+            }
+        } else {
+            // Plain string: use substring match on the file path
             results.retain(|r| {
                 let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
-                matcher.is_match(path)
+                path.contains(pattern.as_str())
             });
-        } else {
-            // Fall back to substring match if glob is invalid
-            results.retain(|r| r.uri.contains(pattern));
         }
     }
 

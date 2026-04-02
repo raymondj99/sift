@@ -1207,13 +1207,23 @@ fn test_export_to_file() {
 // CLI End-to-End Tests (assert_cmd)
 // ============================================================================
 
+/// Test home directory. Create one per test and keep it alive so that all
+/// sift index data is written to a temporary location and automatically
+/// cleaned up when the test ends.
+fn test_home() -> TempDir {
+    TempDir::new().unwrap()
+}
+
 /// Helper to get a `Command` for the `sift` binary with a unique index.
+/// Redirects `HOME` to the given temp directory to avoid polluting
+/// `~/.sift/indexes/` with leftover test data.
 /// Sets `ORT_LOG_LEVEL` to prevent ONNX Runtime from writing to stdout,
 /// which would corrupt structured (JSON/CSV) output parsing in tests.
-fn sift_cmd(index_name: &str) -> Command {
+fn sift_cmd_isolated(index_name: &str, home: &std::path::Path) -> Command {
     let mut cmd = Command::new(cargo_bin!("sift"));
     cmd.arg("--index")
         .arg(index_name)
+        .env("HOME", home)
         .env("ORT_LOG_LEVEL", "fatal");
     cmd
 }
@@ -1249,9 +1259,10 @@ fn setup_cli_corpus() -> TempDir {
 fn test_cli_scan_and_status() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Scan
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -1259,7 +1270,7 @@ fn test_cli_scan_and_status() {
         .stdout(predicate::str::contains("files"));
 
     // Status
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .arg("status")
         .assert()
         .success()
@@ -1272,13 +1283,14 @@ fn test_cli_scan_and_status() {
 fn test_cli_list_after_scan() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .arg("list")
         .assert()
         .success()
@@ -1290,13 +1302,14 @@ fn test_cli_list_after_scan() {
 fn test_cli_search_keyword_only() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["search", "--keyword-only", "payment processing"])
         .assert()
         .success()
@@ -1307,13 +1320,14 @@ fn test_cli_search_keyword_only() {
 fn test_cli_search_json_output() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["search", "--keyword-only", "--json", "revenue"])
         .output()
         .unwrap();
@@ -1328,13 +1342,14 @@ fn test_cli_search_json_output() {
 fn test_cli_search_type_filter() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args([
             "search",
             "--keyword-only",
@@ -1361,13 +1376,14 @@ fn test_cli_search_type_filter() {
 fn test_cli_search_max_results() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args([
             "search",
             "--keyword-only",
@@ -1392,13 +1408,14 @@ fn test_cli_search_max_results() {
 fn test_cli_search_no_results() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["search", "--keyword-only", "zzzznonexistentqueryzzz"])
         .assert()
         .success()
@@ -1409,13 +1426,14 @@ fn test_cli_search_no_results() {
 fn test_cli_search_path_glob() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args([
             "search",
             "--keyword-only",
@@ -1443,20 +1461,21 @@ fn test_cli_search_path_glob() {
 fn test_cli_search_after_filter() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     // Files were just created, so --after 1d should include them
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["search", "--keyword-only", "--after", "1d", "config"])
         .assert()
         .success();
 
     // --after with a future date should return no results
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args([
             "search",
             "--keyword-only",
@@ -1483,8 +1502,9 @@ fn test_cli_search_after_filter() {
 fn test_cli_scan_dry_run() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "--dry-run", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -1492,7 +1512,7 @@ fn test_cli_scan_dry_run() {
         .stdout(predicate::str::contains("Would index"));
 
     // After dry run, status should show 0 sources
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .arg("status")
         .assert()
         .success()
@@ -1503,15 +1523,16 @@ fn test_cli_scan_dry_run() {
 fn test_cli_scan_type_filter() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "--type", "rs", dir.path().to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("rs:"));
 
     // List should only show .rs files
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "json", "list"])
         .output()
         .unwrap();
@@ -1530,9 +1551,10 @@ fn test_cli_scan_type_filter() {
 fn test_cli_scan_include_exclude() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Include only .md files
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "--include", "*.md", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -1541,12 +1563,12 @@ fn test_cli_scan_include_exclude() {
     let idx2 = format!("cli-test-{}", uuid::Uuid::now_v7());
 
     // Exclude .rs files
-    sift_cmd(&idx2)
+    sift_cmd_isolated(&idx2, home.path())
         .args(["scan", "--exclude", "*.rs", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx2)
+    let output = sift_cmd_isolated(&idx2, home.path())
         .args(["--format", "json", "list"])
         .output()
         .unwrap();
@@ -1564,14 +1586,15 @@ fn test_cli_scan_include_exclude() {
 fn test_cli_scan_max_depth() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // max-depth 1 should not descend into src/
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "--max-depth", "1", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "json", "list"])
         .output()
         .unwrap();
@@ -1593,15 +1616,16 @@ fn test_cli_scan_max_depth() {
 fn test_cli_incremental_scan() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // First scan
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     // Second scan should skip unchanged files
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -1612,21 +1636,22 @@ fn test_cli_incremental_scan() {
 fn test_cli_remove_source() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     let readme_path = dir.path().join("readme.md");
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["remove", readme_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("Removed"));
 
     // Verify it's gone from the list
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "json", "list"])
         .output()
         .unwrap();
@@ -1638,13 +1663,17 @@ fn test_cli_remove_source() {
 fn test_cli_export_jsonl() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx).arg("export").output().unwrap();
+    let output = sift_cmd_isolated(&idx, home.path())
+        .arg("export")
+        .output()
+        .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -1661,15 +1690,16 @@ fn test_cli_export_jsonl() {
 fn test_cli_export_to_file() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
     let export_dir = TempDir::new().unwrap();
     let export_path = export_dir.path().join("out.jsonl");
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["export", "-o", export_path.to_str().unwrap()])
         .assert()
         .success();
@@ -1684,13 +1714,14 @@ fn test_cli_export_to_file() {
 fn test_cli_export_type_filter() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["export", "--type", "rs"])
         .output()
         .unwrap();
@@ -1706,13 +1737,14 @@ fn test_cli_export_type_filter() {
 fn test_cli_export_with_vectors() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["export", "--vectors"])
         .output()
         .unwrap();
@@ -1731,16 +1763,17 @@ fn test_cli_export_with_vectors() {
 #[test]
 fn test_cli_config_get_set() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Get a default value
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["config", "search.max_results"])
         .assert()
         .success()
         .stdout(predicate::str::contains("search.max_results = "));
 
     // Print full config
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .arg("config")
         .assert()
         .success()
@@ -1752,8 +1785,9 @@ fn test_cli_config_get_set() {
 #[test]
 fn test_cli_config_unknown_key() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["config", "nonexistent.key"])
         .assert()
         .success()
@@ -1763,8 +1797,9 @@ fn test_cli_config_unknown_key() {
 #[test]
 fn test_cli_config_set_invalid_value() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["config", "search.max_results", "not_a_number"])
         .assert()
         .failure();
@@ -1773,8 +1808,9 @@ fn test_cli_config_set_invalid_value() {
 #[test]
 fn test_cli_config_set_unknown_key() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["config", "fake.key", "value"])
         .assert()
         .failure();
@@ -1783,8 +1819,9 @@ fn test_cli_config_set_unknown_key() {
 #[test]
 fn test_cli_status_empty_index() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .arg("status")
         .assert()
         .success()
@@ -1795,13 +1832,14 @@ fn test_cli_status_empty_index() {
 fn test_cli_status_json() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "json", "status"])
         .output()
         .unwrap();
@@ -1816,13 +1854,14 @@ fn test_cli_status_json() {
 fn test_cli_list_json() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "json", "list"])
         .output()
         .unwrap();
@@ -1857,9 +1896,10 @@ fn test_cli_help_and_version() {
 #[test]
 fn test_cli_scan_nonexistent_path() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Scanning a nonexistent path discovers 0 files (not an error)
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "/nonexistent/path/that/does/not/exist"])
         .assert()
         .success()
@@ -1870,13 +1910,14 @@ fn test_cli_scan_nonexistent_path() {
 fn test_cli_remove_nonexistent() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["remove", "/nonexistent/file.txt"])
         .assert()
         .success()
@@ -1889,14 +1930,15 @@ fn test_cli_remove_nonexistent() {
 fn test_cli_search_context_flag() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     // --context should show line numbers with > markers
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["search", "--keyword-only", "--context", "server"])
         .assert()
         .success();
@@ -1906,14 +1948,15 @@ fn test_cli_search_context_flag() {
 fn test_cli_search_threshold_filter() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     // Very high threshold should return fewer/no results
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args([
             "search",
             "--keyword-only",
@@ -1940,8 +1983,9 @@ fn test_cli_search_threshold_filter() {
 fn test_cli_quiet_suppresses_logs() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--quiet", "scan", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -1959,10 +2003,12 @@ fn test_cli_quiet_suppresses_logs() {
 fn test_cli_sift_index_env() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Use SIFT_INDEX env var instead of --index flag
     Command::new(cargo_bin!("sift"))
         .env("SIFT_INDEX", &idx)
+        .env("HOME", home.path())
         .env("ORT_LOG_LEVEL", "fatal")
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
@@ -1970,6 +2016,7 @@ fn test_cli_sift_index_env() {
 
     Command::new(cargo_bin!("sift"))
         .env("SIFT_INDEX", &idx)
+        .env("HOME", home.path())
         .env("ORT_LOG_LEVEL", "fatal")
         .arg("status")
         .assert()
@@ -1981,8 +2028,9 @@ fn test_cli_sift_index_env() {
 fn test_cli_sift_format_env() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -1990,6 +2038,7 @@ fn test_cli_sift_format_env() {
     // SIFT_FORMAT=json should produce JSON output
     let output = Command::new(cargo_bin!("sift"))
         .env("SIFT_FORMAT", "json")
+        .env("HOME", home.path())
         .env("ORT_LOG_LEVEL", "fatal")
         .args(["--index", &idx, "status"])
         .output()
@@ -2004,8 +2053,9 @@ fn test_cli_sift_format_env() {
 fn test_cli_scan_empty_directory() {
     let dir = TempDir::new().unwrap();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -2018,8 +2068,9 @@ fn test_cli_scan_single_file() {
     let file = dir.path().join("hello.txt");
     fs::write(&file, "Hello, world! This is a test file.").unwrap();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -2030,13 +2081,14 @@ fn test_cli_scan_single_file() {
 fn test_cli_search_csv_output() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "csv", "search", "--keyword-only", "server"])
         .output()
         .unwrap();
@@ -2049,13 +2101,14 @@ fn test_cli_search_csv_output() {
 fn test_cli_list_csv_output() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "csv", "list"])
         .output()
         .unwrap();
@@ -2068,13 +2121,14 @@ fn test_cli_list_csv_output() {
 fn test_cli_status_csv_output() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
-    let output = sift_cmd(&idx)
+    let output = sift_cmd_isolated(&idx, home.path())
         .args(["--format", "csv", "status"])
         .output()
         .unwrap();
@@ -2090,8 +2144,9 @@ fn test_cli_scan_multiple_paths() {
     fs::write(dir1.path().join("a.txt"), "File A content").unwrap();
     fs::write(dir2.path().join("b.txt"), "File B content").unwrap();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args([
             "scan",
             dir1.path().to_str().unwrap(),
@@ -2109,15 +2164,16 @@ fn test_cli_remove_multiple() {
     fs::write(dir.path().join("b.txt"), "bbb").unwrap();
     fs::write(dir.path().join("c.txt"), "ccc").unwrap();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     let a_path = dir.path().join("a.txt");
     let b_path = dir.path().join("b.txt");
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["remove", a_path.to_str().unwrap(), b_path.to_str().unwrap()])
         .assert()
         .success()
@@ -2132,23 +2188,18 @@ fn test_cli_remove_multiple() {
 fn test_corrupt_vector_index_reports_error() {
     let dir = TempDir::new().unwrap();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
 
     // Scan some files first to create an index
     fs::write(dir.path().join("a.txt"), "hello").unwrap();
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     // Corrupt all vector index files so the store cannot load regardless of
     // which backend (flat or HNSW) is compiled in.
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap();
-    let sift_dir = std::path::PathBuf::from(home)
-        .join(".sift")
-        .join("indexes")
-        .join(&idx);
+    let sift_dir = home.path().join(".sift").join("indexes").join(&idx);
     fs::create_dir_all(&sift_dir).unwrap();
     // Corrupt flat vector index
     fs::write(sift_dir.join("vectors.bin"), b"corrupted data").unwrap();
@@ -2161,14 +2212,18 @@ fn test_corrupt_vector_index_reports_error() {
     .unwrap();
 
     // Search should fail gracefully with a storage error
-    sift_cmd(&idx).args(["search", "test"]).assert().failure();
+    sift_cmd_isolated(&idx, home.path())
+        .args(["search", "test"])
+        .assert()
+        .failure();
 }
 
 #[test]
 fn test_search_on_nonexistent_index() {
     let idx = format!("cli-test-nonexistent-{}", uuid::Uuid::now_v7());
+    let home = test_home();
     // An empty/nonexistent index returns "No results found" with exit 0
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["search", "hello"])
         .assert()
         .success()
@@ -2182,7 +2237,8 @@ fn test_scan_with_zero_valid_files() {
     fs::write(dir.path().join(".hidden"), "secret").unwrap();
 
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
-    sift_cmd(&idx)
+    let home = test_home();
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -2191,8 +2247,9 @@ fn test_scan_with_zero_valid_files() {
 #[test]
 fn test_scan_nonexistent_directory() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
     // Scanning a nonexistent directory discovers 0 files, succeeds with empty output
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["scan", "/nonexistent/path/that/does/not/exist"])
         .assert()
         .success()
@@ -2202,8 +2259,9 @@ fn test_scan_nonexistent_directory() {
 #[test]
 fn test_config_set_invalid_value() {
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());
+    let home = test_home();
     // Setting a non-numeric value for a numeric config key should fail
-    sift_cmd(&idx)
+    sift_cmd_isolated(&idx, home.path())
         .args(["config", "set", "search.max_results", "not_a_number"])
         .assert()
         .failure();

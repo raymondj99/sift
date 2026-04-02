@@ -384,7 +384,7 @@ impl ServerHandler for SiftMcpServer {
 impl SiftMcpServer {
     /// Embed a query for vector/hybrid search, falling back to keyword-only
     /// if no embedding model is available.
-    #[allow(unused_variables)]
+    #[allow(unused_variables, clippy::unused_self)]
     fn embed_query(&self, query: &str, mode: SearchMode) -> (Vec<f32>, SearchMode) {
         #[cfg(feature = "embeddings")]
         {

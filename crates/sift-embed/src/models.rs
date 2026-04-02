@@ -382,9 +382,14 @@ fn extract_ort_lib(archive_bytes: &[u8], dest: &Path) -> SiftResult<()> {
         //   lib/libonnxruntime.dylib          ← symlink, 0 bytes (skip)
         // Checking entry_type().is_file() skips symlinks on all platforms.
         let is_regular_file = entry.header().entry_type().is_file();
-        let name_matches = path_str.contains("libonnxruntime") && path_str.ends_with(
-            if cfg!(target_os = "windows") { ".dll" } else if cfg!(target_os = "macos") { ".dylib" } else { ".so" }
-        );
+        let name_matches = path_str.contains("libonnxruntime")
+            && path_str.ends_with(if cfg!(target_os = "windows") {
+                ".dll"
+            } else if cfg!(target_os = "macos") {
+                ".dylib"
+            } else {
+                ".so"
+            });
         if is_regular_file && name_matches {
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut buf)

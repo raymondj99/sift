@@ -159,6 +159,19 @@ impl FullTextStore for Fts5Store {
             });
         }
 
+        // FTS5 BM25 produces near-zero scores on very small corpora because
+        // the IDF component collapses when terms appear in a large fraction
+        // of documents.  Rescale so that the top result gets a score of 1.0,
+        // preserving relative ranking while keeping values human-readable.
+        if let Some(max_score) = results.iter().map(|r| r.score).reduce(f32::max) {
+            if max_score > 0.0 && max_score < 0.01 {
+                let scale = 1.0 / max_score;
+                for r in &mut results {
+                    r.score *= scale;
+                }
+            }
+        }
+
         Ok(results)
     }
 

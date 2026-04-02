@@ -130,6 +130,14 @@ impl Config {
             "search.rerank" => Some(self.search.rerank.to_string()),
             "server.host" => Some(self.server.host.clone()),
             "server.port" => Some(self.server.port.to_string()),
+            "ignore.patterns" => Some(
+                self.ignore
+                    .patterns
+                    .iter()
+                    .map(|p| format!("\"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             _ => None,
         }
     }
