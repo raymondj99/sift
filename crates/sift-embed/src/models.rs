@@ -201,6 +201,7 @@ impl ModelManager {
     }
 
     /// Download model files from `HuggingFace`.
+    /// Retries transient network failures with exponential backoff.
     pub fn download(&self, model_def: &ModelDef) -> SiftResult<()> {
         let dir = self.model_dir(model_def.name);
         std::fs::create_dir_all(&dir)?;
@@ -208,6 +209,14 @@ impl ModelManager {
         let base_url = format!("https://huggingface.co/{}/resolve/main", model_def.repo_id);
 
         let files = ["model.onnx", "tokenizer.json"];
+
+        let retry_config = sift_core::RetryConfig::network();
+        let is_retryable = |e: &sift_core::SiftError| {
+            matches!(
+                e,
+                sift_core::SiftError::Model(_) | sift_core::SiftError::Io(_)
+            )
+        };
 
         for file in &files {
             let dest = dir.join(file);
@@ -224,15 +233,17 @@ impl ModelManager {
 
             info!("Downloading {} from {}", file, url);
 
-            let response = ureq::get(&url)
-                .call()
-                .map_err(|e| sift_core::SiftError::Model(format!("Download failed: {e}")))?;
+            let bytes = sift_core::with_retry(&retry_config, is_retryable, || {
+                let response = ureq::get(&url)
+                    .call()
+                    .map_err(|e| sift_core::SiftError::Model(format!("Download failed: {e}")))?;
 
-            let mut bytes = Vec::new();
-            response
-                .into_reader()
-                .read_to_end(&mut bytes)
-                .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {e}")))?;
+                let mut buf = Vec::new();
+                response.into_reader().read_to_end(&mut buf).map_err(|e| {
+                    sift_core::SiftError::Model(format!("Download read failed: {e}"))
+                })?;
+                Ok::<_, sift_core::SiftError>(buf)
+            })?;
 
             std::fs::write(&dest, &bytes)?;
             info!("Saved {} ({} bytes)", file, bytes.len());
@@ -277,6 +288,7 @@ impl ModelManager {
     }
 
     /// Download the ONNX Runtime shared library for the current platform.
+    /// Retries transient network failures with exponential backoff.
     pub fn download_ort(&self) -> SiftResult<()> {
         let lib_path = self.ort_lib_path();
         if lib_path.exists() {
@@ -290,15 +302,26 @@ impl ModelManager {
         let url = ort_download_url();
         info!("Downloading ONNX Runtime {} from {}", ORT_VERSION, url);
 
-        let response = ureq::get(&url).call().map_err(|e| {
-            sift_core::SiftError::Model(format!("ONNX Runtime download failed: {e}"))
-        })?;
+        let retry_config = sift_core::RetryConfig::network();
+        let is_retryable = |e: &sift_core::SiftError| {
+            matches!(
+                e,
+                sift_core::SiftError::Model(_) | sift_core::SiftError::Io(_)
+            )
+        };
 
-        let mut bytes = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {e}")))?;
+        let bytes = sift_core::with_retry(&retry_config, is_retryable, || {
+            let response = ureq::get(&url).call().map_err(|e| {
+                sift_core::SiftError::Model(format!("ONNX Runtime download failed: {e}"))
+            })?;
+
+            let mut buf = Vec::new();
+            response
+                .into_reader()
+                .read_to_end(&mut buf)
+                .map_err(|e| sift_core::SiftError::Model(format!("Download read failed: {e}")))?;
+            Ok::<_, sift_core::SiftError>(buf)
+        })?;
 
         // The download is a .tgz archive — extract the library file
         extract_ort_lib(&bytes, &lib_path)?;

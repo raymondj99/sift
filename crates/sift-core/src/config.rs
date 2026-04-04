@@ -75,17 +75,150 @@ impl Config {
     }
 
     pub fn load() -> crate::SiftResult<Self> {
-        Self::load_from(Self::config_path()?)
+        let config = Self::load_from(Self::config_path()?)?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn load_from(path: impl AsRef<Path>) -> crate::SiftResult<Self> {
         let path = path.as_ref();
-        if path.exists() {
+        let config = if path.exists() {
             let content = std::fs::read_to_string(path)?;
-            toml::from_str(&content).map_err(|e| crate::SiftError::Config(e.to_string()))
+            toml::from_str(&content).map_err(|e| crate::SiftError::Config(e.to_string()))?
         } else {
-            Ok(Self::default())
+            Self::default()
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Load global config, then merge with a `.sift.toml` in `project_dir` if present.
+    pub fn load_merged(project_dir: Option<&Path>) -> crate::SiftResult<Self> {
+        let global = Self::load()?;
+        let project_dir = match project_dir {
+            Some(d) => d,
+            None => return Ok(global),
+        };
+        let project_config_path = project_dir.join(".sift.toml");
+        if !project_config_path.exists() {
+            return Ok(global);
         }
+        let project_content = std::fs::read_to_string(&project_config_path)?;
+
+        // Parse as Config (with serde defaults for missing fields)
+        let project: Config = toml::from_str(&project_content).map_err(|e| {
+            crate::SiftError::Config(format!("{}: {e}", project_config_path.display()))
+        })?;
+
+        // Also parse as raw TOML table so we know which keys were actually specified
+        let project_table: toml::Table = toml::from_str(&project_content).map_err(|e| {
+            crate::SiftError::Config(format!("{}: {e}", project_config_path.display()))
+        })?;
+
+        let merged = global.merge(&project, &project_table);
+        merged.validate()?;
+        Ok(merged)
+    }
+
+    /// Merge values from `other` into `self`, but only for keys explicitly
+    /// present in `specified` (the raw TOML table from the project config file).
+    pub fn merge(&self, other: &Config, specified: &toml::Table) -> Config {
+        let mut merged = self.clone();
+
+        if specified.contains_key("index_name") {
+            merged.index_name.clone_from(&other.index_name);
+        }
+
+        if let Some(default_table) = specified.get("default").and_then(|v| v.as_table()) {
+            if default_table.contains_key("model") {
+                merged.default.model.clone_from(&other.default.model);
+            }
+            if default_table.contains_key("chunk_size") {
+                merged.default.chunk_size = other.default.chunk_size;
+            }
+            if default_table.contains_key("chunk_overlap") {
+                merged.default.chunk_overlap = other.default.chunk_overlap;
+            }
+            if default_table.contains_key("max_file_size") {
+                merged.default.max_file_size = other.default.max_file_size;
+            }
+            if default_table.contains_key("jobs") {
+                merged.default.jobs = other.default.jobs;
+            }
+        }
+
+        if let Some(search_table) = specified.get("search").and_then(|v| v.as_table()) {
+            if search_table.contains_key("max_results") {
+                merged.search.max_results = other.search.max_results;
+            }
+            if search_table.contains_key("hybrid_alpha") {
+                merged.search.hybrid_alpha = other.search.hybrid_alpha;
+            }
+            if search_table.contains_key("rerank") {
+                merged.search.rerank = other.search.rerank;
+            }
+        }
+
+        if let Some(ignore_table) = specified.get("ignore").and_then(|v| v.as_table()) {
+            if ignore_table.contains_key("patterns") {
+                merged.ignore.patterns.clone_from(&other.ignore.patterns);
+            }
+        }
+
+        if let Some(server_table) = specified.get("server").and_then(|v| v.as_table()) {
+            if server_table.contains_key("host") {
+                merged.server.host.clone_from(&other.server.host);
+            }
+            if server_table.contains_key("port") {
+                merged.server.port = other.server.port;
+            }
+        }
+
+        merged
+    }
+
+    /// Detect the project root by walking up from `start_dir`, looking for
+    /// `.sift.toml` or `.git`.
+    pub fn find_project_root(start_dir: &Path) -> Option<PathBuf> {
+        let mut dir = start_dir;
+        loop {
+            if dir.join(".sift.toml").exists() || dir.join(".git").exists() {
+                return Some(dir.to_path_buf());
+            }
+            dir = dir.parent()?;
+        }
+    }
+
+    /// Check semantic constraints beyond what serde deserialization provides.
+    pub fn validate(&self) -> crate::SiftResult<()> {
+        if self.default.chunk_size == 0 {
+            return Err(crate::SiftError::Config(
+                "chunk_size must be greater than 0".into(),
+            ));
+        }
+        if self.default.chunk_overlap >= self.default.chunk_size {
+            return Err(crate::SiftError::Config(format!(
+                "chunk_overlap ({}) must be less than chunk_size ({})",
+                self.default.chunk_overlap, self.default.chunk_size
+            )));
+        }
+        if self.default.max_file_size == 0 {
+            return Err(crate::SiftError::Config(
+                "max_file_size must be greater than 0".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.search.hybrid_alpha) {
+            return Err(crate::SiftError::Config(format!(
+                "hybrid_alpha ({}) must be between 0.0 and 1.0",
+                self.search.hybrid_alpha
+            )));
+        }
+        if self.search.max_results == 0 {
+            return Err(crate::SiftError::Config(
+                "max_results must be greater than 0".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn save(&self) -> crate::SiftResult<()> {
@@ -394,6 +527,97 @@ patterns = ["*.log"]
     }
 
     #[test]
+    fn test_validate_default_config_passes() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_chunk_overlap_exceeds_chunk_size() {
+        let mut config = Config::default();
+        config.default.chunk_overlap = 512;
+        config.default.chunk_size = 256;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("chunk_overlap"));
+    }
+
+    #[test]
+    fn test_validate_chunk_overlap_equals_chunk_size() {
+        let mut config = Config::default();
+        config.default.chunk_overlap = 256;
+        config.default.chunk_size = 256;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("chunk_overlap"));
+    }
+
+    #[test]
+    fn test_validate_chunk_size_zero() {
+        let mut config = Config::default();
+        config.default.chunk_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("chunk_size"));
+    }
+
+    #[test]
+    fn test_validate_max_file_size_zero() {
+        let mut config = Config::default();
+        config.default.max_file_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_file_size"));
+    }
+
+    #[test]
+    fn test_validate_hybrid_alpha_too_high() {
+        let mut config = Config::default();
+        config.search.hybrid_alpha = 1.5;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("hybrid_alpha"));
+    }
+
+    #[test]
+    fn test_validate_hybrid_alpha_negative() {
+        let mut config = Config::default();
+        config.search.hybrid_alpha = -0.1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("hybrid_alpha"));
+    }
+
+    #[test]
+    fn test_validate_hybrid_alpha_boundaries() {
+        let mut config = Config::default();
+        config.search.hybrid_alpha = 0.0;
+        assert!(config.validate().is_ok());
+        config.search.hybrid_alpha = 1.0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_results_zero() {
+        let mut config = Config::default();
+        config.search.max_results = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_results"));
+    }
+
+    #[test]
+    fn test_load_from_invalid_config_values() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[default]
+chunk_size = 100
+chunk_overlap = 200
+"#,
+        )
+        .unwrap();
+        let result = Config::load_from(&path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("chunk_overlap"));
+    }
+
+    #[test]
     fn test_load_from_invalid_toml() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("bad.toml");
@@ -432,5 +656,156 @@ patterns = ["*.log"]
         let value = config.get_value("ignore.patterns").unwrap();
         assert!(value.contains("\"*.log\""));
         assert!(value.contains("\"*.tmp\""));
+    }
+
+    #[test]
+    fn test_merge_only_overrides_specified_keys() {
+        let global = Config::default();
+        let project_toml = r#"
+[default]
+chunk_size = 256
+"#;
+        let project: Config = toml::from_str(project_toml).unwrap();
+        let table: toml::Table = toml::from_str(project_toml).unwrap();
+        let merged = global.merge(&project, &table);
+
+        // chunk_size should be overridden
+        assert_eq!(merged.default.chunk_size, 256);
+        // Other fields should keep global defaults
+        assert_eq!(merged.default.model, "nomic-embed-text-v2");
+        assert_eq!(merged.default.chunk_overlap, 64);
+        assert_eq!(merged.search.max_results, 10);
+        assert_eq!(merged.server.port, 7820);
+    }
+
+    #[test]
+    fn test_merge_multiple_sections() {
+        let mut global = Config::default();
+        global.default.chunk_size = 1024;
+        global.search.max_results = 50;
+
+        let project_toml = r#"
+[default]
+chunk_size = 128
+
+[search]
+rerank = false
+
+[ignore]
+patterns = ["vendor/"]
+"#;
+        let project: Config = toml::from_str(project_toml).unwrap();
+        let table: toml::Table = toml::from_str(project_toml).unwrap();
+        let merged = global.merge(&project, &table);
+
+        assert_eq!(merged.default.chunk_size, 128);
+        assert!(!merged.search.rerank);
+        assert_eq!(merged.ignore.patterns, vec!["vendor/".to_string()]);
+        // Non-specified fields keep global values
+        assert_eq!(merged.search.max_results, 50);
+        assert_eq!(merged.server.port, 7820);
+    }
+
+    #[test]
+    fn test_load_merged_no_project_dir() {
+        // load_merged with None should behave like load()
+        // We can't easily test this without a HOME dir, but we can verify no panic
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = Config::load_merged(Some(dir.path()));
+        // No .sift.toml exists, so this should return global config
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_load_merged_with_project_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home_dir = dir.path().join("home");
+        let sift_dir = home_dir.join(".sift");
+        std::fs::create_dir_all(&sift_dir).unwrap();
+
+        // Write a global config
+        std::fs::write(
+            sift_dir.join("config.toml"),
+            r#"
+[default]
+chunk_size = 512
+model = "nomic-embed-text-v2"
+
+[search]
+max_results = 10
+"#,
+        )
+        .unwrap();
+
+        // Write a project .sift.toml
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join(".sift.toml"),
+            r#"
+[default]
+chunk_size = 256
+"#,
+        )
+        .unwrap();
+
+        // Use load_from for global, then merge manually (since load_merged
+        // calls load() which uses the real HOME)
+        let global = Config::load_from(sift_dir.join("config.toml")).unwrap();
+        let project_content = std::fs::read_to_string(project_dir.join(".sift.toml")).unwrap();
+        let project: Config = toml::from_str(&project_content).unwrap();
+        let table: toml::Table = toml::from_str(&project_content).unwrap();
+        let merged = global.merge(&project, &table);
+
+        assert_eq!(merged.default.chunk_size, 256);
+        assert_eq!(merged.default.model, "nomic-embed-text-v2");
+        assert_eq!(merged.search.max_results, 10);
+    }
+
+    #[test]
+    fn test_find_project_root_with_sift_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.path().join("a").join(".sift.toml"), "").unwrap();
+
+        let root = Config::find_project_root(&nested);
+        assert_eq!(root.unwrap(), dir.path().join("a"));
+    }
+
+    #[test]
+    fn test_find_project_root_with_git() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = dir.path().join("repo").join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(dir.path().join("repo").join(".git")).unwrap();
+
+        let root = Config::find_project_root(&nested);
+        assert_eq!(root.unwrap(), dir.path().join("repo"));
+    }
+
+    #[test]
+    fn test_find_project_root_prefers_closest() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = dir.path().join("outer").join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        // .git at outer level
+        std::fs::create_dir_all(dir.path().join("outer").join(".git")).unwrap();
+        // .sift.toml at inner level
+        std::fs::write(inner.join(".sift.toml"), "").unwrap();
+
+        let root = Config::find_project_root(&inner);
+        assert_eq!(root.unwrap(), inner);
+    }
+
+    #[test]
+    fn test_find_project_root_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = dir.path().join("empty").join("dir");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        // This may or may not find a root depending on whether there's a .git
+        // above the tempdir. Just verify it doesn't panic.
+        let _ = Config::find_project_root(&nested);
     }
 }

@@ -117,6 +117,31 @@ impl SiftMcpServer {
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Input validation
+        if req.query.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Query must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+        if req.query.len() > 10_000 {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                format!("Query too long ({} chars, max 10000)", req.query.len()),
+                None::<serde_json::Value>,
+            ));
+        }
+        if let Some(ref path_filter) = req.path {
+            if path_filter.contains("..") {
+                return Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    "Path filter must not contain '..' (path traversal)".to_string(),
+                    None::<serde_json::Value>,
+                ));
+            }
+        }
+
         let limit = req.limit.unwrap_or(10).clamp(1, 50) as usize;
         let offset = req.offset.unwrap_or(0).max(0) as usize;
         let context_lines = req.context.unwrap_or(2).clamp(0, 10) as usize;

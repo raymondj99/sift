@@ -87,8 +87,13 @@ impl FilesystemSource {
 
     /// Read a file once, returning (`content_hash`, `content_mime`).
     /// Uses the same buffer for both MIME detection (via `infer`) and BLAKE3 hashing.
+    /// Retries on transient I/O errors (e.g. NFS timeouts).
     pub(crate) fn read_and_analyze(path: &Path) -> SiftResult<([u8; 32], Option<String>)> {
-        let data = std::fs::read(path)?;
+        let data = sift_core::with_retry(
+            &sift_core::RetryConfig::io(),
+            |e: &sift_core::SiftError| matches!(e, sift_core::SiftError::Io(_)),
+            || Ok::<_, sift_core::SiftError>(std::fs::read(path)?),
+        )?;
         let mime = infer::get(&data).map(|kind| kind.mime_type().to_string());
         let hash = *blake3::hash(&data).as_bytes();
         Ok((hash, mime))

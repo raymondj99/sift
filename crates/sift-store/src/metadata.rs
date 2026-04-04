@@ -15,36 +15,48 @@ pub struct MetadataStore {
 
 impl MetadataStore {
     pub fn open(path: &Path) -> SiftResult<Self> {
-        let conn = Connection::open(path)
-            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite open error: {e}")))?;
+        let config = sift_core::RetryConfig::io();
+        let is_retryable = |e: &sift_core::SiftError| {
+            matches!(
+                e,
+                sift_core::SiftError::Storage(_) | sift_core::SiftError::Io(_)
+            )
+        };
 
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=5000;
-             PRAGMA cache_size=-8000;",
-        )
-        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite pragma error: {e}")))?;
+        let conn = sift_core::with_retry(&config, is_retryable, || {
+            let c = Connection::open(path)
+                .map_err(|e| sift_core::SiftError::Storage(format!("SQLite open error: {e}")))?;
 
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sources (
-                uri TEXT PRIMARY KEY,
-                content_hash BLOB NOT NULL,
-                file_size INTEGER,
-                file_type TEXT,
-                modified_at INTEGER,
-                indexed_at INTEGER NOT NULL,
-                chunk_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'indexed'
-            );
+            c.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=NORMAL;
+                 PRAGMA foreign_keys=ON;
+                 PRAGMA busy_timeout=5000;
+                 PRAGMA cache_size=-8000;",
+            )
+            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite pragma error: {e}")))?;
 
-            CREATE TABLE IF NOT EXISTS index_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );",
-        )
-        .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {e}")))?;
+            c.execute_batch(
+                "CREATE TABLE IF NOT EXISTS sources (
+                    uri TEXT PRIMARY KEY,
+                    content_hash BLOB NOT NULL,
+                    file_size INTEGER,
+                    file_type TEXT,
+                    modified_at INTEGER,
+                    indexed_at INTEGER NOT NULL,
+                    chunk_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'indexed'
+                );
+
+                CREATE TABLE IF NOT EXISTS index_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );",
+            )
+            .map_err(|e| sift_core::SiftError::Storage(format!("SQLite schema error: {e}")))?;
+
+            Ok::<_, sift_core::SiftError>(c)
+        })?;
 
         Ok(Self {
             conn: Mutex::new(conn),

@@ -110,6 +110,9 @@ symphonia-core = "0.5"
 rmcp = { version = "1", features = ["server", "transport-io"] }
 schemars = "1"
 
+# Random (for retry jitter)
+rand = "0.8"
+
 # Utilities
 uuid = { version = "1", features = ["v7"] }
 tempfile = "3"

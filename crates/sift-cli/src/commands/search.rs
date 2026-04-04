@@ -1,4 +1,4 @@
-use crate::{output, pipeline, OutputFormat};
+use crate::{output, pipeline, OutputFormat, StartupProfiler};
 #[cfg(feature = "embeddings")]
 use sift_core::Embedder;
 use sift_core::{Config, SearchMode, SearchOptions, SiftResult};
@@ -9,11 +9,23 @@ pub fn run(
     options: &SearchOptions,
     format: &OutputFormat,
     open: bool,
+    profiler: &mut StartupProfiler,
 ) -> SiftResult<()> {
-    let (engine, metadata) = pipeline::open_engine(config)?;
-
+    // Load engine and embedder concurrently — they are independent.
     #[cfg(feature = "embeddings")]
-    let embedder = pipeline::load_embedder(None);
+    let (engine_result, embedder) = std::thread::scope(|s| {
+        let engine_handle = s.spawn(|| pipeline::open_engine(config));
+        let embedder = pipeline::load_embedder(None);
+        (
+            engine_handle.join().expect("engine thread panicked"),
+            embedder,
+        )
+    });
+    #[cfg(not(feature = "embeddings"))]
+    let engine_result = pipeline::open_engine(config);
+
+    let (engine, metadata) = engine_result?;
+    profiler.checkpoint("store_open");
 
     // Embed query for vector search, or fall back to keyword-only
     #[cfg(feature = "embeddings")]
@@ -40,6 +52,7 @@ pub fn run(
         }
         (vec![0.0f32; 768], SearchMode::KeywordOnly)
     };
+    profiler.checkpoint("model_load");
 
     // Over-fetch when filters are active so post-filtering doesn't
     // reduce the result count below max_results.
@@ -54,6 +67,7 @@ pub fn run(
     };
 
     let mut results = engine.search(&query_vector, &options.query, fetch_k, effective_mode)?;
+    profiler.checkpoint("search_execute");
 
     // Apply threshold filter
     results.retain(|r| r.score >= options.threshold);

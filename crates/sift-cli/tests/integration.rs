@@ -1248,6 +1248,19 @@ fn parse_json_stdout(stdout: &str) -> serde_json::Value {
     );
 }
 
+/// Parse search output as JSON Lines (one JSON object per line) into an array.
+/// Empty output returns an empty array.
+fn parse_json_lines_stdout(stdout: &str) -> Vec<serde_json::Value> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return vec![];
+    }
+    trimmed
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .collect()
+}
+
 /// Create a test corpus and return the `TempDir` (must stay alive for the test).
 fn setup_cli_corpus() -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -1334,8 +1347,9 @@ fn test_cli_search_json_output() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed = parse_json_stdout(&stdout);
-    assert!(parsed.is_array());
+    let parsed = parse_json_lines_stdout(&stdout);
+    // JSON Lines output: each line is a valid JSON object
+    assert!(parsed.iter().all(|v| v.is_object()));
 }
 
 #[test]
@@ -1363,10 +1377,7 @@ fn test_cli_search_type_filter() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
+    let parsed: Vec<serde_json::Value> = parse_json_lines_stdout(&stdout);
     for result in &parsed {
         assert_eq!(result["file_type"], "rs");
     }
@@ -1397,10 +1408,7 @@ fn test_cli_search_max_results() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
+    let parsed: Vec<serde_json::Value> = parse_json_lines_stdout(&stdout);
     assert!(parsed.len() <= 1);
 }
 
@@ -1447,10 +1455,7 @@ fn test_cli_search_path_glob() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
+    let parsed: Vec<serde_json::Value> = parse_json_lines_stdout(&stdout);
     for result in &parsed {
         let uri = result["uri"].as_str().unwrap();
         assert!(uri.contains("/src/"), "URI should match path glob: {uri}");
@@ -1488,10 +1493,7 @@ fn test_cli_search_after_filter() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
+    let parsed: Vec<serde_json::Value> = parse_json_lines_stdout(&stdout);
     assert!(
         parsed.is_empty(),
         "Future date should filter out all results"
@@ -1538,11 +1540,8 @@ fn test_cli_scan_type_filter() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
-    for item in &parsed {
+    let parsed = parse_json_stdout(&stdout);
+    for item in parsed.as_array().expect("expected JSON array") {
         assert_eq!(item["file_type"], "rs");
     }
 }
@@ -1573,11 +1572,8 @@ fn test_cli_scan_include_exclude() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
-    for item in &parsed {
+    let parsed = parse_json_stdout(&stdout);
+    for item in parsed.as_array().expect("expected JSON array") {
         assert_ne!(item["file_type"], "rs", "Excluded .rs should not appear");
     }
 }
@@ -1599,11 +1595,8 @@ fn test_cli_scan_max_depth() {
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
-    for item in &parsed {
+    let parsed = parse_json_stdout(&stdout);
+    for item in parsed.as_array().expect("expected JSON array") {
         let uri = item["uri"].as_str().unwrap();
         assert!(
             !uri.contains("/src/"),
@@ -1867,12 +1860,10 @@ fn test_cli_list_json() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
-    assert!(!parsed.is_empty());
-    for item in &parsed {
+    let parsed = parse_json_stdout(&stdout);
+    let items = parsed.as_array().expect("expected JSON array");
+    assert!(!items.is_empty());
+    for item in items {
         assert!(item.get("uri").is_some());
         assert!(item.get("file_type").is_some());
         assert!(item.get("chunks").is_some());
@@ -1969,10 +1960,7 @@ fn test_cli_search_threshold_filter() {
         .unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = parse_json_stdout(&stdout)
-        .as_array()
-        .expect("expected JSON array")
-        .clone();
+    let parsed: Vec<serde_json::Value> = parse_json_lines_stdout(&stdout);
     assert!(
         parsed.is_empty(),
         "Very high threshold should filter out all results"

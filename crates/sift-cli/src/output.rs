@@ -3,7 +3,7 @@ use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
 use sift_core::{IndexStats, SearchResult};
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 
 use crate::OutputFormat;
 
@@ -12,23 +12,31 @@ use crate::OutputFormat;
 // ---------------------------------------------------------------------------
 
 /// Format and print search results in the requested output format.
+///
+/// Results are streamed incrementally: each result is printed and flushed
+/// immediately so consumers (pipes, JSON Lines readers) can process output
+/// without waiting for the full result set.
 pub fn format_search_results(results: &[SearchResult], format: &OutputFormat, show_context: bool) {
+    let mut stdout = std::io::stdout().lock();
     match format {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(results).unwrap_or_default()
-            );
+            // JSON Lines: one compact JSON object per line for streaming consumers.
+            for r in results {
+                let _ = writeln!(stdout, "{}", serde_json::to_string(r).unwrap_or_default());
+                let _ = stdout.flush();
+            }
         }
         OutputFormat::Csv => {
-            println!("uri,score,chunk_index,file_type,text");
+            let _ = writeln!(stdout, "uri,score,chunk_index,file_type,text");
             for r in results {
                 // Escape text for CSV: wrap in quotes, double any internal quotes
                 let escaped = r.text.replace('"', "\"\"").replace('\n', " ");
-                println!(
+                let _ = writeln!(
+                    stdout,
                     "{},{:.4},{},{},\"{}\"",
                     r.uri, r.score, r.chunk_index, r.file_type, escaped
                 );
+                let _ = stdout.flush();
             }
         }
         OutputFormat::Human => {
@@ -43,6 +51,7 @@ fn print_search_results_human(results: &[SearchResult], show_context: bool) {
         return;
     }
 
+    let mut stdout = std::io::stdout().lock();
     for (i, result) in results.iter().enumerate() {
         let uri_display = result.uri.strip_prefix("file://").unwrap_or(&result.uri);
 
@@ -54,7 +63,8 @@ fn print_search_results_human(results: &[SearchResult], show_context: bool) {
             Color::Red
         };
 
-        println!(
+        let _ = writeln!(
+            stdout,
             "  {}. {}  {}",
             (i + 1).to_string().bold(),
             uri_display.cyan(),
@@ -64,29 +74,36 @@ fn print_search_results_human(results: &[SearchResult], show_context: bool) {
         if show_context {
             if let Some(ctx) = read_context_lines(&result.uri, result.byte_range) {
                 for line in &ctx {
-                    println!("     {line}");
+                    let _ = writeln!(stdout, "     {line}");
                 }
             } else {
-                print_snippet(result);
+                print_snippet_to(&mut stdout, result);
             }
         } else {
-            print_snippet(result);
+            print_snippet_to(&mut stdout, result);
         }
 
         if i < results.len() - 1 {
-            println!();
+            let _ = writeln!(stdout);
         }
+        let _ = stdout.flush();
     }
 }
 
+#[cfg(test)]
 fn print_snippet(result: &SearchResult) {
+    let mut stdout = std::io::stdout().lock();
+    print_snippet_to(&mut stdout, result);
+}
+
+fn print_snippet_to(w: &mut impl Write, result: &SearchResult) {
     let snippet: String = result
         .text
         .chars()
         .take(120)
         .collect::<String>()
         .replace('\n', " ");
-    println!("     {}", snippet.dimmed());
+    let _ = writeln!(w, "     {}", snippet.dimmed());
 }
 
 /// Read +/-2 lines of context around a byte range from a file URI.

@@ -71,6 +71,26 @@ async fn search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    // Input validation
+    if params.q.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Query must not be empty".to_string(),
+        ));
+    }
+    if params.q.len() > 10_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Query too long ({} chars, max 10000)", params.q.len()),
+        ));
+    }
+    if params.limit == 0 || params.limit > 1000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Limit must be between 1 and 1000, got {}", params.limit),
+        ));
+    }
+
     let requested_mode = match params.mode.as_deref() {
         Some("vector") => SearchMode::VectorOnly,
         Some("keyword") => SearchMode::KeywordOnly,

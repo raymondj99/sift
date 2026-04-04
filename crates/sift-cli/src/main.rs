@@ -11,7 +11,39 @@ mod pipeline;
 #[cfg(feature = "completions")]
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
+use std::time::Instant;
 use tracing_subscriber::filter::LevelFilter;
+
+/// Lightweight timing profiler for CLI startup stages.
+pub(crate) struct StartupProfiler {
+    start: Instant,
+    checkpoints: Vec<(&'static str, std::time::Duration)>,
+}
+
+impl StartupProfiler {
+    pub(crate) fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            checkpoints: Vec::new(),
+        }
+    }
+
+    pub(crate) fn checkpoint(&mut self, label: &'static str) {
+        self.checkpoints.push((label, self.start.elapsed()));
+    }
+
+    fn report(&self) {
+        let total = self.start.elapsed();
+        for (label, elapsed) in &self.checkpoints {
+            tracing::debug!(
+                label,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "startup checkpoint"
+            );
+        }
+        tracing::debug!(total_ms = total.as_millis() as u64, "startup total");
+    }
+}
 
 /// Output format for command results.
 #[derive(clap::ValueEnum, Clone, Default, Debug, PartialEq, Eq)]
@@ -362,8 +394,14 @@ fn main() {
 }
 
 fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
-    let mut config = sift_core::Config::load()?;
+    let mut profiler = StartupProfiler::new();
+
+    let project_dir = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| sift_core::Config::find_project_root(&cwd));
+    let mut config = sift_core::Config::load_merged(project_dir.as_deref())?;
     config.index_name.clone_from(&cli.index);
+    profiler.checkpoint("config_load");
 
     match cli.command {
         Commands::Scan {
@@ -431,7 +469,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
                 context,
                 after: after_ts,
             };
-            commands::search::run(&config, &options, format, open)?;
+            commands::search::run(&config, &options, format, open, &mut profiler)?;
         }
 
         #[cfg(feature = "serve")]
@@ -507,6 +545,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
         }
     }
 
+    profiler.report();
     Ok(())
 }
 
