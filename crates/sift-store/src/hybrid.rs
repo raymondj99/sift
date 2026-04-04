@@ -65,10 +65,20 @@ impl<V: VectorStore, F: FullTextStore> HybridSearchEngine<V, F> {
     }
 }
 
+/// Source list identifier for index-based RRF fusion.
+#[derive(Clone, Copy)]
+enum Source {
+    Vector(usize),
+    Bm25(usize),
+}
+
 /// Reciprocal Rank Fusion - merge two ranked lists into one.
 ///
 /// RRF score = alpha * `1/(k+rank_vector)` + (1-alpha) * `1/(k+rank_bm25)`
 /// where k=60 is a standard constant.
+///
+/// Uses index references instead of cloning `SearchResult` into the HashMap.
+/// Only the final top-k winners are materialized, avoiding O(n) clones.
 fn rrf_fuse(
     vector_results: &[SearchResult],
     bm25_results: &[SearchResult],
@@ -77,8 +87,8 @@ fn rrf_fuse(
 ) -> Vec<SearchResult> {
     const K: f32 = 60.0;
 
-    // Use (uri, chunk_index) tuple key to avoid format! allocations
-    let mut scores: HashMap<(&str, u32), (SearchResult, f32)> = HashMap::new();
+    let capacity = vector_results.len() + bm25_results.len();
+    let mut scores: HashMap<(&str, u32), (Source, f32)> = HashMap::with_capacity(capacity);
 
     for (rank, result) in vector_results.iter().enumerate() {
         let key = (result.uri.as_str(), result.chunk_index);
@@ -87,7 +97,7 @@ fn rrf_fuse(
         scores
             .entry(key)
             .and_modify(|(_, score)| *score += rrf_score)
-            .or_insert_with(|| (result.clone(), rrf_score));
+            .or_insert((Source::Vector(rank), rrf_score));
     }
 
     for (rank, result) in bm25_results.iter().enumerate() {
@@ -97,18 +107,37 @@ fn rrf_fuse(
         scores
             .entry(key)
             .and_modify(|(_, score)| *score += rrf_score)
-            .or_insert_with(|| (result.clone(), rrf_score));
+            .or_insert((Source::Bm25(rank), rrf_score));
     }
 
-    let mut fused: Vec<(SearchResult, f32)> = scores.into_values().collect();
+    let mut fused: Vec<(Source, f32)> = scores.into_values().collect();
+
+    // Partial sort when we have more candidates than needed.
+    if fused.len() > top_k && top_k > 0 {
+        fused.select_nth_unstable_by(top_k - 1, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        fused.truncate(top_k);
+    }
     fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     fused
         .into_iter()
-        .take(top_k)
-        .map(|(mut result, score)| {
-            result.score = score;
-            result
+        .map(|(source, score)| {
+            let base = match source {
+                Source::Vector(i) => &vector_results[i],
+                Source::Bm25(i) => &bm25_results[i],
+            };
+            SearchResult {
+                uri: base.uri.clone(),
+                text: base.text.clone(),
+                score,
+                chunk_index: base.chunk_index,
+                content_type: base.content_type,
+                file_type: base.file_type.clone(),
+                title: base.title.clone(),
+                byte_range: base.byte_range,
+            }
         })
         .collect()
 }

@@ -156,14 +156,16 @@ impl SiftMcpServer {
         // Apply pagination
         let page: Vec<_> = results.into_iter().skip(offset).take(limit).collect();
 
-        // Format response
+        // Format response — read each file at most once for both line range and context.
         let result_items: Vec<serde_json::Value> = page
             .iter()
             .map(|r| {
                 let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
-                let lines = format_line_range(r.byte_range, path);
+                let file_content = std::fs::read_to_string(path).ok();
+
+                let lines = format_line_range(r.byte_range, file_content.as_deref());
                 let snippet = if context_lines > 0 {
-                    read_context_snippet(&r.uri, r.byte_range, context_lines)
+                    read_context_snippet(r.byte_range, file_content.as_deref(), context_lines)
                         .unwrap_or_else(|| truncate_text(&r.text, 200))
                 } else {
                     truncate_text(&r.text, 200)
@@ -553,11 +555,13 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 /// Convert a byte range to a line range string like "42-58".
-fn format_line_range(byte_range: Option<(u64, u64)>, file_path: &str) -> String {
+///
+/// Accepts pre-read file content to avoid redundant filesystem reads.
+fn format_line_range(byte_range: Option<(u64, u64)>, content: Option<&str>) -> String {
     let Some((start, end)) = byte_range else {
         return String::new();
     };
-    let Ok(content) = std::fs::read_to_string(file_path) else {
+    let Some(content) = content else {
         return String::new();
     };
     let len = content.len() as u64;
@@ -567,14 +571,15 @@ fn format_line_range(byte_range: Option<(u64, u64)>, file_path: &str) -> String 
 }
 
 /// Read context lines around a byte range for a richer search snippet.
+///
+/// Accepts pre-read file content to avoid redundant filesystem reads.
 fn read_context_snippet(
-    uri: &str,
     byte_range: Option<(u64, u64)>,
+    content: Option<&str>,
     context_lines: usize,
 ) -> Option<String> {
-    let path = uri.strip_prefix("file://")?;
     let (start_byte, _) = byte_range?;
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = content?;
 
     let lines: Vec<&str> = content.lines().collect();
     let mut offset = 0u64;
@@ -678,50 +683,45 @@ mod tests {
 
     #[test]
     fn test_format_line_range_no_byte_range() {
-        let result = format_line_range(None, "/nonexistent");
+        let result = format_line_range(None, Some("some content"));
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_format_line_range_missing_file() {
-        let result = format_line_range(Some((0, 10)), "/nonexistent/file.txt");
+        let result = format_line_range(Some((0, 10)), None);
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_format_line_range_with_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let path = tmp.path().join("test.txt");
-        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
-        let result = format_line_range(Some((6, 11)), path.to_str().unwrap());
+        let content = "line1\nline2\nline3\n";
+        let result = format_line_range(Some((6, 11)), Some(content));
         assert!(!result.is_empty()); // Should produce "2-2" or similar
     }
 
     #[test]
     fn test_read_context_snippet_missing_file() {
-        let result = read_context_snippet("file:///nonexistent.txt", Some((0, 10)), 2);
+        let result = read_context_snippet(Some((0, 10)), None, 2);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_read_context_snippet_no_byte_range() {
-        let result = read_context_snippet("file:///some/file.txt", None, 2);
+        let result = read_context_snippet(None, Some("some content"), 2);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_read_context_snippet_non_file_uri() {
-        let result = read_context_snippet("https://example.com", Some((0, 10)), 2);
+    fn test_read_context_snippet_no_content() {
+        let result = read_context_snippet(Some((0, 10)), None, 2);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_read_context_snippet_with_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let path = tmp.path().join("code.rs");
-        std::fs::write(&path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
-        let uri = format!("file://{}", path.display());
-        let result = read_context_snippet(&uri, Some((0, 11)), 1);
+        let content = "fn main() {\n    println!(\"hello\");\n}\n";
+        let result = read_context_snippet(Some((0, 11)), Some(content), 1);
         assert!(result.is_some());
         let snippet = result.unwrap();
         assert!(snippet.contains("fn main()"));

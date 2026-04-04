@@ -162,6 +162,106 @@ fn bench_fts5_search(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark hybrid search (RRF fusion) with both vector + keyword results.
+#[cfg(feature = "hnsw")]
+fn bench_hybrid_search(c: &mut Criterion) {
+    use sift_store::HybridSearchEngine;
+
+    let mut group = c.benchmark_group("hybrid_search");
+    let dim = 768;
+
+    let sentences = [
+        "the quick brown fox jumps over the lazy dog",
+        "rust programming language systems performance",
+        "database connection pool management retry",
+        "error handling middleware request processing",
+    ];
+
+    for n in [100, 1_000] {
+        let vector_store = sift_store::HnswIndex::new();
+
+        #[cfg(feature = "fulltext")]
+        let fts_store = sift_store::TantivyStore::open_in_memory().unwrap();
+        #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
+        let fts_store = sift_store::Fts5Store::open_in_memory().unwrap();
+        #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
+        let fts_store = sift_store::Bm25Store::open(
+            &std::env::temp_dir().join(format!("sift_bench_bm25_{n}.json")),
+        )
+        .unwrap();
+
+        let chunks: Vec<EmbeddedChunk> = (0..n)
+            .map(|i| {
+                let text = sentences[i % sentences.len()];
+                let full_text = format!("{text} document number {i}");
+                EmbeddedChunk {
+                    chunk: Chunk {
+                        text: full_text,
+                        source_uri: format!("file:///{i}.txt"),
+                        chunk_index: 0,
+                        content_type: ContentType::Text,
+                        file_type: "txt".to_string(),
+                        title: None,
+                        language: None,
+                        byte_range: None,
+                    },
+                    vector: make_random_vector(dim, i as u64),
+                }
+            })
+            .collect();
+
+        VectorStore::insert(&vector_store, &chunks).unwrap();
+        sift_store::FullTextStore::insert(&fts_store, &chunks).unwrap();
+
+        let engine = HybridSearchEngine::new(vector_store, fts_store, 0.7);
+        let query_vec = make_random_vector(dim, 12345);
+
+        group.bench_with_input(BenchmarkId::new("entries", n), &n, |bench, _| {
+            bench.iter(|| {
+                engine
+                    .search(
+                        &query_vec,
+                        "error handling retry",
+                        10,
+                        sift_core::SearchMode::Hybrid,
+                    )
+                    .unwrap()
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark HNSW delete_by_uri (reverse index optimization).
+#[cfg(feature = "hnsw")]
+fn bench_hnsw_delete(c: &mut Criterion) {
+    use sift_store::HnswIndex;
+
+    let mut group = c.benchmark_group("hnsw_delete");
+    let dim = 768;
+
+    for n in [100, 1_000] {
+        group.bench_with_input(BenchmarkId::new("entries", n), &n, |bench, _| {
+            bench.iter_batched(
+                || {
+                    let store = HnswIndex::new();
+                    let chunks: Vec<EmbeddedChunk> = (0..n)
+                        .map(|i| make_embedded_chunk(&format!("file:///{i}.txt"), dim, i as u64))
+                        .collect();
+                    store.insert(&chunks).unwrap();
+                    store
+                },
+                |store| {
+                    // Delete a URI from the middle
+                    store.delete_by_uri("file:///50.txt").unwrap();
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 // Pick the right benchmark group based on available features.
 #[cfg(all(feature = "hnsw", not(feature = "fulltext"), feature = "fts5"))]
 criterion_group!(
@@ -171,15 +271,30 @@ criterion_group!(
     bench_hnsw_search,
     bench_vector_insert,
     bench_fts5_search,
+    bench_hybrid_search,
+    bench_hnsw_delete,
 );
 
-#[cfg(all(feature = "hnsw", any(feature = "fulltext", not(feature = "fts5"))))]
+#[cfg(all(feature = "hnsw", feature = "fulltext"))]
 criterion_group!(
     benches,
     bench_cosine_similarity,
     bench_flat_search,
     bench_hnsw_search,
     bench_vector_insert,
+    bench_hybrid_search,
+    bench_hnsw_delete,
+);
+
+#[cfg(all(feature = "hnsw", not(feature = "fulltext"), not(feature = "fts5")))]
+criterion_group!(
+    benches,
+    bench_cosine_similarity,
+    bench_flat_search,
+    bench_hnsw_search,
+    bench_vector_insert,
+    bench_hybrid_search,
+    bench_hnsw_delete,
 );
 
 #[cfg(not(feature = "hnsw"))]

@@ -188,6 +188,9 @@ struct ParsedItem {
     item: SourceItem,
     chunks: Vec<Chunk>,
     file_type: String,
+    /// Raw file bytes, carried forward for image embedding to avoid re-reading.
+    #[cfg(feature = "vision")]
+    raw_bytes: Option<Vec<u8>>,
 }
 
 /// A file that has been embedded and is ready for storage.
@@ -415,10 +418,20 @@ pub fn run_scan_pipeline(
                         return;
                     }
 
+                    // Carry raw bytes forward for image files to avoid re-reading in embed stage.
+                    #[cfg(feature = "vision")]
+                    let raw_bytes = if doc.content_type == sift_core::ContentType::Image {
+                        Some(content)
+                    } else {
+                        None
+                    };
+
                     let parsed = ParsedItem {
                         item,
                         chunks,
                         file_type,
+                        #[cfg(feature = "vision")]
+                        raw_bytes,
                     };
 
                     // Send downstream; if the channel is closed, stop.
@@ -451,7 +464,13 @@ pub fn run_scan_pipeline(
                 let embedded: Vec<EmbeddedChunk> = if is_image {
                     #[cfg(feature = "vision")]
                     {
-                        embed_image_chunks(&chunks, &item, vision_embedder, embedder)
+                        embed_image_chunks(
+                            &chunks,
+                            &item,
+                            parsed.raw_bytes,
+                            vision_embedder,
+                            embedder,
+                        )
                     }
                     #[cfg(not(feature = "vision"))]
                     {
@@ -667,42 +686,45 @@ fn zero_vector_chunks(chunks: &[Chunk]) -> Vec<EmbeddedChunk> {
 }
 
 /// Embed image chunks using the vision model if available, falling back to text embedding.
+///
+/// Accepts pre-read `raw_bytes` from the parse stage to avoid re-reading the
+/// file from disk. Falls back to a filesystem read only if bytes were not carried.
 #[cfg(all(feature = "embeddings", feature = "vision"))]
 fn embed_image_chunks(
     chunks: &[Chunk],
     item: &SourceItem,
+    raw_bytes: Option<Vec<u8>>,
     vision_embedder: Option<&VisionEmbedder>,
     text_embedder: Option<&dyn Embedder>,
 ) -> Vec<EmbeddedChunk> {
     if let Some(vision) = vision_embedder {
-        // Read the raw image bytes for vision embedding
-        match std::fs::read(&item.path) {
-            Ok(image_bytes) => {
-                match vision.embed_image(&image_bytes) {
-                    Ok(vector) => {
-                        // Use the vision vector for all chunks of this image
-                        return chunks
-                            .iter()
-                            .map(|chunk| EmbeddedChunk {
-                                chunk: chunk.clone(),
-                                vector: vector.clone(),
-                            })
-                            .collect();
-                    }
-                    Err(e) => {
-                        debug!(
-                            "Vision embedding failed for {}: {}. Falling back to text.",
-                            item.uri, e
-                        );
-                    }
+        // Use pre-read bytes or fall back to filesystem read.
+        let image_bytes = raw_bytes.or_else(|| std::fs::read(&item.path).ok());
+
+        if let Some(bytes) = image_bytes {
+            match vision.embed_image(&bytes) {
+                Ok(vector) => {
+                    // Use the vision vector for all chunks of this image
+                    return chunks
+                        .iter()
+                        .map(|chunk| EmbeddedChunk {
+                            chunk: chunk.clone(),
+                            vector: vector.clone(),
+                        })
+                        .collect();
+                }
+                Err(e) => {
+                    debug!(
+                        "Vision embedding failed for {}: {}. Falling back to text.",
+                        item.uri, e
+                    );
                 }
             }
-            Err(e) => {
-                debug!(
-                    "Failed to re-read image {}: {}. Falling back to text.",
-                    item.uri, e
-                );
-            }
+        } else {
+            debug!(
+                "No image bytes available for {}: falling back to text.",
+                item.uri
+            );
         }
     }
 

@@ -1,14 +1,15 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use sift_core::SiftResult;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// Content-addressed embedding cache backed by `SQLite`.
 /// Maps BLAKE3 hash of text → embedding vector to avoid re-computation.
 pub struct EmbeddingCache {
     conn: Mutex<Connection>,
-    hits: Mutex<u64>,
-    misses: Mutex<u64>,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl EmbeddingCache {
@@ -32,8 +33,8 @@ impl EmbeddingCache {
 
         Ok(Self {
             conn: Mutex::new(conn),
-            hits: Mutex::new(0),
-            misses: Mutex::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         })
     }
 
@@ -55,8 +56,8 @@ impl EmbeddingCache {
 
         Ok(Self {
             conn: Mutex::new(conn),
-            hits: Mutex::new(0),
-            misses: Mutex::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         })
     }
 
@@ -74,14 +75,10 @@ impl EmbeddingCache {
             .ok()?;
 
         if let Some(blob) = result {
-            if let Ok(mut hits) = self.hits.lock() {
-                *hits += 1;
-            }
+            self.hits.fetch_add(1, Ordering::Relaxed);
             Some(bytes_to_f32(&blob))
         } else {
-            if let Ok(mut misses) = self.misses.lock() {
-                *misses += 1;
-            }
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
         }
     }
@@ -119,8 +116,8 @@ impl EmbeddingCache {
 
     /// Return (hits, misses) for this session.
     pub fn stats(&self) -> (u64, u64) {
-        let hits = self.hits.lock().map(|h| *h).unwrap_or(0);
-        let misses = self.misses.lock().map(|m| *m).unwrap_or(0);
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
         (hits, misses)
     }
 
@@ -146,18 +143,19 @@ fn blake3_hash(text: &str) -> [u8; 32] {
 }
 
 fn f32_to_bytes(vec: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(vec.len() * 4);
-    for &v in vec {
-        bytes.extend_from_slice(&v.to_le_bytes());
+    let mut bytes = vec![0u8; vec.len() * 4];
+    for (i, &v) in vec.iter().enumerate() {
+        bytes[i * 4..(i + 1) * 4].copy_from_slice(&v.to_le_bytes());
     }
     bytes
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    out
 }
 
 #[cfg(test)]

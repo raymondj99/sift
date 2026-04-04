@@ -41,6 +41,8 @@ struct HnswInner {
     next_label: u64,
     /// Label -> metadata mapping.
     meta: HashMap<u64, EntryMeta>,
+    /// Reverse index: URI -> labels for O(1) delete lookups.
+    uri_to_labels: HashMap<String, Vec<u64>>,
     /// Dimensionality (set on first insert, 0 until then).
     dimensions: usize,
 }
@@ -64,6 +66,7 @@ impl HnswIndex {
                 index,
                 next_label: 0,
                 meta: HashMap::new(),
+                uri_to_labels: HashMap::new(),
                 dimensions: 0,
             }),
         }
@@ -92,6 +95,7 @@ impl HnswIndex {
                 index,
                 next_label: 0,
                 meta: HashMap::new(),
+                uri_to_labels: HashMap::new(),
                 dimensions,
             }),
         })
@@ -157,6 +161,15 @@ impl HnswIndex {
 
         let next_label = meta.keys().copied().max().map_or(0, |k| k + 1);
 
+        // Build reverse index from loaded metadata.
+        let mut uri_to_labels: HashMap<String, Vec<u64>> = HashMap::new();
+        for (&label, entry) in &meta {
+            uri_to_labels
+                .entry(entry.uri.clone())
+                .or_default()
+                .push(label);
+        }
+
         // Infer dimensions from any entry's vector (we will get it from the loaded index).
         // Create options with 0 dimensions; load will override.
         let options = Self::default_options(0);
@@ -177,6 +190,7 @@ impl HnswIndex {
                 index,
                 next_label,
                 meta,
+                uri_to_labels,
                 dimensions,
             }),
         })
@@ -292,6 +306,12 @@ impl VectorStore for HnswIndex {
                 .add(label, &ec.vector)
                 .map_err(|e| SiftError::Storage(format!("usearch: add: {e}")))?;
 
+            inner
+                .uri_to_labels
+                .entry(ec.chunk.source_uri.clone())
+                .or_default()
+                .push(label);
+
             inner.meta.insert(
                 label,
                 EntryMeta {
@@ -346,12 +366,11 @@ impl VectorStore for HnswIndex {
     fn delete_by_uri(&self, uri: &str) -> SiftResult<u64> {
         let mut inner = self.inner.lock().map_err(lock_err)?;
 
-        let labels_to_remove: Vec<u64> = inner
-            .meta
-            .iter()
-            .filter(|(_, m)| m.uri == uri)
-            .map(|(&label, _)| label)
-            .collect();
+        // O(1) lookup via reverse index instead of scanning all metadata.
+        let labels_to_remove = match inner.uri_to_labels.remove(uri) {
+            Some(labels) => labels,
+            None => return Ok(0),
+        };
 
         let count = labels_to_remove.len() as u64;
 
