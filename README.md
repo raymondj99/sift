@@ -6,7 +6,7 @@
 
 **Point at anything. Search everything.**
 
-`sift` is a fast CLI tool that indexes files and makes them searchable from a single binary. Written in Rust with a modular feature-gated architecture — build only what you need, from a 6.6 MB floor to a full-featured 17 MB binary.
+`sift` is a fast CLI tool that indexes files and makes them searchable from a single binary. Written in Rust with a modular feature-gated architecture — build only what you need, from a 2.2 MB floor to a full-featured 18 MB binary.
 
 ```
 $ sift scan ~/Documents
@@ -225,10 +225,10 @@ sift uses Cargo feature flags to control binary size. Only compile what you need
 
 | Profile | Command | Size | What you get |
 |---------|---------|------|-------------|
-| **Minimal** | `--no-default-features --features fts5,sqlite` | ~6.6 MB | Text/code search only |
-| **Default** | *(none)* | ~14 MB | + CSV, Office, archives, progress bars |
-| **Standard** | `--features standard` | ~14 MB | + AST chunking, PDF, email, embeddings |
-| **Full** | `--features full` | ~17 MB | + HTTP server, HNSW, vision, audio, completions |
+| **Minimal** | `--no-default-features --features fts5,sqlite` | ~2 MB | Text/code search only |
+| **Default** | *(none)* | ~4 MB | + CSV, Office, archives, progress bars |
+| **Standard** | `--features standard` | ~13 MB | + AST chunking, PDF, email, embeddings |
+| **Full** | `--features full` | ~18 MB | + HTTP server, HNSW, vision, audio, completions |
 
 ### Individual features
 

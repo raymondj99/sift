@@ -40,9 +40,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             cross: false
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
+          # aarch64-linux-gnu is excluded: usearch (HNSW) bundles simsimd
+          # which requires ARM NEON intrinsics that cross's GCC doesn't support.
+          # ARM Linux users can build from source.
           - target: x86_64-apple-darwin
             os: macos-latest
             cross: false
