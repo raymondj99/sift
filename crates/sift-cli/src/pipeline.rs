@@ -675,6 +675,9 @@ fn embed_text_chunks_atomic(
     zero_vector_chunks(chunks, 768)
 }
 
+/// Produce zero-vector embeddings for chunks when no embedding model is
+/// available. Uses the given `dimensions` to match the active model's
+/// output size (or defaults to 768 when no model is configured).
 fn zero_vector_chunks(chunks: &[Chunk], dimensions: usize) -> Vec<EmbeddedChunk> {
     chunks
         .iter()

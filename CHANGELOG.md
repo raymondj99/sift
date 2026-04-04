@@ -23,6 +23,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Named indexes (`--index`)
 - JSON/CSV output formats (`--format json`)
 
+## [0.1.1] - 2026-04-04
+
+### Changed
+- **MCP server**: wrap search engine in an LRU cache (50 entries, 60 s TTL) so
+  repeated agent queries avoid full re-search.
+- **MCP server**: deduplicate file reads per request — multiple results from the
+  same source file now share a single disk read.
+- **Embedding**: `tokenize_batch` returns flat `Vec<i64>` tensors directly,
+  eliminating 3×batch_size intermediate `Vec<Vec<i64>>` allocations per
+  inference call.
+- **Embedding cache**: `put_batch` reuses a single serialisation buffer across
+  the batch instead of allocating `Vec<u8>` per embedding.
+- **Chunking**: `force_split` and `apply_overlap` use `char_indices()` iterators
+  instead of `chars().collect::<Vec<char>>()`, removing an O(text_len)
+  allocation per chunk.
+- **Pipeline**: `zero_vector_chunks` now queries the embedder for its actual
+  dimensionality instead of hard-coding 768.
+
+### Fixed
+- Zero-vector fallback used hard-coded 768-dimension vectors regardless of
+  the active model's output size. Now uses `embedder.dimensions()`.
+
+### Added
+- MCP input validation: reject unknown `mode`, `detail`, and `scope` values
+  with descriptive error messages; validate query length and block path
+  traversal attempts.
+- 8 new tests covering MCP input validation edge cases.
+
 ## [0.1.0] - 2025-01-01
 
 ### Added

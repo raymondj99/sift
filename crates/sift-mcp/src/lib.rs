@@ -3,6 +3,9 @@
 //! This crate provides a thin MCP (Model Context Protocol) layer over sift's
 //! existing search pipeline. It communicates via JSON-RPC 2.0 over stdio,
 //! allowing any MCP-compatible agent to search indexed content.
+//!
+//! Repeated queries are served from an LRU cache (50 entries, 60 s TTL),
+//! and all tool inputs are validated with descriptive error messages.
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -58,8 +61,12 @@ pub struct SearchSkillsRequest {
 // Server
 // ---------------------------------------------------------------------------
 
-/// The sift MCP server. Holds shared state (search engine, metadata store)
-/// and dispatches tool calls to the appropriate handler.
+/// The sift MCP server. Holds shared state (LRU-cached search engine,
+/// metadata store) and dispatches tool calls to the appropriate handler.
+///
+/// Search results are cached (50-entry LRU, 60 s TTL) so repeated agent
+/// queries avoid redundant work. All tool inputs are validated at the
+/// boundary before reaching the engine.
 pub struct SiftMcpServer {
     tool_router: ToolRouter<Self>,
     config: Config,

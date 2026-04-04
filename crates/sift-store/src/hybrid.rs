@@ -74,8 +74,11 @@ enum Source {
 
 /// Reciprocal Rank Fusion - merge two ranked lists into one.
 ///
-/// RRF score = alpha * `1/(k+rank_vector)` + (1-alpha) * `1/(k+rank_bm25)`
+/// Raw RRF score = alpha * `1/(k+rank_vector)` + (1-alpha) * `1/(k+rank_bm25)`
 /// where k=60 is a standard constant.
+///
+/// Scores are normalized to 0–1 by multiplying by `(K+1)` so that a result
+/// ranked #1 in both lists scores 1.0.
 ///
 /// Uses index references instead of cloning `SearchResult` into the HashMap.
 /// Only the final top-k winners are materialized, avoiding O(n) clones.
@@ -110,7 +113,14 @@ fn rrf_fuse(
             .or_insert((Source::Bm25(rank), rrf_score));
     }
 
-    let mut fused: Vec<(Source, f32)> = scores.into_values().collect();
+    // Normalize raw RRF scores to 0–1.  The theoretical maximum raw score
+    // is 1/(K+1) (a result ranked #1 in both lists), so multiplying by
+    // (K+1) maps that to 1.0.
+    let norm = K + 1.0;
+    let mut fused: Vec<(Source, f32)> = scores
+        .into_values()
+        .map(|(src, score)| (src, score * norm))
+        .collect();
 
     // Partial sort when we have more candidates than needed.
     if fused.len() > top_k && top_k > 0 {

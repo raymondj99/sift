@@ -43,14 +43,24 @@ $ sift search --type rs "error handling retry"
 Pre-compiled binaries for macOS and Linux are available on the
 [releases page](https://github.com/raymondj99/sift/releases).
 
+Download the tarball for your platform, extract it, and move the binary
+into your `PATH`. Replace `VERSION` below with the release tag (e.g. `v0.1.1`):
+
 ```bash
 # macOS (Apple Silicon)
-curl -LO https://github.com/raymondj99/sift/releases/latest/download/sift-aarch64-apple-darwin.tar.gz
-tar xzf sift-aarch64-apple-darwin.tar.gz && sudo mv sift-*/sift /usr/local/bin/
+curl -LO https://github.com/raymondj99/sift/releases/download/VERSION/sift-VERSION-aarch64-apple-darwin.tar.gz
+tar xzf sift-VERSION-aarch64-apple-darwin.tar.gz
+sudo mv sift-VERSION-aarch64-apple-darwin/sift /usr/local/bin/
+
+# macOS (Intel)
+curl -LO https://github.com/raymondj99/sift/releases/download/VERSION/sift-VERSION-x86_64-apple-darwin.tar.gz
+tar xzf sift-VERSION-x86_64-apple-darwin.tar.gz
+sudo mv sift-VERSION-x86_64-apple-darwin/sift /usr/local/bin/
 
 # Linux (x86_64)
-curl -LO https://github.com/raymondj99/sift/releases/latest/download/sift-x86_64-unknown-linux-gnu.tar.gz
-tar xzf sift-x86_64-unknown-linux-gnu.tar.gz && sudo mv sift-*/sift /usr/local/bin/
+curl -LO https://github.com/raymondj99/sift/releases/download/VERSION/sift-VERSION-x86_64-unknown-linux-gnu.tar.gz
+tar xzf sift-VERSION-x86_64-unknown-linux-gnu.tar.gz
+sudo mv sift-VERSION-x86_64-unknown-linux-gnu/sift /usr/local/bin/
 ```
 
 ### Cargo (any platform)
