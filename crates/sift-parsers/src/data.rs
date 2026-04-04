@@ -208,4 +208,109 @@ mod tests {
         assert!(doc.text.contains("items[1]: b"));
         assert!(doc.text.contains("items[2]: c"));
     }
+
+    #[test]
+    fn test_parse_jsonl() {
+        let parser = DataParser;
+        let jsonl = b"{\"a\":1}\n{\"b\":2}\n";
+        let doc = parser.parse(jsonl, None, Some("jsonl")).unwrap();
+        assert!(doc.text.contains("a: 1"));
+        assert!(doc.text.contains("b: 2"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_with_blank_lines() {
+        let jsonl = "{\"x\":1}\n\n{\"y\":2}\n";
+        let result = parse_jsonl(jsonl);
+        assert!(result.contains("x: 1"));
+        assert!(result.contains("y: 2"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_all_invalid_returns_raw() {
+        let bad = "not json\nalso not json\n";
+        let result = parse_jsonl(bad);
+        assert_eq!(result, bad);
+    }
+
+    #[test]
+    fn test_parse_csv_empty_returns_raw() {
+        let csv_data = "";
+        let result = parse_csv(csv_data);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_parse_csv_with_quoted_fields() {
+        let csv_data = "name,bio\n\"Alice\",\"Likes, commas\"\n";
+        let result = parse_csv(csv_data);
+        assert!(result.contains("name: Alice"));
+        assert!(result.contains("bio: Likes, commas"));
+    }
+
+    #[test]
+    fn test_flatten_json_null_and_bool() {
+        let json: serde_json::Value = serde_json::json!({"flag": true, "nothing": null});
+        let result = flatten_json_value(&json, "");
+        assert!(result.contains("flag: true"));
+        assert!(result.contains("nothing: null"));
+    }
+
+    #[test]
+    fn test_flatten_json_top_level_primitive() {
+        let json: serde_json::Value = serde_json::json!(42);
+        let result = flatten_json_value(&json, "");
+        assert!(result.contains("42"));
+    }
+
+    #[test]
+    fn test_parse_toml_falls_through_to_raw() {
+        let parser = DataParser;
+        let toml_data = b"[section]\nkey = \"value\"\n";
+        let doc = parser.parse(toml_data, None, Some("toml")).unwrap();
+        // TOML/YAML fall through to raw text (no special parser)
+        assert!(doc.text.contains("key = \"value\""));
+    }
+
+    #[test]
+    fn test_parse_yaml_falls_through_to_raw() {
+        let parser = DataParser;
+        let yaml = b"name: alice\nage: 30\n";
+        let doc = parser.parse(yaml, None, Some("yaml")).unwrap();
+        assert!(doc.text.contains("name: alice"));
+    }
+
+    #[test]
+    fn test_can_parse_data_extensions() {
+        let parser = DataParser;
+        assert!(parser.can_parse(None, Some("json")));
+        assert!(parser.can_parse(None, Some("jsonl")));
+        assert!(parser.can_parse(None, Some("csv")));
+        assert!(parser.can_parse(None, Some("toml")));
+        assert!(parser.can_parse(None, Some("yaml")));
+        assert!(parser.can_parse(None, Some("yml")));
+        assert!(!parser.can_parse(None, Some("txt")));
+    }
+
+    #[test]
+    fn test_can_parse_data_mimes() {
+        let parser = DataParser;
+        assert!(parser.can_parse(Some("application/json"), None));
+        assert!(parser.can_parse(Some("text/csv"), None));
+        assert!(parser.can_parse(Some("application/toml"), None));
+        assert!(!parser.can_parse(Some("text/plain"), None));
+    }
+
+    #[test]
+    fn test_flatten_json_empty_object_and_array() {
+        let json: serde_json::Value = serde_json::json!({"obj": {}, "arr": []});
+        let result = flatten_json_value(&json, "");
+        // Empty containers produce no output
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_data_parser_name() {
+        assert_eq!(DataParser.name(), "data");
+    }
 }

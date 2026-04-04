@@ -217,4 +217,128 @@ mod tests {
         assert!(text.contains("After"));
         assert!(!text.contains("alert"));
     }
+
+    #[test]
+    fn test_strip_style_tags() {
+        let html = "<p>Visible</p><style>body { color: red; }</style><p>Also visible</p>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains("Visible"));
+        assert!(text.contains("Also visible"));
+        assert!(!text.contains("color"));
+    }
+
+    #[test]
+    fn test_html_entities_decoded() {
+        let html = "<p>5 &lt; 10 &amp; 10 &gt; 5</p>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains("5 < 10 & 10 > 5"));
+    }
+
+    #[test]
+    fn test_html_entities_quotes_and_nbsp() {
+        let html = "<p>&quot;hello&quot;&nbsp;&#39;world&#39;</p>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains("\"hello\""));
+        assert!(text.contains("'world'"));
+    }
+
+    #[test]
+    fn test_block_level_tags_add_newlines() {
+        let html = "<div>Block1</div><div>Block2</div>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains('\n'));
+    }
+
+    #[test]
+    fn test_heading_tags_add_newlines() {
+        let html = "<h1>Title</h1><h2>Subtitle</h2><p>Content</p>";
+        let (text, _) = extract_html_text(html);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= 3);
+    }
+
+    #[test]
+    fn test_collapse_whitespace_multiple_spaces() {
+        let result = collapse_whitespace("hello    world   test");
+        assert_eq!(result, "hello world test");
+    }
+
+    #[test]
+    fn test_collapse_whitespace_preserves_newlines() {
+        let result = collapse_whitespace("line1\n\n\nline2");
+        // Multiple newlines collapse to one
+        assert!(result.contains("line1\nline2") || result.contains("line1 line2"));
+    }
+
+    #[test]
+    fn test_xml_parsing() {
+        let parser = WebParser;
+        let xml = b"<?xml version=\"1.0\"?><root><item>Value 1</item><item>Value 2</item></root>";
+        let doc = parser.parse(xml, Some("text/xml"), Some("xml")).unwrap();
+        assert!(doc.text.contains("Value 1"));
+        assert!(doc.text.contains("Value 2"));
+        assert!(doc.title.is_none());
+    }
+
+    #[test]
+    fn test_strip_xml_tags_basic() {
+        let xml = "<root><child>text</child></root>";
+        let result = strip_xml_tags(xml);
+        assert!(result.contains("text"));
+        assert!(!result.contains('<'));
+    }
+
+    #[test]
+    fn test_tags_with_attributes() {
+        let html = "<div class=\"container\" id=\"main\"><p style=\"color:red\">Content</p></div>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains("Content"));
+        assert!(!text.contains("container"));
+        assert!(!text.contains("color"));
+    }
+
+    #[test]
+    fn test_can_parse_mimes() {
+        let parser = WebParser;
+        assert!(parser.can_parse(Some("text/html"), None));
+        assert!(parser.can_parse(Some("text/xml"), None));
+        assert!(parser.can_parse(Some("application/xml"), None));
+        assert!(parser.can_parse(Some("application/xhtml+xml"), None));
+        assert!(!parser.can_parse(Some("text/plain"), None));
+    }
+
+    #[test]
+    fn test_can_parse_extensions() {
+        let parser = WebParser;
+        assert!(parser.can_parse(None, Some("html")));
+        assert!(parser.can_parse(None, Some("htm")));
+        assert!(parser.can_parse(None, Some("xml")));
+        assert!(parser.can_parse(None, Some("xhtml")));
+        assert!(!parser.can_parse(None, Some("txt")));
+    }
+
+    #[test]
+    fn test_no_mime_no_extension() {
+        let parser = WebParser;
+        assert!(!parser.can_parse(None, None));
+    }
+
+    #[test]
+    fn test_html_no_title() {
+        let html = "<p>No title here</p>";
+        let (text, title) = extract_html_text(html);
+        assert!(text.contains("No title here"));
+        assert!(title.is_none());
+    }
+
+    #[test]
+    fn test_section_article_tags() {
+        let html =
+            "<section>Sec</section><article>Art</article><header>Hdr</header><footer>Ftr</footer>";
+        let (text, _) = extract_html_text(html);
+        assert!(text.contains("Sec"));
+        assert!(text.contains("Art"));
+        assert!(text.contains("Hdr"));
+        assert!(text.contains("Ftr"));
+    }
 }

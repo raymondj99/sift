@@ -161,4 +161,89 @@ mod tests {
     fn test_no_frontmatter() {
         assert!(parse_frontmatter("# Just markdown\nNo frontmatter here").is_none());
     }
+
+    #[test]
+    fn test_frontmatter_with_all_fields() {
+        let content = "---\nname: my-skill\ndescription: Does things\nlicense: MIT\ncompatibility: linux\nallowed-tools: Read Edit\n---\nBody";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("my-skill"));
+        assert_eq!(fm.description.as_deref(), Some("Does things"));
+        assert_eq!(fm.license.as_deref(), Some("MIT"));
+        assert_eq!(fm.compatibility.as_deref(), Some("linux"));
+        assert_eq!(fm.allowed_tools.as_deref(), Some("Read Edit"));
+        assert_eq!(body, "Body");
+    }
+
+    #[test]
+    fn test_frontmatter_with_crlf() {
+        let content = "---\r\nname: test\r\n---\r\nBody\r\n";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("test"));
+        // Body is correctly extracted after closing delimiter
+        assert!(body.contains("Body"));
+    }
+
+    #[test]
+    fn test_frontmatter_quoted_values() {
+        let content = "---\nname: \"quoted-name\"\ndescription: 'single quoted'\n---\nBody";
+        let (fm, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("quoted-name"));
+        assert_eq!(fm.description.as_deref(), Some("single quoted"));
+    }
+
+    #[test]
+    fn test_frontmatter_with_comments() {
+        let content = "---\n# This is a comment\nname: skill-name\n# Another comment\n---\nBody";
+        let (fm, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("skill-name"));
+        assert!(!fm.raw.contains_key("#"));
+    }
+
+    #[test]
+    fn test_no_closing_delimiter() {
+        let content = "---\nname: orphan\nno closing delimiter";
+        assert!(parse_frontmatter(content).is_none());
+    }
+
+    #[test]
+    fn test_strip_quotes_double() {
+        assert_eq!(strip_quotes("\"hello\""), "hello");
+    }
+
+    #[test]
+    fn test_strip_quotes_single() {
+        assert_eq!(strip_quotes("'hello'"), "hello");
+    }
+
+    #[test]
+    fn test_strip_quotes_mismatched() {
+        assert_eq!(strip_quotes("\"hello'"), "\"hello'");
+    }
+
+    #[test]
+    fn test_strip_quotes_no_quotes() {
+        assert_eq!(strip_quotes("hello"), "hello");
+    }
+
+    #[test]
+    fn test_frontmatter_key_with_empty_value() {
+        let content = "---\nmultiline:\nname: test\n---\nBody";
+        let (fm, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("test"));
+        // Key with empty value followed by another key: the empty key is consumed
+        // but its value resolves to empty string (no continuation lines)
+    }
+
+    #[test]
+    fn test_frontmatter_whitespace_before_opening() {
+        let content = "  \n---\nname: test\n---\nBody";
+        let (fm, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn test_parse_yaml_kv_empty_block() {
+        let result = parse_yaml_kv("");
+        assert!(result.is_empty());
+    }
 }

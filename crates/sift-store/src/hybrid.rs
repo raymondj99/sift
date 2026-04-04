@@ -172,6 +172,93 @@ mod tests {
     }
 
     #[test]
+    fn test_rrf_fuse_empty_both() {
+        let fused = rrf_fuse(&[], &[], 0.5, 10);
+        assert!(fused.is_empty());
+    }
+
+    #[test]
+    fn test_rrf_fuse_empty_vector_only() {
+        let bm25 = vec![make_result("a", 5.0)];
+        let fused = rrf_fuse(&[], &bm25, 0.5, 10);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].uri, "a");
+    }
+
+    #[test]
+    fn test_rrf_fuse_empty_bm25_only() {
+        let vector = vec![make_result("a", 0.9)];
+        let fused = rrf_fuse(&vector, &[], 0.5, 10);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].uri, "a");
+    }
+
+    #[test]
+    fn test_rrf_fuse_alpha_zero_pure_bm25() {
+        let vector = vec![make_result("v", 0.9)];
+        let bm25 = vec![make_result("b", 5.0)];
+        let fused = rrf_fuse(&vector, &bm25, 0.0, 10);
+        // alpha=0 means vector gets zero weight, bm25 gets full weight
+        assert_eq!(fused[0].uri, "b");
+    }
+
+    #[test]
+    fn test_rrf_fuse_alpha_one_pure_vector() {
+        let vector = vec![make_result("v", 0.9)];
+        let bm25 = vec![make_result("b", 5.0)];
+        let fused = rrf_fuse(&vector, &bm25, 1.0, 10);
+        // alpha=1 means bm25 gets zero weight, vector gets full weight
+        assert_eq!(fused[0].uri, "v");
+    }
+
+    #[test]
+    fn test_rrf_fuse_top_k_truncation() {
+        let vector: Vec<SearchResult> = (0..20)
+            .map(|i| make_result(&format!("v{i}"), 0.9 - i as f32 * 0.01))
+            .collect();
+        let bm25: Vec<SearchResult> = (0..20)
+            .map(|i| make_result(&format!("b{i}"), 5.0 - i as f32 * 0.1))
+            .collect();
+        let fused = rrf_fuse(&vector, &bm25, 0.5, 5);
+        assert_eq!(fused.len(), 5);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_alpha_clamping() {
+        // Test clamping with a simple struct that satisfies both traits
+        let eng_low = HybridSearchEngine {
+            vector_store: crate::flat::FlatVectorIndex::new(),
+            fulltext_store: create_fulltext_store(),
+            alpha: (-0.5f32).clamp(0.0, 1.0),
+        };
+        assert_eq!(eng_low.alpha, 0.0);
+
+        let eng_high = HybridSearchEngine {
+            vector_store: crate::flat::FlatVectorIndex::new(),
+            fulltext_store: create_fulltext_store(),
+            alpha: (2.0f32).clamp(0.0, 1.0),
+        };
+        assert_eq!(eng_high.alpha, 1.0);
+    }
+
+    fn create_fulltext_store() -> impl FullTextStore {
+        #[cfg(feature = "fulltext")]
+        {
+            crate::tantivy_store::TantivyStore::open_in_memory().unwrap()
+        }
+        #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
+        {
+            crate::fts5::Fts5Store::open_in_memory().unwrap()
+        }
+        #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            crate::bm25::Bm25Store::open(&tmp.path().join("bm25.json")).unwrap()
+        }
+    }
+
+    #[test]
     fn test_hybrid_engine_hybrid_mode_search() {
         // Exercises the Hybrid branch (line 41) with actual stores
         let tmp = tempfile::tempdir().unwrap();

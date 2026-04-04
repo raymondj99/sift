@@ -346,4 +346,91 @@ patterns = ["*.log"]
         config.default.jobs = 8;
         assert_eq!(config.num_jobs(), 8);
     }
+
+    #[test]
+    fn test_num_jobs_zero_auto_detects() {
+        let config = Config::default();
+        assert_eq!(config.default.jobs, 0);
+        let jobs = config.num_jobs();
+        // Should auto-detect to at least 1 CPU
+        assert!(jobs >= 1);
+    }
+
+    #[test]
+    fn test_get_value_known_keys() {
+        let config = Config::default();
+        assert!(config.get_value("index_name").is_some());
+        assert!(config.get_value("default.model").is_some());
+        assert!(config.get_value("default.chunk_size").is_some());
+        assert!(config.get_value("default.chunk_overlap").is_some());
+        assert!(config.get_value("default.max_file_size").is_some());
+        assert!(config.get_value("default.jobs").is_some());
+        assert!(config.get_value("search.max_results").is_some());
+        assert!(config.get_value("search.hybrid_alpha").is_some());
+        assert!(config.get_value("search.rerank").is_some());
+        assert!(config.get_value("server.host").is_some());
+        assert!(config.get_value("server.port").is_some());
+        assert!(config.get_value("ignore.patterns").is_some());
+    }
+
+    #[test]
+    fn test_get_value_unknown_key_returns_none() {
+        let config = Config::default();
+        assert!(config.get_value("nonexistent.key").is_none());
+        assert!(config.get_value("").is_none());
+        assert!(config.get_value("default.nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_get_value_returns_correct_values() {
+        let mut config = Config::default();
+        config.default.chunk_size = 256;
+        config.search.max_results = 42;
+        config.server.port = 9999;
+
+        assert_eq!(config.get_value("default.chunk_size").unwrap(), "256");
+        assert_eq!(config.get_value("search.max_results").unwrap(), "42");
+        assert_eq!(config.get_value("server.port").unwrap(), "9999");
+    }
+
+    #[test]
+    fn test_load_from_invalid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is {{ not valid toml").unwrap();
+        let result = Config::load_from(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_nonexistent_returns_default() {
+        let config =
+            Config::load_from(std::path::Path::new("/nonexistent/path/config.toml")).unwrap();
+        // Missing file returns default config, not error
+        assert_eq!(config.default.chunk_size, 512);
+        assert_eq!(config.server.port, 7820);
+    }
+
+    #[test]
+    fn test_default_config_values() {
+        let config = Config::default();
+        assert_eq!(config.default.chunk_size, 512);
+        assert_eq!(config.default.chunk_overlap, 64);
+        assert_eq!(config.default.max_file_size, 100 * 1024 * 1024);
+        assert_eq!(config.default.model, "nomic-embed-text-v2");
+        assert_eq!(config.search.max_results, 10);
+        assert!((config.search.hybrid_alpha - 0.7).abs() < f32::EPSILON);
+        assert!(config.search.rerank);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.port, 7820);
+    }
+
+    #[test]
+    fn test_ignore_patterns_formatting() {
+        let mut config = Config::default();
+        config.ignore.patterns = vec!["*.log".into(), "*.tmp".into()];
+        let value = config.get_value("ignore.patterns").unwrap();
+        assert!(value.contains("\"*.log\""));
+        assert!(value.contains("\"*.tmp\""));
+    }
 }
