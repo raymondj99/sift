@@ -14,7 +14,8 @@ use rmcp::{
 };
 use sift_core::{Config, SearchMode};
 use sift_store::{
-    CachedSearchEngine, DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore,
+    CachedSearchEngine, DefaultFullTextStore, FullTextStore as _, HybridSearchEngine,
+    MetadataStore, SimpleVectorStore, VectorIndex as _,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +56,38 @@ pub struct SearchSkillsRequest {
     pub limit: Option<i32>,
     /// Where to search: all locations, personal (~/.claude/skills), or project (.claude/skills)
     pub scope: Option<String>,
+}
+
+/// Input parameters for the `sift_index_text` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct IndexTextRequest {
+    /// Text content to index
+    pub text: String,
+    /// URI identifier for this content (e.g., 'memory://facts/my-fact').
+    /// If omitted, a unique memory:// URI is auto-generated.
+    pub uri: Option<String>,
+    /// Content type: text (default), code, or data
+    pub content_type: Option<String>,
+    /// File type hint for search filtering (e.g., 'md', 'txt', 'json')
+    pub file_type: Option<String>,
+    /// Optional title/label for this content
+    pub title: Option<String>,
+}
+
+/// Input parameters for the `sift_delete` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeleteRequest {
+    /// URI of the content to delete (exact match)
+    pub uri: String,
+}
+
+/// Input parameters for the `sift_list_sources` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListSourcesRequest {
+    /// Filter sources to those matching this path substring
+    pub path: Option<String>,
+    /// Max sources to return (1-500, default 50)
+    pub limit: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -456,15 +489,216 @@ impl SiftMcpServer {
             serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
         )]))
     }
+
+    /// Index arbitrary text directly into the search engine.
+    #[tool(
+        name = "sift_index_text",
+        description = "Store text directly in the search index. Use this to persist notes, facts, agent memory, or any text content that should be searchable later. Supports custom URIs (e.g., 'memory://facts/user-preferences') for organizing stored content. Content is immediately searchable via sift_search.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_index_text(
+        &self,
+        Parameters(req): Parameters<IndexTextRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if req.text.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Text must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+        if req.text.len() > 100_000 {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                format!("Text too long ({} chars, max 100000)", req.text.len()),
+                None::<serde_json::Value>,
+            ));
+        }
+        if let Some(ref uri) = req.uri {
+            if uri.contains("..") {
+                return Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    "URI must not contain '..' (path traversal)".to_string(),
+                    None::<serde_json::Value>,
+                ));
+            }
+        }
+
+        let content_type = match req.content_type.as_deref() {
+            Some("code") => sift_core::ContentType::Code,
+            Some("data") => sift_core::ContentType::Data,
+            Some("text") | None => sift_core::ContentType::Text,
+            Some(other) => {
+                return Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    format!("Unknown content_type '{other}'. Valid types: text, code, data"),
+                    None::<serde_json::Value>,
+                ));
+            }
+        };
+
+        let uri = req.uri.unwrap_or_else(|| {
+            format!(
+                "memory://agent/{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            )
+        });
+        let file_type = req.file_type.unwrap_or_else(|| "txt".to_string());
+
+        // Embed the text if an embedding model is available
+        let vector = self.embed_text_for_index(&req.text);
+
+        let chunk = sift_core::EmbeddedChunk {
+            chunk: sift_core::Chunk {
+                text: req.text.clone(),
+                source_uri: uri.clone(),
+                chunk_index: 0,
+                content_type,
+                file_type: file_type.clone(),
+                title: req.title.clone(),
+                language: None,
+                byte_range: None,
+            },
+            vector,
+        };
+
+        self.engine
+            .insert(&[chunk])
+            .map_err(|e| internal_err(format!("Insert failed: {e}")))?;
+
+        // Persist the vector store to disk
+        self.save_stores();
+
+        let response = serde_json::json!({
+            "status": "indexed",
+            "uri": uri,
+            "content_type": content_type.to_string(),
+            "file_type": file_type,
+            "text_length": req.text.len(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Delete indexed content by URI.
+    #[tool(
+        name = "sift_delete",
+        description = "Remove content from the search index by its URI. Use this to delete previously indexed text, notes, or memory entries. The URI must be an exact match (e.g., 'memory://agent/my-fact' or 'file:///path/to/file.txt').",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_delete(
+        &self,
+        Parameters(req): Parameters<DeleteRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if req.uri.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "URI must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let deleted = self
+            .engine
+            .delete_by_uri(&req.uri)
+            .map_err(|e| internal_err(format!("Delete failed: {e}")))?;
+
+        // Persist after deletion
+        self.save_stores();
+
+        let response = serde_json::json!({
+            "status": if deleted > 0 { "deleted" } else { "not_found" },
+            "uri": req.uri,
+            "chunks_removed": deleted,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// List indexed sources with optional filtering.
+    #[tool(
+        name = "sift_list_sources",
+        description = "List files and content currently in the search index. Shows URI, file type, and chunk count for each source. Use 'path' to filter to a specific directory or URI prefix. Useful for understanding what's indexed before searching.",
+        annotations(read_only_hint = true)
+    )]
+    fn sift_list_sources(
+        &self,
+        Parameters(req): Parameters<ListSourcesRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let limit = req.limit.unwrap_or(50).clamp(1, 500) as usize;
+
+        let sources = self
+            .metadata
+            .list_sources()
+            .map_err(|e| internal_err(format!("Failed to list sources: {e}")))?;
+
+        let mut filtered: Vec<_> = if let Some(ref path_filter) = req.path {
+            sources
+                .into_iter()
+                .filter(|(uri, _, _)| {
+                    let path = uri.strip_prefix("file://").unwrap_or(uri);
+                    path.contains(path_filter.as_str()) || uri.contains(path_filter.as_str())
+                })
+                .collect()
+        } else {
+            sources
+        };
+
+        let total = filtered.len();
+        filtered.truncate(limit);
+
+        let items: Vec<serde_json::Value> = filtered
+            .iter()
+            .map(|(uri, file_type, chunk_count)| {
+                let path = uri.strip_prefix("file://").unwrap_or(uri);
+                serde_json::json!({
+                    "path": path,
+                    "type": file_type,
+                    "chunks": chunk_count,
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "sources": items,
+            "total": total,
+            "showing": items.len(),
+            "has_more": total > items.len(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
 }
 
 #[tool_handler]
 impl ServerHandler for SiftMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Sift is a universal file indexing and semantic search engine. \
-                 Use sift_status to check what's indexed, sift_search to find content, \
-                 and sift_search_skills to discover agent skills."
+            "Sift is a local semantic search engine indexing 30+ file formats.\n\n\
+             TOOLS:\n\
+             - sift_status: Call first to see what's indexed (directories, file types, chunk count).\n\
+             - sift_search: Hybrid semantic+keyword search. Use 'path' to scope, 'type' to filter \
+               extensions, 'context' (1-10) for surrounding lines.\n\
+             - sift_search_skills: Find SKILL.md agent capabilities. Use 'detail: instructions' \
+               for full content.\n\
+             - sift_index_text: Store text directly in the index (e.g., notes, facts, memory). \
+               Supports custom URIs like 'memory://...' for agent memory.\n\
+             - sift_delete: Remove content from the index by URI.\n\
+             - sift_list_sources: Browse indexed files with optional path filtering.\n\n\
+             TIPS:\n\
+             - Start with sift_status to understand the index before searching.\n\
+             - Use hybrid mode (default) for conceptual queries, keyword mode for exact matches.\n\
+             - Increase limit (up to 50) for broad exploration.\n\
+             - Use sift_index_text to persist facts, notes, or agent memory across sessions."
                 .to_string(),
         )
     }
@@ -498,6 +732,48 @@ impl SiftMcpServer {
             other @ SearchMode::KeywordOnly => other,
         };
         (vec![0.0f32; 768], fallback)
+    }
+
+    /// Embed text for indexing (using the "search_document:" prefix for Nomic).
+    /// Returns a zero vector if no embedder is available — the text will still
+    /// be keyword-searchable via FTS.
+    #[allow(unused_variables, clippy::unused_self)]
+    fn embed_text_for_index(&self, text: &str) -> Vec<f32> {
+        #[cfg(feature = "embeddings")]
+        {
+            if let Some(ref embedder) = self.embedder {
+                let prefixed = format!("search_document: {text}");
+                match embedder.embed(&prefixed) {
+                    Ok(vec) => return vec,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Embedding failed for index: {e}. Text will be keyword-only."
+                        );
+                    }
+                }
+            }
+        }
+        vec![0.0f32; 768]
+    }
+
+    /// Persist vector and fulltext stores to disk after mutations.
+    /// Logs warnings on failure but does not propagate errors — the in-memory
+    /// state is still consistent and will be saved on next success.
+    fn save_stores(&self) {
+        let inner = self.engine.inner();
+
+        if let Ok(index_dir) = self.config.index_dir() {
+            // Save vector store
+            if let Err(e) = inner.vector_store.save(&index_dir.join("vectors.bin")) {
+                tracing::warn!("Failed to persist vector store: {e}");
+            }
+            // Flush fulltext store
+            if let Err(e) = inner.fulltext_store.flush() {
+                tracing::warn!("Failed to flush fulltext store: {e}");
+            }
+        } else {
+            tracing::warn!("Could not determine index directory for persistence");
+        }
     }
 }
 
@@ -1076,6 +1352,255 @@ mod tests {
             // Should succeed (empty results from empty index, but no validation error)
             let result = server.sift_search_skills(Parameters(req)).unwrap();
             assert!(!result.content.is_empty());
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // sift_index_text tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_index_text_basic() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = IndexTextRequest {
+                text: "The quick brown fox jumps over the lazy dog".to_string(),
+                uri: Some("memory://test/fox-fact".to_string()),
+                content_type: None,
+                file_type: None,
+                title: Some("Fox Fact".to_string()),
+            };
+            let result = server.sift_index_text(Parameters(req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["status"], "indexed");
+                assert_eq!(parsed["uri"], "memory://test/fox-fact");
+                assert_eq!(parsed["content_type"], "text");
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    #[test]
+    fn test_index_text_auto_uri() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = IndexTextRequest {
+                text: "Some fact to remember".to_string(),
+                uri: None,
+                content_type: None,
+                file_type: None,
+                title: None,
+            };
+            let result = server.sift_index_text(Parameters(req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["status"], "indexed");
+                assert!(parsed["uri"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("memory://agent/"));
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    #[test]
+    fn test_index_text_rejects_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = IndexTextRequest {
+                text: String::new(),
+                uri: None,
+                content_type: None,
+                file_type: None,
+                title: None,
+            };
+            let err = server.sift_index_text(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("must not be empty"));
+        });
+    }
+
+    #[test]
+    fn test_index_text_rejects_unknown_content_type() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = IndexTextRequest {
+                text: "hello".to_string(),
+                uri: None,
+                content_type: Some("binary".to_string()),
+                file_type: None,
+                title: None,
+            };
+            let err = server.sift_index_text(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("Unknown content_type"));
+        });
+    }
+
+    #[test]
+    fn test_index_text_rejects_path_traversal_uri() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = IndexTextRequest {
+                text: "hello".to_string(),
+                uri: Some("memory://../../etc/passwd".to_string()),
+                content_type: None,
+                file_type: None,
+                title: None,
+            };
+            let err = server.sift_index_text(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("path traversal"));
+        });
+    }
+
+    #[test]
+    fn test_index_text_then_search() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+
+            // Index some text
+            let index_req = IndexTextRequest {
+                text: "Rust is a systems programming language".to_string(),
+                uri: Some("memory://test/rust-fact".to_string()),
+                content_type: None,
+                file_type: Some("md".to_string()),
+                title: None,
+            };
+            server.sift_index_text(Parameters(index_req)).unwrap();
+
+            // Search for it via keyword
+            let search_req = SearchRequest {
+                query: "systems programming".to_string(),
+                limit: Some(5),
+                offset: None,
+                mode: Some("keyword".to_string()),
+                path: None,
+                file_type: None,
+                context: None,
+            };
+            let result = server.sift_search(Parameters(search_req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert!(
+                    parsed["total"].as_u64().unwrap() > 0,
+                    "Should find indexed text"
+                );
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // sift_delete tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_delete_nonexistent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = DeleteRequest {
+                uri: "memory://nonexistent".to_string(),
+            };
+            let result = server.sift_delete(Parameters(req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["status"], "not_found");
+                assert_eq!(parsed["chunks_removed"], 0);
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    #[test]
+    fn test_delete_rejects_empty_uri() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = DeleteRequest { uri: String::new() };
+            let err = server.sift_delete(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("must not be empty"));
+        });
+    }
+
+    #[test]
+    fn test_index_then_delete() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+
+            // Index text
+            let index_req = IndexTextRequest {
+                text: "temporary fact to delete".to_string(),
+                uri: Some("memory://test/temp".to_string()),
+                content_type: None,
+                file_type: None,
+                title: None,
+            };
+            server.sift_index_text(Parameters(index_req)).unwrap();
+
+            // Delete it
+            let del_req = DeleteRequest {
+                uri: "memory://test/temp".to_string(),
+            };
+            let result = server.sift_delete(Parameters(del_req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["status"], "deleted");
+                assert!(parsed["chunks_removed"].as_u64().unwrap() > 0);
+            } else {
+                panic!("Expected text content");
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // sift_list_sources tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_list_sources_empty_index() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = ListSourcesRequest {
+                path: None,
+                limit: None,
+            };
+            let result = server.sift_list_sources(Parameters(req)).unwrap();
+            let content = &result.content[0];
+            if let rmcp::model::RawContent::Text(text) = &content.raw {
+                let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+                assert_eq!(parsed["total"], 0);
+                assert_eq!(parsed["showing"], 0);
+            } else {
+                panic!("Expected text content");
+            }
         });
     }
 }
