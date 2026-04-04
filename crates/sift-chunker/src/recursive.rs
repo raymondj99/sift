@@ -116,18 +116,35 @@ impl RecursiveChunker {
     }
 
     /// Force-split text into chunks of at most `chunk_size` characters,
-    /// respecting UTF-8 char boundaries.
+    /// respecting UTF-8 char boundaries. Uses `char_indices()` to find
+    /// byte boundaries without collecting all chars into a Vec.
     fn force_split(&self, text: &str) -> Vec<String> {
         let mut result = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let mut start = 0;
-        while start < chars.len() {
-            let end = (start + self.chunk_size).min(chars.len());
-            let chunk: String = chars[start..end].iter().collect();
-            if !chunk.is_empty() {
-                result.push(chunk);
+        let mut byte_start = 0;
+        let mut char_count = 0;
+
+        for (byte_idx, _) in text.char_indices() {
+            char_count += 1;
+            if char_count == self.chunk_size {
+                // byte_idx is the start of the current char; end is after it
+                let byte_end = text[byte_idx..]
+                    .chars()
+                    .next()
+                    .map_or(text.len(), |c| byte_idx + c.len_utf8());
+                let chunk = &text[byte_start..byte_end];
+                if !chunk.is_empty() {
+                    result.push(chunk.to_string());
+                }
+                byte_start = byte_end;
+                char_count = 0;
             }
-            start = end;
+        }
+        // Push remaining text
+        if byte_start < text.len() {
+            let chunk = &text[byte_start..];
+            if !chunk.is_empty() {
+                result.push(chunk.to_string());
+            }
         }
         result
     }
@@ -135,6 +152,8 @@ impl RecursiveChunker {
     /// Apply chunk overlap: given a list of non-overlapping chunks,
     /// produce chunks where each chunk (after the first) starts with
     /// the last `chunk_overlap` characters of the previous chunk.
+    /// Uses `char_indices()` to find the byte offset of the overlap
+    /// start without collecting chars into a Vec.
     fn apply_overlap(&self, chunks: Vec<String>) -> Vec<String> {
         if self.chunk_overlap == 0 || chunks.len() <= 1 {
             return chunks;
@@ -145,10 +164,16 @@ impl RecursiveChunker {
 
         for i in 1..chunks.len() {
             let prev = &chunks[i - 1];
-            let prev_chars: Vec<char> = prev.chars().collect();
-            let overlap_start = prev_chars.len().saturating_sub(self.chunk_overlap);
-            let overlap: String = prev_chars[overlap_start..].iter().collect();
-            let merged = format!("{}{}", overlap, &chunks[i]);
+            let char_count = prev.chars().count();
+            let skip = char_count.saturating_sub(self.chunk_overlap);
+            // Find the byte offset where the last `chunk_overlap` chars begin
+            let byte_offset = prev
+                .char_indices()
+                .nth(skip)
+                .map_or(prev.len(), |(idx, _)| idx);
+            let mut merged = String::with_capacity(prev.len() - byte_offset + chunks[i].len());
+            merged.push_str(&prev[byte_offset..]);
+            merged.push_str(&chunks[i]);
             result.push(merged);
         }
 

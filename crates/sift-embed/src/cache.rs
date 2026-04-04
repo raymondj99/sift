@@ -95,19 +95,24 @@ impl EmbeddingCache {
         }
     }
 
-    /// Store a batch of embeddings. Uses a transaction for efficiency.
+    /// Store a batch of embeddings. Uses a transaction and a reusable
+    /// serialization buffer to avoid per-embedding allocations.
     pub fn put_batch(&self, entries: &[(&str, &[f32])]) {
         if entries.is_empty() {
             return;
         }
         if let Ok(conn) = self.conn.lock() {
+            // Pre-allocate a single buffer sized for the first vector.
+            // All vectors in a batch share the same dimensionality.
+            let mut buf = vec![0u8; entries[0].1.len() * 4];
+
             let _ = conn.execute_batch("BEGIN");
             for (text, vector) in entries {
                 let hash = blake3_hash(text);
-                let blob = f32_to_bytes(vector);
+                f32_write_le_bytes(vector, &mut buf);
                 let _ = conn.execute(
                     "INSERT OR REPLACE INTO cache (hash, vector) VALUES (?1, ?2)",
-                    params![hash.as_slice(), blob],
+                    params![hash.as_slice(), buf.as_slice()],
                 );
             }
             let _ = conn.execute_batch("COMMIT");
@@ -144,10 +149,16 @@ fn blake3_hash(text: &str) -> [u8; 32] {
 
 fn f32_to_bytes(vec: &[f32]) -> Vec<u8> {
     let mut bytes = vec![0u8; vec.len() * 4];
-    for (i, &v) in vec.iter().enumerate() {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&v.to_le_bytes());
-    }
+    f32_write_le_bytes(vec, &mut bytes);
     bytes
+}
+
+/// Write f32 values as little-endian bytes into an existing buffer.
+/// Avoids allocation when the caller can reuse a buffer across calls.
+fn f32_write_le_bytes(vec: &[f32], out: &mut [u8]) {
+    for (i, &v) in vec.iter().enumerate() {
+        out[i * 4..(i + 1) * 4].copy_from_slice(&v.to_le_bytes());
+    }
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {

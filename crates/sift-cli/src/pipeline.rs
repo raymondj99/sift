@@ -660,7 +660,7 @@ fn embed_text_chunks_atomic(
         }
         all_embedded
     } else {
-        zero_vector_chunks(chunks)
+        zero_vector_chunks(chunks, embedder.map_or(768, |e| e.dimensions()))
     }
 }
 
@@ -672,15 +672,15 @@ fn embed_text_chunks_atomic(
     _cache: &Option<()>,
     _cache_hits: &AtomicU64,
 ) -> Vec<EmbeddedChunk> {
-    zero_vector_chunks(chunks)
+    zero_vector_chunks(chunks, 768)
 }
 
-fn zero_vector_chunks(chunks: &[Chunk]) -> Vec<EmbeddedChunk> {
+fn zero_vector_chunks(chunks: &[Chunk], dimensions: usize) -> Vec<EmbeddedChunk> {
     chunks
         .iter()
         .map(|chunk| EmbeddedChunk {
             chunk: chunk.clone(),
-            vector: vec![0.0f32; 768],
+            vector: vec![0.0f32; dimensions],
         })
         .collect()
 }

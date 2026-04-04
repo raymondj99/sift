@@ -120,46 +120,53 @@ impl OnnxEmbedder {
             .collect())
     }
 
+    /// Tokenize a batch of texts into flat, pre-padded tensors ready for ONNX.
+    ///
+    /// Returns `(input_ids, attention_mask, token_type_ids, batch_size, seq_len)`
+    /// as flat `Vec<i64>` buffers of shape `[batch_size × seq_len]`. This avoids
+    /// the intermediate `Vec<Vec<i64>>` allocation per encoding and the subsequent
+    /// flatten step — a single contiguous allocation per tensor instead.
     #[allow(clippy::type_complexity)]
     fn tokenize_batch(
         &self,
         texts: &[&str],
-    ) -> SiftResult<(Vec<Vec<i64>>, Vec<Vec<i64>>, Vec<Vec<i64>>)> {
+    ) -> SiftResult<(Vec<i64>, Vec<i64>, Vec<i64>, usize, usize)> {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
             .map_err(|e| sift_core::SiftError::Embedding(format!("Tokenization failed: {e}")))?;
 
-        let mut input_ids_batch = Vec::with_capacity(encodings.len());
-        let mut attention_mask_batch = Vec::with_capacity(encodings.len());
-        let mut token_type_ids_batch = Vec::with_capacity(encodings.len());
-
-        let max_len = encodings
+        let batch_size = encodings.len();
+        let seq_len = encodings
             .iter()
             .map(|e| e.get_ids().len().min(self.max_tokens))
             .max()
             .unwrap_or(0);
 
-        for encoding in &encodings {
+        let total = batch_size * seq_len;
+        let mut input_ids = vec![0i64; total];
+        let mut attention_mask = vec![0i64; total];
+        let token_type_ids = vec![0i64; total]; // single-segment, always zero
+
+        for (b, encoding) in encodings.iter().enumerate() {
             let ids = encoding.get_ids();
             let mask = encoding.get_attention_mask();
             let len = ids.len().min(self.max_tokens);
-
-            let mut padded_ids = vec![0i64; max_len];
-            let mut padded_mask = vec![0i64; max_len];
-            let token_type_ids = vec![0i64; max_len]; // single-segment, always zero
+            let offset = b * seq_len;
 
             for i in 0..len {
-                padded_ids[i] = i64::from(ids[i]);
-                padded_mask[i] = i64::from(mask[i]);
+                input_ids[offset + i] = i64::from(ids[i]);
+                attention_mask[offset + i] = i64::from(mask[i]);
             }
-
-            input_ids_batch.push(padded_ids);
-            attention_mask_batch.push(padded_mask);
-            token_type_ids_batch.push(token_type_ids);
         }
 
-        Ok((input_ids_batch, attention_mask_batch, token_type_ids_batch))
+        Ok((
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            batch_size,
+            seq_len,
+        ))
     }
 
     fn mean_pooling(
@@ -215,15 +222,8 @@ impl Embedder for OnnxEmbedder {
 
         debug!(batch_size = texts.len(), "Embedding batch");
 
-        let (input_ids_batch, attention_mask_batch, token_type_ids_batch) =
+        let (input_ids_flat, attention_mask_flat, token_type_ids_flat, batch_size, seq_len) =
             self.tokenize_batch(texts)?;
-        let batch_size = input_ids_batch.len();
-        let seq_len = input_ids_batch[0].len();
-
-        // Flatten for ONNX
-        let input_ids_flat: Vec<i64> = input_ids_batch.into_iter().flatten().collect();
-        let attention_mask_flat: Vec<i64> = attention_mask_batch.into_iter().flatten().collect();
-        let token_type_ids_flat: Vec<i64> = token_type_ids_batch.into_iter().flatten().collect();
 
         let input_ids_array =
             ndarray::Array2::from_shape_vec((batch_size, seq_len), input_ids_flat)
