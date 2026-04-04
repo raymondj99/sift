@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Features included in release binaries.
+  # standard = ast + documents + data-formats + email + archive + fts5 + sqlite + hnsw + embeddings + fancy
+  # Plus: MCP server, HTTP server, shell completions.
+  RELEASE_FEATURES: "standard,mcp,serve,completions"
+
+jobs:
+  # ── Validate before building ──────────────────────────────────────────
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          cargo_version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+          echo "Version: $cargo_version"
+
+  # ── Build release binaries ────────────────────────────────────────────
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux native)
+        if: runner.os == 'Linux' && !matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libbz2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            -p sift-cli --features "$RELEASE_FEATURES"
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: |
+          cross build --release --target ${{ matrix.target }} \
+            -p sift-cli --features "$RELEASE_FEATURES"
+
+      - name: Package binary
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/sift"
+          if [ ! -f "$binary" ]; then
+            echo "::error::Binary not found at $binary"
+            ls -la "target/${{ matrix.target }}/release/" | head -20
+            exit 1
+          fi
+
+          staging="sift-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$staging"
+          cp "$binary" "$staging/"
+          cp LICENSE* README.md "$staging/" 2>/dev/null || true
+
+          tar czf "$staging.tar.gz" "$staging"
+          echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Record binary size
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/sift"
+          size=$(stat -f%z "$binary" 2>/dev/null || stat -c%s "$binary")
+          size_mb=$(echo "scale=1; $size / 1048576" | bc)
+          echo "### ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Binary size: **${size_mb} MB** (${size} bytes)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sift-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  # ── Create GitHub Release ─────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f -name '*.tar.gz' -exec mv {} release/ \;
+          ls -lh release/
+
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          repo="${{ github.repository }}"
+          prev_tag=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+
+          {
+            echo "## Installation"
+            echo ""
+            echo "Download the archive for your platform and extract it:"
+            echo ""
+            echo '```bash'
+            echo "# macOS (Apple Silicon)"
+            echo "curl -LO https://github.com/${repo}/releases/download/${tag}/sift-${tag}-aarch64-apple-darwin.tar.gz"
+            echo "tar xzf sift-${tag}-aarch64-apple-darwin.tar.gz"
+            echo "sudo mv sift-${tag}-aarch64-apple-darwin/sift /usr/local/bin/"
+            echo ""
+            echo "# Linux (x86_64)"
+            echo "curl -LO https://github.com/${repo}/releases/download/${tag}/sift-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+            echo "tar xzf sift-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+            echo "sudo mv sift-${tag}-x86_64-unknown-linux-gnu/sift /usr/local/bin/"
+            echo '```'
+            echo ""
+            echo "Verify the download:"
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS.txt"
+            echo '```'
+            echo ""
+            echo "## What's included"
+            echo ""
+            echo "Semantic search, keyword search (FTS5), HNSW vector index,"
+            echo "30+ file format parsers, AST-aware code chunking (7 languages),"
+            echo "ONNX embeddings, MCP server, HTTP API server, and shell completions."
+          } > RELEASE_NOTES.md
+
+          if [ -n "$prev_tag" ]; then
+            {
+              echo ""
+              echo "## Changes since ${prev_tag}"
+              echo ""
+              git log --pretty=format:"- %s" "${prev_tag}..HEAD"
+              echo ""
+            } >> RELEASE_NOTES.md
+          fi
+
+          {
+            echo ""
+            echo "## Checksums"
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
+          } >> RELEASE_NOTES.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: release/*
+          fail_on_unmatched_files: true
