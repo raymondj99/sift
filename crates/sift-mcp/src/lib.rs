@@ -10,8 +10,11 @@ use rmcp::{
     tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use sift_core::{Config, SearchMode};
-use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
+use sift_store::{
+    CachedSearchEngine, DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore,
+};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 
 // ---------------------------------------------------------------------------
@@ -60,7 +63,7 @@ pub struct SearchSkillsRequest {
 pub struct SiftMcpServer {
     tool_router: ToolRouter<Self>,
     config: Config,
-    engine: Arc<HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>>,
+    engine: Arc<CachedSearchEngine<SimpleVectorStore, DefaultFullTextStore>>,
     metadata: Arc<MetadataStore>,
     #[cfg(feature = "embeddings")]
     embedder: Option<Arc<dyn sift_core::Embedder>>,
@@ -97,10 +100,14 @@ impl SiftMcpServer {
         #[cfg(feature = "embeddings")]
         let embedder = load_embedder();
 
+        // Wrap in a caching layer so repeated MCP queries hit an LRU cache.
+        // 50-entry LRU with 60s TTL balances memory usage with agentic hit rates.
+        let cached = CachedSearchEngine::new(engine, 50, Duration::from_secs(60));
+
         Ok(Self {
             tool_router: Self::tool_router(),
             config,
-            engine: Arc::new(engine),
+            engine: Arc::new(cached),
             metadata: Arc::new(metadata),
             #[cfg(feature = "embeddings")]
             embedder: embedder.map(|e| Arc::new(e) as Arc<dyn sift_core::Embedder>),
@@ -149,7 +156,14 @@ impl SiftMcpServer {
         let mode = match req.mode.as_deref() {
             Some("keyword") => SearchMode::KeywordOnly,
             Some("vector") => SearchMode::VectorOnly,
-            _ => SearchMode::Hybrid,
+            Some("hybrid") | None => SearchMode::Hybrid,
+            Some(other) => {
+                return Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    format!("Unknown search mode '{other}'. Valid modes: hybrid, keyword, vector"),
+                    None::<serde_json::Value>,
+                ));
+            }
         };
 
         let (query_vector, effective_mode) = self.embed_query(&req.query, mode);
@@ -181,16 +195,26 @@ impl SiftMcpServer {
         // Apply pagination
         let page: Vec<_> = results.into_iter().skip(offset).take(limit).collect();
 
-        // Format response — read each file at most once for both line range and context.
+        // Cache file reads: multiple results from the same source file share
+        // a single disk read instead of one per result.
+        let mut file_cache: std::collections::HashMap<&str, Option<String>> =
+            std::collections::HashMap::new();
+        for r in &page {
+            let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
+            file_cache
+                .entry(path)
+                .or_insert_with(|| std::fs::read_to_string(path).ok());
+        }
+
         let result_items: Vec<serde_json::Value> = page
             .iter()
             .map(|r| {
                 let path = r.uri.strip_prefix("file://").unwrap_or(&r.uri);
-                let file_content = std::fs::read_to_string(path).ok();
+                let file_content = file_cache.get(path).and_then(|opt| opt.as_deref());
 
-                let lines = format_line_range(r.byte_range, file_content.as_deref());
+                let lines = format_line_range(r.byte_range, file_content);
                 let snippet = if context_lines > 0 {
-                    read_context_snippet(r.byte_range, file_content.as_deref(), context_lines)
+                    read_context_snippet(r.byte_range, file_content, context_lines)
                         .unwrap_or_else(|| truncate_text(&r.text, 200))
                 } else {
                     truncate_text(&r.text, 200)
@@ -286,9 +310,44 @@ impl SiftMcpServer {
         &self,
         Parameters(req): Parameters<SearchSkillsRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Input validation
+        if req.query.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Query must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+        if req.query.len() > 10_000 {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                format!("Query too long ({} chars, max 10000)", req.query.len()),
+                None::<serde_json::Value>,
+            ));
+        }
+
         let limit = req.limit.unwrap_or(5).clamp(1, 20) as usize;
+
         let detail = req.detail.as_deref().unwrap_or("metadata");
+        if !matches!(detail, "metadata" | "instructions" | "full") {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                format!(
+                    "Unknown detail level '{detail}'. \
+                     Valid levels: metadata, instructions, full"
+                ),
+                None::<serde_json::Value>,
+            ));
+        }
+
         let scope = req.scope.as_deref().unwrap_or("all");
+        if !matches!(scope, "all" | "personal" | "project") {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                format!("Unknown scope '{scope}'. Valid scopes: all, personal, project"),
+                None::<serde_json::Value>,
+            ));
+        }
 
         let (query_vector, mode) = self.embed_query(&req.query, SearchMode::Hybrid);
 
@@ -853,6 +912,163 @@ mod tests {
             let server = SiftMcpServer::new(config).unwrap();
             let info = server.get_info();
             assert!(info.instructions.is_some());
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Input validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sift_search_rejects_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchRequest {
+                query: String::new(),
+                limit: None,
+                offset: None,
+                mode: None,
+                path: None,
+                file_type: None,
+                context: None,
+            };
+            let err = server.sift_search(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("must not be empty"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_rejects_unknown_mode() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchRequest {
+                query: "test".to_string(),
+                limit: None,
+                offset: None,
+                mode: Some("embeddding".to_string()),
+                path: None,
+                file_type: None,
+                context: None,
+            };
+            let err = server.sift_search(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("Unknown search mode"));
+            assert!(err.message.contains("embeddding"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_accepts_explicit_hybrid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchRequest {
+                query: "test".to_string(),
+                limit: Some(5),
+                offset: None,
+                mode: Some("hybrid".to_string()),
+                path: None,
+                file_type: None,
+                context: None,
+            };
+            // Should not error — hybrid is valid (falls back to keyword w/o embedder)
+            let result = server.sift_search(Parameters(req)).unwrap();
+            assert!(!result.content.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_sift_search_rejects_path_traversal() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchRequest {
+                query: "test".to_string(),
+                limit: None,
+                offset: None,
+                mode: Some("keyword".to_string()),
+                path: Some("../../etc/passwd".to_string()),
+                file_type: None,
+                context: None,
+            };
+            let err = server.sift_search(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("path traversal"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_skills_rejects_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchSkillsRequest {
+                query: String::new(),
+                detail: None,
+                limit: None,
+                scope: None,
+            };
+            let err = server.sift_search_skills(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("must not be empty"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_skills_rejects_unknown_detail() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchSkillsRequest {
+                query: "code review".to_string(),
+                detail: Some("verbose".to_string()),
+                limit: None,
+                scope: None,
+            };
+            let err = server.sift_search_skills(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("Unknown detail level"));
+            assert!(err.message.contains("verbose"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_skills_rejects_unknown_scope() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchSkillsRequest {
+                query: "code review".to_string(),
+                detail: None,
+                limit: None,
+                scope: Some("global".to_string()),
+            };
+            let err = server.sift_search_skills(Parameters(req)).unwrap_err();
+            assert!(err.message.contains("Unknown scope"));
+            assert!(err.message.contains("global"));
+        });
+    }
+
+    #[test]
+    fn test_sift_search_skills_valid_params() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+            let req = SearchSkillsRequest {
+                query: "code review".to_string(),
+                detail: Some("instructions".to_string()),
+                limit: Some(3),
+                scope: Some("personal".to_string()),
+            };
+            // Should succeed (empty results from empty index, but no validation error)
+            let result = server.sift_search_skills(Parameters(req)).unwrap();
+            assert!(!result.content.is_empty());
         });
     }
 }
