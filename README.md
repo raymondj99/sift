@@ -40,13 +40,17 @@ $ sift search --type rs "error handling retry"
 
 ## Install
 
-Pre-compiled binaries for macOS, Linux, and Windows are available on the
+Pre-compiled binaries for macOS and Linux are available on the
 [releases page](https://github.com/raymondj99/sift/releases).
 
-### Homebrew (macOS / Linux)
-
 ```bash
-brew install raymondj99/tap/sift
+# macOS (Apple Silicon)
+curl -LO https://github.com/raymondj99/sift/releases/latest/download/sift-aarch64-apple-darwin.tar.gz
+tar xzf sift-aarch64-apple-darwin.tar.gz && sudo mv sift-*/sift /usr/local/bin/
+
+# Linux (x86_64)
+curl -LO https://github.com/raymondj99/sift/releases/latest/download/sift-x86_64-unknown-linux-gnu.tar.gz
+tar xzf sift-x86_64-unknown-linux-gnu.tar.gz && sudo mv sift-*/sift /usr/local/bin/
 ```
 
 ### Cargo (any platform)
@@ -149,21 +153,24 @@ sift search --vector-only "retry logic patterns"
 | `sift config [KEY] [VALUE]` | View or set configuration |
 | `sift export` | Export index data as JSONL |
 | `sift models [list\|download]` | Manage embedding models |
+| `sift mcp` | Start MCP server for AI agent integration (requires `mcp` feature) |
 | `sift watch [PATH]` | Watch for changes and re-index (requires `serve` feature) |
 | `sift serve` | Start HTTP API server (requires `serve` feature) |
+| `sift completions <SHELL>` | Generate shell completions (requires `completions` feature) |
 
 ### Scan options
 
 | Flag | Description |
 |------|-------------|
-| `--jobs <N>` | Parallel workers (0 = auto) |
+| `-j, --jobs <N>` | Parallel workers (0 = auto) |
 | `--model <NAME>` | Override embedding model |
 | `--max-depth <N>` | Maximum directory depth |
 | `--max-file-size <BYTES>` | Skip files larger than this |
 | `--include <GLOB>` | Only include files matching glob |
 | `--exclude <GLOB>` | Exclude files matching glob |
-| `--type <EXT>` | Only index specific file types |
+| `-t, --type <EXT>` | Only index specific file types |
 | `--dry-run` | Preview without indexing |
+| `--prune` | Remove index entries for deleted files |
 
 ### Search options
 
@@ -177,6 +184,7 @@ sift search --vector-only "retry logic patterns"
 | `--threshold <F>` | Minimum similarity (0.0-1.0) |
 | `--vector-only` | Pure vector search |
 | `--keyword-only` | Pure BM25 keyword search |
+| `-o, --open` | Open top result in default application |
 | `--json` | Output as JSON |
 
 ### Export options
@@ -253,22 +261,24 @@ Source -> Discovery -> Parsing -> Chunking -> Embedding -> Storage -> Search
           (walkdir)   (per-type)  (semantic)   (ONNX)     (SQLite)
 ```
 
-Eight crates in a Cargo workspace:
+Nine crates in a Cargo workspace:
 
 | Crate | Purpose |
 |-------|---------|
-| `sift-core` | Config, error types, pipeline data types |
+| `sift-core` | Config, error types, retry, pipeline data types |
 | `sift-sources` | Source connectors (filesystem) |
 | `sift-parsers` | File format parsers with MIME-based dispatch |
-| `sift-chunker` | Fixed-size and AST-aware semantic chunking |
-| `sift-embed` | ONNX Runtime embedding with model management |
-| `sift-store` | SQLite metadata, FTS5 keyword search, vector store, hybrid search |
-| `sift-server` | HTTP API (Axum) and filesystem watcher |
-| `sift-cli` | CLI entry point |
+| `sift-chunker` | Fixed-size, semantic, recursive, and AST-aware chunking |
+| `sift-embed` | ONNX Runtime embedding with model management and cache |
+| `sift-store` | SQLite metadata, FTS5/Tantivy keyword search, flat/HNSW vector store, LRU cache, hybrid RRF search |
+| `sift-server` | HTTP API (Axum) with rate limiting, and filesystem watcher |
+| `sift-mcp` | Model Context Protocol server (JSON-RPC 2.0 over stdio) |
+| `sift-cli` | CLI entry point and pipeline orchestration |
 
 ## Configuration
 
-Config lives at `~/.sift/config.toml` (auto-created with defaults):
+Config lives at `~/.sift/config.toml` (auto-created with defaults).
+Per-project overrides can be placed in `.sift.toml` at the project root.
 
 ```toml
 [default]
@@ -281,6 +291,13 @@ jobs = 0                   # 0 = auto-detect CPU count
 [search]
 max_results = 10
 hybrid_alpha = 0.7  # 0.0 = pure BM25, 1.0 = pure vector
+
+[ignore]
+patterns = ["*.lock", "node_modules"]
+
+[server]
+host = "127.0.0.1"
+port = 7820
 ```
 
 ```bash
@@ -294,7 +311,10 @@ sift config search.hybrid_alpha 0.5
 |----------|-------------|
 | `SIFT_INDEX` | Named index to use (default: `default`) |
 | `SIFT_FORMAT` | Output format: `human`, `json`, `csv` |
+| `SIFT_MODEL` | Override embedding model |
+| `SIFT_JOBS` | Parallel worker count (0 = auto) |
 | `RUST_LOG` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
+| `NO_COLOR` | Disable colored output (any value) |
 
 ## Building from source
 
