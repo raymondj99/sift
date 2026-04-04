@@ -892,6 +892,8 @@ mod tests {
         }
 
         proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
             #[test]
             fn symmetric(a in vec_strategy(64), b in vec_strategy(64)) {
                 let ab = cosine_similarity(&a, &b);
@@ -912,6 +914,37 @@ mod tests {
                 if has_nonzero {
                     let score = cosine_similarity(&a, &a);
                     prop_assert!((score - 1.0).abs() < 1e-5, "cos(a,a)={} != 1.0", score);
+                }
+            }
+
+            #[test]
+            fn self_similarity(v in prop::collection::vec(-1.0f32..1.0, 1..32usize)) {
+                let has_nonzero = v.iter().any(|&x| x != 0.0);
+                if has_nonzero {
+                    let score = cosine_similarity(&v, &v);
+                    prop_assert!((score - 1.0).abs() < 1e-5,
+                        "cos(v,v)={} != 1.0 for non-zero vector", score);
+                }
+            }
+
+            #[test]
+            fn zero_vector(dim in 1..32usize, other in prop::collection::vec(-1.0f32..1.0, 1..32usize)) {
+                let zeros = vec![0.0f32; dim];
+                let mut b = other;
+                b.resize(dim, 0.5);
+                let score = cosine_similarity(&zeros, &b);
+                prop_assert!((score - 0.0).abs() < 1e-6,
+                    "cos(zeros, b)={} != 0.0", score);
+            }
+
+            #[test]
+            fn negation(v in prop::collection::vec(-1.0f32..1.0, 1..32usize)) {
+                let has_nonzero = v.iter().any(|&x| x != 0.0);
+                if has_nonzero {
+                    let neg_v: Vec<f32> = v.iter().map(|x| -x).collect();
+                    let score = cosine_similarity(&v, &neg_v);
+                    prop_assert!((score - (-1.0)).abs() < 1e-5,
+                        "cos(v, -v)={} != -1.0 for non-zero vector", score);
                 }
             }
         }

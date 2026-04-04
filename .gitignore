@@ -28,3 +28,4 @@ Thumbs.db
 /benchsuite/results/
 fuzz/target/
 fuzz/Cargo.lock
+SUMMARY.md

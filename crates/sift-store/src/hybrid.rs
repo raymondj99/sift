@@ -258,18 +258,121 @@ mod tests {
         }
     }
 
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn results_strategy(prefix: &'static str, n: usize) -> Vec<SearchResult> {
+            (0..n)
+                .map(|i| make_result(&format!("file:///{prefix}{i}"), 1.0 - i as f32 * 0.01))
+                .collect()
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn result_count_bounded(
+                n_vector in 0..50usize,
+                n_bm25 in 0..50usize,
+                alpha in 0.0f32..=1.0,
+                top_k in 1..30usize,
+            ) {
+                let vector = results_strategy("v", n_vector);
+                let bm25 = results_strategy("b", n_bm25);
+                let fused = rrf_fuse(&vector, &bm25, alpha, top_k);
+                prop_assert!(fused.len() <= top_k, "fused.len()={} > top_k={}", fused.len(), top_k);
+                prop_assert!(fused.len() <= n_vector + n_bm25,
+                    "fused.len()={} > n_vector+n_bm25={}", fused.len(), n_vector + n_bm25);
+            }
+
+            #[test]
+            fn scores_monotonically_non_increasing(
+                n_vector in 1..50usize,
+                n_bm25 in 1..50usize,
+                alpha in 0.0f32..=1.0,
+                top_k in 1..30usize,
+            ) {
+                let vector = results_strategy("v", n_vector);
+                let bm25 = results_strategy("b", n_bm25);
+                let fused = rrf_fuse(&vector, &bm25, alpha, top_k);
+                for i in 1..fused.len() {
+                    prop_assert!(fused[i - 1].score >= fused[i].score,
+                        "scores not sorted: [{}]={} < [{}]={}", i - 1, fused[i - 1].score, i, fused[i].score);
+                }
+            }
+
+            #[test]
+            fn all_scores_non_negative(
+                n_vector in 0..50usize,
+                n_bm25 in 0..50usize,
+                alpha in 0.0f32..=1.0,
+                top_k in 1..30usize,
+            ) {
+                let vector = results_strategy("v", n_vector);
+                let bm25 = results_strategy("b", n_bm25);
+                let fused = rrf_fuse(&vector, &bm25, alpha, top_k);
+                for r in &fused {
+                    prop_assert!(r.score >= 0.0, "negative score: {}", r.score);
+                }
+            }
+
+            #[test]
+            fn alpha_zero_bm25_only(
+                n_vector in 1..30usize,
+                n_bm25 in 1..30usize,
+                top_k in 1..30usize,
+            ) {
+                let vector = results_strategy("v", n_vector);
+                let bm25 = results_strategy("b", n_bm25);
+                let fused = rrf_fuse(&vector, &bm25, 0.0, top_k);
+                // alpha=0 means vector contribution is 0, so only bm25 items
+                // that weren't also in vector results should appear with pure bm25 scores
+                for r in &fused {
+                    // Every fused result should have a score equal to a BM25-only RRF score
+                    // (vector items that aren't in bm25 get score 0)
+                    let is_vector_only = r.uri.starts_with("file:///v");
+                    if is_vector_only {
+                        prop_assert!((r.score - 0.0).abs() < 1e-6,
+                            "alpha=0: vector-only result {} should have score ~0, got {}", r.uri, r.score);
+                    }
+                }
+            }
+
+            #[test]
+            fn alpha_one_vector_only(
+                n_vector in 1..30usize,
+                n_bm25 in 1..30usize,
+                top_k in 1..30usize,
+            ) {
+                let vector = results_strategy("v", n_vector);
+                let bm25 = results_strategy("b", n_bm25);
+                let fused = rrf_fuse(&vector, &bm25, 1.0, top_k);
+                // alpha=1 means bm25 contribution is 0, so only vector items matter
+                for r in &fused {
+                    let is_bm25_only = r.uri.starts_with("file:///b");
+                    if is_bm25_only {
+                        prop_assert!((r.score - 0.0).abs() < 1e-6,
+                            "alpha=1: bm25-only result {} should have score ~0, got {}", r.uri, r.score);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_hybrid_engine_hybrid_mode_search() {
         // Exercises the Hybrid branch (line 41) with actual stores
-        let tmp = tempfile::tempdir().unwrap();
         let vector_store = crate::flat::FlatVectorIndex::new();
         #[cfg(feature = "fulltext")]
-        let fulltext_store =
-            crate::tantivy_store::TantivyStore::open(&tmp.path().join("tantivy")).unwrap();
+        let fulltext_store = crate::tantivy_store::TantivyStore::open_in_memory().unwrap();
         #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
-        let fulltext_store = crate::fts5::Fts5Store::open(&tmp.path().join("fts5.db")).unwrap();
+        let fulltext_store = crate::fts5::Fts5Store::open_in_memory().unwrap();
         #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
-        let fulltext_store = crate::bm25::Bm25Store::open(&tmp.path().join("bm25.json")).unwrap();
+        let fulltext_store = {
+            let tmp = tempfile::tempdir().unwrap();
+            crate::bm25::Bm25Store::open(&tmp.path().join("bm25.json")).unwrap()
+        };
 
         let engine = HybridSearchEngine::new(vector_store, fulltext_store, 0.7);
 

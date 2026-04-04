@@ -12,7 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-sift-parsers = { path = "../crates/sift-parsers", default-features = false, features = ["data"] }
+sift-parsers = { path = "../crates/sift-parsers", default-features = false, features = ["data", "pdf"] }
 sift-chunker = { path = "../crates/sift-chunker", default-features = false }
 tempfile = "3"
 
@@ -24,4 +24,24 @@ doc = false
 [[bin]]
 name = "fuzz_semantic_chunker"
 path = "fuzz_targets/fuzz_semantic_chunker.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_html"
+path = "fuzz_targets/fuzz_html.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_json"
+path = "fuzz_targets/fuzz_json.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_yaml"
+path = "fuzz_targets/fuzz_yaml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_pdf"
+path = "fuzz_targets/fuzz_pdf.rs"
 doc = false

@@ -20,13 +20,13 @@ impl FixedChunker {
 
 impl Chunker for FixedChunker {
     fn chunk(&self, text: &str) -> Vec<(String, usize)> {
-        if text.is_empty() {
+        if text.trim().is_empty() {
             return vec![];
         }
 
         // For short texts, don't chunk at all
         if text.len() <= self.chunk_size {
-            return vec![(text.to_string(), 0)];
+            return vec![(text.trim().to_string(), 0)];
         }
 
         let mut chunks = Vec::new();
@@ -36,15 +36,17 @@ impl Chunker for FixedChunker {
         while start < chars.len() {
             let end = (start + self.chunk_size).min(chars.len());
 
-            // Find a word boundary to break on (look backwards from target end)
+            // Find a word boundary to break on (look backwards from target end).
+            // Clamp to at least start+1 so the slice is always valid and we
+            // always make forward progress (preventing infinite loops).
             let actual_end = if end < chars.len() {
-                find_word_boundary(&chars, end)
+                find_word_boundary(&chars, end).max(start + 1)
             } else {
                 end
             };
 
             let chunk_text: String = chars[start..actual_end].iter().collect();
-            let byte_offset = chars[..start].iter().map(|c| c.len_utf8()).sum();
+            let byte_offset: usize = chars[..start].iter().map(|c| c.len_utf8()).sum();
 
             if !chunk_text.trim().is_empty() {
                 chunks.push((chunk_text.trim().to_string(), byte_offset));
@@ -54,12 +56,11 @@ impl Chunker for FixedChunker {
                 break;
             }
 
-            // Move start forward, accounting for overlap
-            start = if actual_end > self.overlap {
-                actual_end - self.overlap
-            } else {
-                actual_end
-            };
+            // Move start forward by (chunk_length - overlap), always advancing
+            // by at least 1 character to prevent infinite loops.
+            let chunk_len = actual_end - start;
+            let step = chunk_len.saturating_sub(self.overlap).max(1);
+            start += step;
         }
 
         chunks
@@ -117,5 +118,69 @@ mod tests {
         let text = "Hello World";
         let chunks = chunker.chunk(text);
         assert_eq!(chunks[0].1, 0);
+    }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Lightweight ASCII string strategy that avoids expensive regex generation.
+        fn ascii_text(max_len: usize) -> impl Strategy<Value = String> {
+            prop::collection::vec(b'a'..=b'z', 0..max_len).prop_map(|v| {
+                // Intersperse some spaces and newlines for word boundaries
+                v.iter()
+                    .enumerate()
+                    .map(|(i, &c)| {
+                        if i % 7 == 0 {
+                            ' '
+                        } else if i % 23 == 0 {
+                            '\n'
+                        } else {
+                            c as char
+                        }
+                    })
+                    .collect()
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn never_panics(text in ascii_text(200), chunk_size in 5..200usize, overlap in 0..50usize) {
+                let chunker = FixedChunker::new(chunk_size, overlap);
+                let _ = chunker.chunk(&text);
+            }
+
+            #[test]
+            fn all_chunks_non_empty(text in ascii_text(200), chunk_size in 5..200usize, overlap in 0..50usize) {
+                let chunker = FixedChunker::new(chunk_size, overlap);
+                let chunks = chunker.chunk(&text);
+                for (chunk_text, _) in &chunks {
+                    prop_assert!(!chunk_text.trim().is_empty(),
+                        "chunk should be non-empty after trimming");
+                }
+            }
+
+            #[test]
+            fn byte_offsets_within_bounds(text in ascii_text(200), chunk_size in 5..200usize, overlap in 0..50usize) {
+                let chunker = FixedChunker::new(chunk_size, overlap);
+                let chunks = chunker.chunk(&text);
+                for (_, offset) in &chunks {
+                    prop_assert!(*offset <= text.len(),
+                        "byte offset {} > text.len() {}", offset, text.len());
+                }
+            }
+
+            #[test]
+            fn no_more_chunks_than_chars(text in ascii_text(200), chunk_size in 5..200usize, overlap in 0..50usize) {
+                let chunker = FixedChunker::new(chunk_size, overlap);
+                let chunks = chunker.chunk(&text);
+                // Word-boundary seeking can shorten chunks, but we can never
+                // produce more chunks than there are characters in the input.
+                prop_assert!(chunks.len() <= text.len(),
+                    "chunks.len()={} > text.len()={}", chunks.len(), text.len());
+            }
+        }
     }
 }

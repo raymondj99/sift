@@ -13,7 +13,7 @@ sift-store = { workspace = true, features = ["fts5", "sqlite"] }
 
 axum = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
-tower = { workspace = true }
+tower = { workspace = true, features = ["limit", "buffer"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }

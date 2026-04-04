@@ -110,6 +110,9 @@ symphonia-core = "0.5"
 rmcp = { version = "1", features = ["server", "transport-io"] }
 schemars = "1"
 
+# Caching
+lru = "0.12"
+
 # Random (for retry jitter)
 rand = "0.8"
 

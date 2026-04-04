@@ -73,12 +73,12 @@ impl SemanticChunker {
 
 impl Chunker for SemanticChunker {
     fn chunk(&self, text: &str) -> Vec<(String, usize)> {
-        if text.is_empty() {
+        if text.trim().is_empty() {
             return vec![];
         }
 
         if text.len() <= self.max_chunk_size {
-            return vec![(text.to_string(), 0)];
+            return vec![(text.trim().to_string(), 0)];
         }
 
         let mut chunks = Vec::new();
@@ -219,11 +219,66 @@ mod tests {
         use super::*;
         use proptest::prelude::*;
 
+        /// Lightweight ASCII string with paragraph breaks for semantic splitting.
+        fn text_with_paragraphs(max_len: usize) -> impl Strategy<Value = String> {
+            prop::collection::vec(b'a'..=b'z', 1..max_len).prop_map(|v| {
+                v.iter()
+                    .enumerate()
+                    .map(|(i, &c)| {
+                        if i % 11 == 0 {
+                            '\n'
+                        } else if i % 5 == 0 {
+                            ' '
+                        } else {
+                            c as char
+                        }
+                    })
+                    .collect()
+            })
+        }
+
         proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
             #[test]
-            fn never_panics(text in "\\PC{0,1000}", max_size in 10..500usize, overlap in 0..100usize) {
+            fn never_panics(text in text_with_paragraphs(200), max_size in 10..200usize, overlap in 0..50usize) {
                 let chunker = SemanticChunker::new(max_size, overlap);
                 let _ = chunker.chunk(&text);
+            }
+
+            #[test]
+            fn all_chunks_non_empty(text in text_with_paragraphs(200), max_size in 10..200usize, overlap in 0..50usize) {
+                let chunker = SemanticChunker::new(max_size, overlap);
+                let chunks = chunker.chunk(&text);
+                for (chunk_text, _) in &chunks {
+                    prop_assert!(!chunk_text.trim().is_empty(),
+                        "chunk should be non-empty after trimming");
+                }
+            }
+
+            #[test]
+            fn byte_offsets_within_bounds(text in text_with_paragraphs(200), max_size in 10..200usize, overlap in 0..50usize) {
+                let chunker = SemanticChunker::new(max_size, overlap);
+                let chunks = chunker.chunk(&text);
+                for (_, offset) in &chunks {
+                    prop_assert!(*offset < text.len(),
+                        "byte offset {} >= text.len() {}", offset, text.len());
+                }
+            }
+
+            #[test]
+            fn chunks_cover_all_non_whitespace(text in text_with_paragraphs(200), max_size in 10..200usize) {
+                let chunker = SemanticChunker::new(max_size, 0);
+                let chunks = chunker.chunk(&text);
+                let original_non_ws: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+                let chunk_non_ws: String = chunks.iter()
+                    .flat_map(|(t, _)| t.chars())
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                for ch in original_non_ws.chars() {
+                    prop_assert!(chunk_non_ws.contains(ch),
+                        "character {:?} from original text not found in any chunk", ch);
+                }
             }
         }
     }

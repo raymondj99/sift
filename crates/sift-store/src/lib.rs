@@ -5,6 +5,7 @@
 //! full-text search ([`Fts5Store`], [`TantivyStore`], or [`Bm25Store`]),
 //! and [`HybridSearchEngine`] for Reciprocal Rank Fusion of vector + keyword results.
 
+pub mod cache;
 pub mod error;
 
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
@@ -25,6 +26,7 @@ pub mod traits;
 
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
 pub use bm25::Bm25Store;
+pub use cache::CachedSearchEngine;
 pub use error::StorageError;
 pub use flat::{ExportEntry, FlatVectorIndex};
 #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]

@@ -1,4 +1,5 @@
 use axum::{
+    error_handling::HandleErrorLayer,
     extract::{Query, State},
     http::StatusCode,
     response::Json,
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sift_core::{Embedder, IndexStats, SearchMode};
 use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct AppState {
     pub engine: HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
@@ -56,10 +58,21 @@ pub struct StatusResponse {
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let api_routes = Router::new()
         .route("/api/search", get(search))
         .route("/api/status", get(status))
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|_: tower::BoxError| async {
+                    StatusCode::TOO_MANY_REQUESTS
+                }))
+                .buffer(100)
+                .rate_limit(100, Duration::from_secs(60)),
+        );
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(api_routes)
         .with_state(state)
 }
 
@@ -481,5 +494,20 @@ mod tests {
         let resp: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(resp["status"], "ok");
         assert_eq!(resp["has_embedder"], true);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_allows_normal_requests() {
+        let h = TestHarness::new();
+        // Health endpoint is not rate-limited
+        let (status, body) = get(h.app(), "/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "ok");
+
+        // API endpoints are rate-limited but should pass under normal load
+        let (status, body) = get(h.app(), "/api/status").await;
+        assert_eq!(status, StatusCode::OK);
+        let resp: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp["status"], "ok");
     }
 }

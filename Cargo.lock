@@ -3269,6 +3269,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion",
+ "lru",
  "paste",
  "proptest",
  "rusqlite",
@@ -4004,6 +4005,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
