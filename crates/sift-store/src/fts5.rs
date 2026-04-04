@@ -83,26 +83,45 @@ impl FullTextStore for Fts5Store {
             .lock()
             .map_err(|e| sift_core::SiftError::Storage(format!("Lock error: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                "INSERT INTO chunks_fts (uri, text, chunk_index, content_type, file_type, title)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )
-            .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 prepare error: {}", e)))?;
+        // Wrap the batch in an explicit transaction. Without this, each
+        // INSERT auto-commits to the WAL — the fsync overhead per row
+        // dominates at scale. A single BEGIN/COMMIT amortises the cost.
+        conn.execute_batch("BEGIN")
+            .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 begin error: {}", e)))?;
 
-        for chunk in chunks {
-            stmt.execute(params![
-                chunk.chunk.source_uri,
-                chunk.chunk.text,
-                chunk.chunk.chunk_index.to_string(),
-                chunk.chunk.content_type.to_string(),
-                chunk.chunk.file_type,
-                chunk.chunk.title.as_deref().unwrap_or(""),
-            ])
-            .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 insert error: {}", e)))?;
+        let result = (|| {
+            let mut stmt = conn
+                .prepare_cached(
+                    "INSERT INTO chunks_fts (uri, text, chunk_index, content_type, file_type, title)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(|e| {
+                    sift_core::SiftError::Storage(format!("FTS5 prepare error: {}", e))
+                })?;
+
+            for chunk in chunks {
+                stmt.execute(params![
+                    chunk.chunk.source_uri,
+                    chunk.chunk.text,
+                    chunk.chunk.chunk_index.to_string(),
+                    chunk.chunk.content_type.to_string(),
+                    chunk.chunk.file_type,
+                    chunk.chunk.title.as_deref().unwrap_or(""),
+                ])
+                .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 insert error: {}", e)))?;
+            }
+
+            Ok(())
+        })();
+
+        if result.is_ok() {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 commit error: {}", e)))?;
+        } else {
+            let _ = conn.execute_batch("ROLLBACK");
         }
 
-        Ok(())
+        result
     }
 
     fn search(&self, query: &str, top_k: usize) -> SiftResult<Vec<SearchResult>> {

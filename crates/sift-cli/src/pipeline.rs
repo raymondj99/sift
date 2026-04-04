@@ -499,7 +499,9 @@ pub fn run_scan_pipeline(
             // Delete old chunks for this URI if re-indexing
             let _ = engine.delete_by_uri(&store_item.item.uri);
 
-            // Insert into stores
+            // Insert into both stores. When no embedding model is loaded,
+            // chunks carry zero-vectors; the vector store still holds metadata
+            // needed by `sift export` and `sift status`.
             engine.insert(&store_item.embedded)?;
 
             // Update metadata
