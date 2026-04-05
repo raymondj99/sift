@@ -23,6 +23,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Named indexes (`--index`)
 - JSON/CSV output formats (`--format json`)
 
+## [0.1.3] - 2026-04-04
+
+### Added
+- **MCP tool `sift_list_entities`**: browse all memory entities with optional type
+  filtering and pagination. Returns observation counts per entity in a single
+  query (LEFT JOIN + COUNT, no N+1).
+- **MCP tool `sift_get_entity`**: retrieve all observations and relations for a
+  named entity. Batch-resolves relation target names.
+- **Entity-name fallback in recall**: when keyword search returns no results,
+  scans entity names for case-insensitive matches against the query.
+  Effective in keyword-only mode (no embeddings).
+- **FTS5 prefix matching**: terms >= 4 characters now generate both exact and
+  prefix queries (`"program" OR program*`), so "program" matches "programming".
+  FTS5 operators (AND, OR, NOT, NEAR) are excluded from prefix expansion.
+
+### Changed
+- **`mcp` feature now includes `embeddings`**: the MCP server always loads the
+  embedding model for semantic recall. Memory observations are re-embedded on
+  first startup (when vector index count diverges from SQLite) and skipped on
+  subsequent starts.
+- **Feature flags propagated to sift-memory**: sift-mcp now forwards `fts5`,
+  `hnsw`, `sqlite`, and `embeddings` features to sift-memory, fixing a
+  mismatch where `#[cfg]` guards didn't match the actual compiled store types.
+- **Vector store loaded from disk on startup**: `MemoryStore::open()` now calls
+  `load_or_create()` / `load_or_migrate()` instead of `new()`, preserving the
+  HNSW index across restarts.
+- **Embedder wired to MemoryStore**: when the `embeddings` feature is active,
+  the shared `Arc<dyn Embedder>` is passed to the memory store for observation
+  embedding and hybrid recall.
+
+### Fixed
+- **FTS filename migration**: older builds created the FTS5 database at
+  `memory_bm25.json` (due to the feature-flag mismatch). On first open with
+  corrected flags, the file is renamed to `memory_fts.db` with safe fallback
+  if the rename fails.
+- **Stale zero-vectors replaced on embedder attach**: `with_embedder()` detects
+  when the vector index is out of sync and rebuilds all observation embeddings.
+  Logs elapsed time for observability.
+- **Deadlock in recall fallback**: `recall()` now drops the SQLite lock before
+  calling `recall_by_entity_names()` which re-acquires it.
+
 ## [0.1.2] - 2026-04-04
 
 ### Added
