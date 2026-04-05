@@ -1,7 +1,7 @@
 ---
 name: sift-mcp
 description: Local semantic search engine with hybrid search, 30+ format indexing, entity memory, and MCP integration
-version: 0.1.1
+version: 0.1.3
 tags: [search, indexing, memory, knowledge-graph, mcp]
 ---
 
@@ -26,15 +26,18 @@ Sift is a local semantic search engine that indexes 30+ file formats and exposes
 
 ### Entity Memory (Knowledge Graph)
 - **sift_remember** — store structured facts about named entities with types, observations, and relationships.
-- **sift_recall** — search memory by natural language with entity type and confidence filtering.
+- **sift_recall** — hybrid semantic + keyword search over memory. Entity names are indexed so searching "Raymond" finds Raymond's observations. Minimum score threshold filters irrelevant results.
+- **sift_list_entities** — browse all entities with optional type filter and pagination. Returns observation counts per entity.
+- **sift_get_entity** — get all observations and relationships for a named entity.
 - **sift_forget** — soft-delete observations by ID, preserving audit trail.
 - **Entity types** — person, project, concept, tool, preference, fact, event, location, organization.
 - **Relationships** — directed edges between entities (e.g., "Raymond" → prefers → "Rust").
+- **Embeddings** — observations are embedded with nomic-embed-text-v2 for semantic recall. Index is rebuilt automatically when the embedder is first attached.
 
 ## When to Use
 
 - **Finding code or docs** — `sift_search` with hybrid mode for conceptual queries, keyword mode for exact symbol names.
-- **Persisting knowledge** — `sift_remember` for structured facts about users, projects, decisions. `sift_recall` to retrieve them later.
+- **Persisting knowledge** — `sift_remember` for structured facts about users, projects, decisions. `sift_recall` to retrieve them later. `sift_list_entities` and `sift_get_entity` to browse what's stored.
 - **Storing raw text** — `sift_index_text` for notes, logs, or content that should be searchable.
 - **Discovering capabilities** — `sift_search_skills` to find SKILL.md files describing agent skills.
 
@@ -50,5 +53,7 @@ Sift is a local semantic search engine that indexes 30+ file formats and exposes
 | `sift_delete` | Remove content by URI | No |
 | `sift_remember` | Store entity facts | No |
 | `sift_recall` | Search entity memory | Yes |
+| `sift_list_entities` | Browse all entities | Yes |
+| `sift_get_entity` | Get entity details | Yes |
 | `sift_forget` | Soft-delete observation | No |
 | `sift_memory_status` | Memory statistics | Yes |
