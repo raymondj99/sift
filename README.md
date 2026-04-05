@@ -44,7 +44,7 @@ Pre-compiled binaries for macOS and Linux are available on the
 [releases page](https://github.com/raymondj99/sift/releases).
 
 Download the tarball for your platform, extract it, and move the binary
-into your `PATH`. Replace `VERSION` below with the release tag (e.g. `v0.1.1`):
+into your `PATH`. Replace `VERSION` below with the release tag (e.g. `v0.1.2`):
 
 ```bash
 # macOS (Apple Silicon)
@@ -205,6 +205,123 @@ sift search --vector-only "retry logic patterns"
 | `-o, --output <FILE>` | Write to file instead of stdout |
 | `-t, --type <EXT>` | Filter by file type |
 
+## AI agent integration
+
+Sift includes an MCP (Model Context Protocol) server that exposes search, indexing, and memory tools to AI agents. Start it with `sift mcp` — it communicates via JSON-RPC 2.0 over stdio.
+
+### Available MCP tools
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `sift_search` | Read | Hybrid semantic + keyword search across indexed files |
+| `sift_status` | Read | Index statistics (file counts, types, storage size) |
+| `sift_search_skills` | Read | Discover agent skills (SKILL.md files) |
+| `sift_index_text` | Write | Store arbitrary text with custom `memory://` URIs |
+| `sift_delete` | Write | Remove content from the index by URI |
+| `sift_list_sources` | Read | Browse indexed files with path filtering |
+| `sift_remember` | Write | Persist entities, observations, and relations to memory |
+| `sift_recall` | Read | Semantic search over stored memories |
+| `sift_forget` | Write | Soft-delete memory observations |
+| `sift_memory_status` | Read | Memory store statistics |
+
+### Setup
+
+Before configuring any agent, index the directories you want searchable:
+
+```bash
+# Index your project
+sift scan ~/my-project
+
+# (Optional) Download embedding model for semantic search
+sift models download nomic-embed-text-v2
+
+# Verify
+sift status
+```
+
+### Claude Code
+
+Add sift to your project's `.mcp.json` (or `~/.claude.json` for global):
+
+```json
+{
+  "mcpServers": {
+    "sift": {
+      "command": "sift",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or add it interactively:
+
+```bash
+claude mcp add sift -- sift mcp
+```
+
+Once configured, Claude Code can use all sift tools directly. Try asking:
+- "Use sift to search for error handling patterns"
+- "Remember that I prefer integration tests over mocks"
+- "What do you recall about my testing preferences?"
+
+### Cursor
+
+Add to your Cursor MCP configuration at `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sift": {
+      "command": "sift",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Restart Cursor after saving. Sift tools will appear in the agent's available tool list.
+
+### VS Code (Copilot)
+
+Add to your VS Code settings (`settings.json`) or workspace `.vscode/mcp.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "sift": {
+        "command": "sift",
+        "args": ["mcp"]
+      }
+    }
+  }
+}
+```
+
+### OpenAI Codex CLI
+
+Add to your `~/.codex/config.yaml`:
+
+```yaml
+mcp_servers:
+  - name: sift
+    command: sift
+    args: ["mcp"]
+```
+
+### Memory persistence
+
+Sift's memory tools (`sift_remember`, `sift_recall`, `sift_forget`) provide persistent knowledge across agent sessions. The memory store uses a temporal knowledge graph — facts have validity windows, old memories decay in relevance but are never deleted, and contradictions are detected automatically.
+
+```
+Agent → sift_remember("Raymond prefers Rust") → SQLite + search index
+Agent → sift_recall("language preferences")   → ranked results with scores
+Agent → sift_forget(observation_id)            → soft-delete, audit trail preserved
+```
+
+Memory is stored at `~/.sift/indexes/{index}/memory/` and persists across sessions.
+
 ## Search modes
 
 - **Hybrid** (default) — Combines vector similarity and BM25 keyword search using Reciprocal Rank Fusion.
@@ -271,7 +388,7 @@ Source -> Discovery -> Parsing -> Chunking -> Embedding -> Storage -> Search
           (walkdir)   (per-type)  (semantic)   (ONNX)     (SQLite)
 ```
 
-Nine crates in a Cargo workspace:
+Ten crates in a Cargo workspace:
 
 | Crate | Purpose |
 |-------|---------|
@@ -281,6 +398,7 @@ Nine crates in a Cargo workspace:
 | `sift-chunker` | Fixed-size, semantic, recursive, and AST-aware chunking |
 | `sift-embed` | ONNX Runtime embedding with model management and cache |
 | `sift-store` | SQLite metadata, FTS5/Tantivy keyword search, flat/HNSW vector store, LRU cache, hybrid RRF search |
+| `sift-memory` | Temporal knowledge graph for AI agent memory persistence |
 | `sift-server` | HTTP API (Axum) with rate limiting, and filesystem watcher |
 | `sift-mcp` | Model Context Protocol server (JSON-RPC 2.0 over stdio) |
 | `sift-cli` | CLI entry point and pipeline orchestration |
