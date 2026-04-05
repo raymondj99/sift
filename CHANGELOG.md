@@ -6,7 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-05
+
 ### Added
+- **Daemon mode** (`sift daemon start|stop|status`): persistent background process
+  that keeps the embedding model and search index hot in memory, eliminating the
+  1–5 s cold-start on every CLI invocation. Serves the full HTTP API over a Unix
+  domain socket (`~/.sift/daemon.sock`) with graceful shutdown on SIGTERM/SIGINT
+  and PID-file lifecycle management.
+- **Transparent daemon routing**: read operations (`search`, `status`, `list`)
+  auto-route through the daemon when it is running, falling back to direct
+  execution when it is not. Write operations (`scan`, `remove`) auto-stop the
+  daemon, execute, then auto-restart it. The daemon client uses only
+  `std::os::unix::net` — zero new dependencies, works in any build.
+- **`sift init` command**: scaffolds a `.sift.toml` project config with
+  commented-out defaults. Auto-appends `.sift/` to `.gitignore` when inside a
+  git repository. Supports `--force` to overwrite an existing config.
+- **Shell completions enabled by default**: `sift completions bash|zsh|fish`
+  now works out of the box without `--features completions`.
+- **`GET /api/list` endpoint**: list indexed sources via the HTTP API.
+- **`serve_unix()`**: new function in sift-server for serving Axum routers over
+  Unix domain sockets with graceful shutdown support.
+- **`byte_range` in search API**: `SearchResultItem` now includes the source
+  byte range, enabling context display from API consumers.
 - Per-language tree-sitter AST chunking (`ast-rust`, `ast-python`, etc.)
 - SQLite FTS5 full-text search as default keyword engine
 - Binary vector index format (`vectors.bin`) with JSON migration
@@ -16,12 +38,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - HNSW approximate nearest-neighbor index
 - HTTP API server with search and status endpoints
 - Filesystem watcher for automatic re-indexing
-- Shell completion generation (`--features completions`)
 - JSONL export with optional vector output
 - Date filtering (`--after 7d`, `--after 2025-01-01`)
 - Context display (`--context`) for showing surrounding source lines
 - Named indexes (`--index`)
 - JSON/CSV output formats (`--format json`)
+
+### Changed
+- `completions` feature added to default feature set in sift-cli.
+- `tokio` dependency in sift-cli now includes `net` and `signal` features
+  (required for daemon Unix socket and signal handling).
 
 ## [0.1.3] - 2026-04-04
 
