@@ -210,14 +210,15 @@ impl FullTextStore for Fts5Store {
     }
 }
 
-/// Escape a user query for FTS5 MATCH syntax.
-///
-/// Each word is quoted to prevent FTS5 syntax injection. Terms are joined
-/// with OR for recall-oriented search (matches documents containing any term,
-/// BM25 ranks documents with more matches higher).
 /// FTS5 reserved words that must not appear as bare prefix tokens.
 const FTS5_OPERATORS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
 
+/// Escape a user query for FTS5 MATCH syntax.
+///
+/// Each word is quoted to prevent FTS5 syntax injection. Terms >= 4 chars
+/// also get a bare prefix variant (`term*`) for partial matching. Terms are
+/// joined with OR for recall-oriented search (matches documents containing
+/// any term, BM25 ranks documents with more matches higher).
 fn fts5_escape(query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
@@ -403,8 +404,7 @@ mod tests {
             "(\"hello\" OR hello*) OR (\"world\" OR world*)"
         );
         assert_eq!(fts5_escape("a b c"), ""); // single chars filtered
-                                              // Short terms (< 4 chars) get exact match only
-        assert_eq!(fts5_escape("rust"), "(\"rust\" OR rust*)");
+        assert_eq!(fts5_escape("rust"), "(\"rust\" OR rust*)"); // 4 chars → prefix
         assert_eq!(
             fts5_escape("hello \"world\""),
             "(\"hello\" OR hello*) OR (\"\"\"world\"\"\" OR world*)"

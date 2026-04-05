@@ -167,28 +167,53 @@ impl MemoryStore {
 
     /// Set the embedder for vectorizing observations.
     ///
-    /// This also rebuilds the search index so that all existing observations
-    /// are re-embedded with real vectors (replacing zero-vectors stored before
-    /// an embedder was available).
+    /// On first call (or when the vector index is stale), rebuilds the search
+    /// index so existing observations get real embeddings. Skips the rebuild
+    /// if the vector store already has the right number of entries.
     #[cfg(feature = "embeddings")]
     pub fn with_embedder(mut self, embedder: std::sync::Arc<dyn sift_core::Embedder>) -> Self {
         self.embedder = Some(embedder);
-        if let Err(e) = self.rebuild_search_index() {
-            warn!("Failed to rebuild search index with embedder: {e}");
+
+        // Only rebuild if the vector index is out of sync with SQLite.
+        let obs_count = {
+            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            conn.query_row(
+                "SELECT COUNT(*) FROM observations WHERE valid_until IS NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) as u64
+        };
+        let vec_count = self.search.count().unwrap_or(0);
+
+        if obs_count != vec_count {
+            tracing::info!(
+                "Memory vector index stale ({vec_count} vectors, {obs_count} observations), rebuilding"
+            );
+            if let Err(e) = self.rebuild_search_index() {
+                warn!("Failed to rebuild search index with embedder: {e}");
+            }
+            if let Err(e) = self.save() {
+                warn!("Failed to persist rebuilt search index: {e}");
+            }
+        } else {
+            tracing::debug!(
+                "Memory vector index up to date ({vec_count} vectors), skipping rebuild"
+            );
         }
-        if let Err(e) = self.save() {
-            warn!("Failed to persist rebuilt search index: {e}");
-        }
+
         self
     }
 
     /// Rebuild the search index from all active observations in SQLite.
     ///
     /// Clears both vector and fulltext stores, then re-indexes every active
-    /// observation. Call this after attaching an embedder to replace stale
-    /// zero-vectors with real embeddings.
+    /// observation with the current embedder. Only effective when the
+    /// `embeddings` feature is enabled and an embedder is attached.
     #[cfg(feature = "embeddings")]
     fn rebuild_search_index(&self) -> MemResult<()> {
+        let start = std::time::Instant::now();
+
         let observations: Vec<(String, String)> = {
             let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare(
@@ -209,7 +234,7 @@ impl MemoryStore {
             let _ = self.search.delete_by_uri(&uri);
         }
 
-        // Re-index with (potentially real) embeddings.
+        // Re-index with real embeddings.
         let chunks: Vec<sift_core::EmbeddedChunk> = observations
             .iter()
             .map(|(id, content)| {
@@ -235,8 +260,9 @@ impl MemoryStore {
         }
 
         tracing::info!(
-            "Rebuilt memory search index: {} observations re-embedded",
-            chunks.len()
+            "Rebuilt memory search index: {} observations in {:.1?}",
+            chunks.len(),
+            start.elapsed()
         );
 
         Ok(())
@@ -709,8 +735,9 @@ impl MemoryStore {
         });
         memory_results.truncate(top_k);
 
-        // Fallback: if keyword search found nothing, try matching query
-        // terms against entity names and return those entities' observations.
+        // Fallback: if search found nothing, try matching query terms against
+        // entity names. In practice this only fires in keyword-only mode
+        // (no embeddings) since HNSW always returns approximate neighbors.
         if memory_results.is_empty() {
             memory_results = self.recall_by_entity_names(query, top_k, filters)?;
         }
