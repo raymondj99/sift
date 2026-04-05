@@ -48,7 +48,7 @@ hnsw = ["sift-store/hnsw", "sift-mcp?/hnsw"]
 simd = ["sift-store/simd"]
 # Server & UI
 serve = ["dep:sift-server", "dep:tokio"]
-mcp = ["dep:sift-mcp", "dep:tokio"]
+mcp = ["dep:sift-mcp", "dep:tokio", "embeddings"]
 completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
 # Profiles

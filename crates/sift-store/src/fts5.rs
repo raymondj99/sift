@@ -215,13 +215,34 @@ impl FullTextStore for Fts5Store {
 /// Each word is quoted to prevent FTS5 syntax injection. Terms are joined
 /// with OR for recall-oriented search (matches documents containing any term,
 /// BM25 ranks documents with more matches higher).
+/// FTS5 reserved words that must not appear as bare prefix tokens.
+const FTS5_OPERATORS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
+
 fn fts5_escape(query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
         .filter(|w| w.len() >= 2)
-        .map(|word| {
+        .filter_map(|word| {
             let escaped = word.replace('"', "\"\"");
-            format!("\"{}\"", escaped)
+            // Strip to alphanumeric for a safe bare prefix token.
+            let cleaned: String = word
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // For longer terms, also add a prefix match so "program" finds
+            // "programming". FTS5 prefix syntax requires bare `term*`.
+            // Skip prefix for FTS5 operators to avoid syntax errors.
+            let safe_for_prefix = cleaned.len() >= 4
+                && !FTS5_OPERATORS
+                    .iter()
+                    .any(|op| cleaned.eq_ignore_ascii_case(op));
+            if safe_for_prefix {
+                Some(format!("(\"{escaped}\" OR {cleaned}*)"))
+            } else if !cleaned.is_empty() {
+                Some(format!("\"{escaped}\""))
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -376,15 +397,24 @@ mod tests {
 
     #[test]
     fn test_fts5_escape_function() {
-        assert_eq!(fts5_escape("hello world"), "\"hello\" OR \"world\"");
+        // Terms >= 4 chars get prefix matching
+        assert_eq!(
+            fts5_escape("hello world"),
+            "(\"hello\" OR hello*) OR (\"world\" OR world*)"
+        );
         assert_eq!(fts5_escape("a b c"), ""); // single chars filtered
-        assert_eq!(fts5_escape("rust"), "\"rust\"");
+                                              // Short terms (< 4 chars) get exact match only
+        assert_eq!(fts5_escape("rust"), "(\"rust\" OR rust*)");
         assert_eq!(
             fts5_escape("hello \"world\""),
-            "\"hello\" OR \"\"\"world\"\"\""
+            "(\"hello\" OR hello*) OR (\"\"\"world\"\"\" OR world*)"
         );
         assert_eq!(fts5_escape(""), "");
         assert_eq!(fts5_escape("   "), "");
+        // 2-3 char terms: exact match only (no prefix)
+        assert_eq!(fts5_escape("go is ok"), "\"go\" OR \"is\" OR \"ok\"");
+        // FTS5 operators stay quoted (no bare prefix)
+        assert_eq!(fts5_escape("NEAR miss"), "\"NEAR\" OR (\"miss\" OR miss*)");
     }
 
     #[test]

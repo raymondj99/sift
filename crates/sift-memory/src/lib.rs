@@ -83,16 +83,45 @@ impl MemoryStore {
         let conn = Connection::open(&db_path)?;
         schema::init_schema(&conn)?;
 
-        // Open sift search stores for observations.
-        // FlatVectorIndex uses load_or_migrate, HnswIndex uses load_or_create.
-        // We use new() and rely on save()/load cycle for persistence since
-        // memory observations are rebuilt from SQLite on each session.
-        let vector_store = SimpleVectorStore::new();
+        // Load persisted vector store, or create fresh if none exists.
+        #[cfg(feature = "hnsw")]
+        let vector_store = SimpleVectorStore::load_or_create(dir)?;
+        #[cfg(not(feature = "hnsw"))]
+        let vector_store = SimpleVectorStore::load_or_migrate(dir)?;
+
+        // Migrate legacy FTS filename: older builds used `memory_bm25.json`
+        // due to a feature-flag mismatch (sift-memory was compiled without
+        // the fts5 feature even though Fts5Store was the actual type).
+        #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
+        let fts_path = {
+            let preferred = dir.join("memory_fts.db");
+            let legacy = dir.join("memory_bm25.json");
+            if !preferred.exists() && legacy.exists() {
+                tracing::info!("Migrating memory FTS: memory_bm25.json -> memory_fts.db");
+                if std::fs::rename(&legacy, &preferred).is_ok() {
+                    // Best-effort WAL/SHM migration; harmless if they don't exist.
+                    let _ = std::fs::rename(
+                        dir.join("memory_bm25.json-wal"),
+                        dir.join("memory_fts.db-wal"),
+                    );
+                    let _ = std::fs::rename(
+                        dir.join("memory_bm25.json-shm"),
+                        dir.join("memory_fts.db-shm"),
+                    );
+                    preferred
+                } else {
+                    tracing::warn!("FTS migration failed, using legacy path");
+                    legacy
+                }
+            } else {
+                preferred
+            }
+        };
 
         #[cfg(feature = "fulltext")]
         let fulltext_store = DefaultFullTextStore::open(&dir.join("tantivy"))?;
         #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
-        let fulltext_store = DefaultFullTextStore::open(&dir.join("memory_fts.db"))?;
+        let fulltext_store = DefaultFullTextStore::open(&fts_path)?;
         #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
         let fulltext_store = DefaultFullTextStore::open(&dir.join("memory_bm25.json"))?;
 
@@ -246,6 +275,68 @@ impl MemoryStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// List entities with optional type filter and pagination.
+    ///
+    /// Returns entities sorted by `updated_at` descending (most recently
+    /// touched first), each annotated with its active observation count.
+    pub fn list_entities(
+        &self,
+        entity_type: Option<EntityType>,
+        limit: usize,
+        offset: usize,
+    ) -> MemResult<Vec<(Entity, usize)>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let parse_row = |row: &rusqlite::Row<'_>| {
+            let entity = Entity {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                entity_type: EntityType::parse(&row.get::<_, String>(2)?)
+                    .unwrap_or(EntityType::Concept),
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+                confidence: row.get(5)?,
+                source: row.get(6)?,
+            };
+            let obs_count: i64 = row.get(7)?;
+            Ok((entity, obs_count as usize))
+        };
+
+        // Single query with LEFT JOIN to count active observations.
+        let base = "\
+            SELECT e.id, e.name, e.entity_type, e.created_at, e.updated_at, \
+                   e.confidence, e.source, \
+                   COUNT(o.id) AS obs_count \
+            FROM entities e \
+            LEFT JOIN observations o ON o.entity_id = e.id AND o.valid_until IS NULL";
+
+        let rows: Vec<(Entity, usize)> = if let Some(ref et) = entity_type {
+            let sql = format!(
+                "{base} WHERE e.entity_type = ?1 \
+                 GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?2 OFFSET ?3"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let result: Vec<_> = stmt
+                .query_map(
+                    rusqlite::params![et.as_str(), limit as i64, offset as i64],
+                    parse_row,
+                )?
+                .filter_map(Result::ok)
+                .collect();
+            result
+        } else {
+            let sql = format!("{base} GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?1 OFFSET ?2");
+            let mut stmt = conn.prepare(&sql)?;
+            let result: Vec<_> = stmt
+                .query_map(rusqlite::params![limit as i64, offset as i64], parse_row)?
+                .filter_map(Result::ok)
+                .collect();
+            result
+        };
+
+        Ok(rows)
     }
 
     // -----------------------------------------------------------------------
@@ -537,6 +628,9 @@ impl MemoryStore {
             });
         }
 
+        // Drop the lock before potential fallback (which re-acquires it).
+        drop(conn);
+
         // Sort by final score descending
         memory_results.sort_by(|a, b| {
             b.score
@@ -545,7 +639,135 @@ impl MemoryStore {
         });
         memory_results.truncate(top_k);
 
+        // Fallback: if keyword search found nothing, try matching query
+        // terms against entity names and return those entities' observations.
+        if memory_results.is_empty() {
+            memory_results = self.recall_by_entity_names(query, top_k, filters)?;
+        }
+
         Ok(memory_results)
+    }
+
+    /// Fallback recall: match query terms against entity names.
+    ///
+    /// When FTS5 keyword search returns no results, this scans entity names
+    /// for case-insensitive matches against the query, then returns those
+    /// entities' active observations. This handles queries like "tell me about
+    /// Raymond" even when no observation text contains "Raymond".
+    fn recall_by_entity_names(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &RecallFilters,
+    ) -> MemResult<Vec<RecallResult>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let valid_at = filters.valid_at.unwrap_or_else(now_secs);
+        let query_lower = query.to_lowercase();
+
+        // Require at least one word >= 3 chars to avoid matching on noise
+        // like "is it ok" against entity names.
+        let has_meaningful_term = query_lower.split_whitespace().any(|t| t.len() >= 3);
+        if !has_meaningful_term {
+            return Ok(vec![]);
+        }
+
+        // Find entities whose full name appears as a substring of the query.
+        let mut stmt = conn.prepare("SELECT id, name, entity_type FROM entities")?;
+        let matching_entities: Vec<(String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(Result::ok)
+            .filter(|(_, name, _)| {
+                let name_lower = name.to_lowercase();
+                // Match if the full entity name appears as a substring of the query.
+                query_lower.contains(&name_lower)
+            })
+            .collect();
+
+        if matching_entities.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Prepare the observation query once, reuse for each entity.
+        let mut obs_stmt = conn.prepare(
+            "SELECT id, entity_id, content, observed_at, valid_from, valid_until,
+                    confidence, source, supersedes
+             FROM observations
+             WHERE entity_id = ?1 AND valid_until IS NULL
+             ORDER BY observed_at DESC",
+        )?;
+
+        let mut results: Vec<RecallResult> = Vec::new();
+
+        for (entity_id, entity_name, entity_type_str) in &matching_entities {
+            let entity_type = EntityType::parse(entity_type_str).unwrap_or(EntityType::Concept);
+
+            if let Some(ref filter_type) = filters.entity_type {
+                if entity_type != *filter_type {
+                    continue;
+                }
+            }
+
+            let observations: Vec<Observation> = obs_stmt
+                .query_map([entity_id], |row| {
+                    Ok(Observation {
+                        id: row.get(0)?,
+                        entity_id: row.get(1)?,
+                        content: row.get(2)?,
+                        observed_at: row.get(3)?,
+                        valid_from: row.get(4)?,
+                        valid_until: row.get(5)?,
+                        confidence: row.get(6)?,
+                        source: row.get(7)?,
+                        supersedes: row.get(8)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+
+            for obs in observations {
+                if let Some(from) = obs.valid_from {
+                    if valid_at < from {
+                        continue;
+                    }
+                }
+                if let Some(ref filter_source) = filters.source {
+                    if obs.source != *filter_source {
+                        continue;
+                    }
+                }
+                if let Some(min_conf) = filters.min_confidence {
+                    if obs.confidence < min_conf {
+                        continue;
+                    }
+                }
+
+                let days_since = (valid_at - obs.observed_at).max(0) as f64 / 86400.0;
+                let recency_factor = (-0.01 * days_since).exp() as f32;
+                let score = recency_factor * obs.confidence;
+
+                results.push(RecallResult {
+                    observation: obs,
+                    entity_name: entity_name.clone(),
+                    entity_type,
+                    score,
+                });
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(top_k);
+
+        Ok(results)
     }
 
     // -----------------------------------------------------------------------

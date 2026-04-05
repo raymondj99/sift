@@ -234,6 +234,24 @@ pub struct ForgetRequest {
     pub observation_id: String,
 }
 
+/// Input parameters for the `sift_list_entities` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListEntitiesRequest {
+    /// Filter by entity type (optional)
+    pub entity_type: Option<EntityTypeParam>,
+    /// Max entities to return (default: 20, range: 1–100)
+    pub limit: Option<i32>,
+    /// Skip first N entities for pagination (default: 0)
+    pub offset: Option<i32>,
+}
+
+/// Input parameters for the `sift_get_entity` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetEntityRequest {
+    /// Entity name to look up (exact match)
+    pub entity: String,
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
@@ -290,10 +308,20 @@ impl SiftMcpServer {
         // 50-entry LRU with 60s TTL balances memory usage with agentic hit rates.
         let cached = CachedSearchEngine::new(engine, 50, Duration::from_secs(60));
 
+        #[cfg(feature = "embeddings")]
+        let embedder: Option<Arc<dyn sift_core::Embedder>> =
+            embedder.map(|e| Arc::new(e) as Arc<dyn sift_core::Embedder>);
+
         let memory = {
             let memory_dir = config.index_dir().ok().map(|d| d.join("memory"));
             memory_dir.and_then(|dir| match sift_memory::MemoryStore::open(&dir) {
                 Ok(store) => {
+                    #[cfg(feature = "embeddings")]
+                    let store = if let Some(ref emb) = embedder {
+                        store.with_embedder(Arc::clone(emb))
+                    } else {
+                        store
+                    };
                     info!("Memory store opened at {}", dir.display());
                     Some(Arc::new(store))
                 }
@@ -310,7 +338,7 @@ impl SiftMcpServer {
             engine: Arc::new(cached),
             metadata: Arc::new(metadata),
             #[cfg(feature = "embeddings")]
-            embedder: embedder.map(|e| Arc::new(e) as Arc<dyn sift_core::Embedder>),
+            embedder,
             memory,
         })
     }
@@ -1034,6 +1062,166 @@ impl SiftMcpServer {
             serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
         )]))
     }
+
+    /// List all entities stored in memory.
+    #[tool(
+        name = "sift_list_entities",
+        description = "List all entities stored in memory, with optional type filtering and pagination. Returns entity names, types, and observation counts. Use this to browse what's in memory without needing a search query.",
+        annotations(read_only_hint = true)
+    )]
+    fn sift_list_entities(
+        &self,
+        Parameters(req): Parameters<ListEntitiesRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        let limit = req.limit.unwrap_or(20).clamp(1, 100) as usize;
+        let offset = req.offset.unwrap_or(0).max(0) as usize;
+        let entity_type = req
+            .entity_type
+            .as_ref()
+            .map(EntityTypeParam::to_memory_type);
+
+        let entities = memory
+            .list_entities(entity_type, limit, offset)
+            .map_err(|e| internal_err(format!("Failed to list entities: {e}")))?;
+
+        let items: Vec<serde_json::Value> = entities
+            .iter()
+            .map(|(e, obs_count)| {
+                serde_json::json!({
+                    "name": e.name,
+                    "entity_type": e.entity_type.as_str(),
+                    "confidence": e.confidence,
+                    "observations": obs_count,
+                    "source": e.source,
+                    "updated_at": e.updated_at,
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "entities": items,
+            "showing": items.len(),
+            "offset": offset,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Get all facts about a specific entity.
+    #[tool(
+        name = "sift_get_entity",
+        description = "Get all stored facts (observations) and relationships for a named entity. Returns entity metadata plus all active observations and relations. Use when you know the entity name (from sift_list_entities or sift_recall) and want the full picture.",
+        annotations(read_only_hint = true)
+    )]
+    fn sift_get_entity(
+        &self,
+        Parameters(req): Parameters<GetEntityRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        if req.entity.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Entity name must not be empty",
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let entity = memory
+            .get_entity(&req.entity)
+            .map_err(|e| internal_err(format!("Failed to get entity: {e}")))?;
+
+        let Some(entity) = entity else {
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "not_found",
+                    "entity": req.entity,
+                }))
+                .map_err(|e| internal_err(e.to_string()))?,
+            )]));
+        };
+
+        let observations = memory
+            .get_entity_observations(&entity.id)
+            .map_err(|e| internal_err(format!("Failed to get observations: {e}")))?;
+        let relations = memory
+            .get_entity_relations(&entity.id)
+            .map_err(|e| internal_err(format!("Failed to get relations: {e}")))?;
+
+        // Batch-resolve all related entity names in one pass.
+        let related_ids: Vec<&str> = relations
+            .iter()
+            .map(|r| {
+                if r.from_entity == entity.id {
+                    r.to_entity.as_str()
+                } else {
+                    r.from_entity.as_str()
+                }
+            })
+            .collect();
+        let mut name_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for id in &related_ids {
+            if !name_map.contains_key(*id) {
+                if let Ok(Some(e)) = memory.get_entity_by_id(id) {
+                    name_map.insert(e.id, e.name);
+                }
+            }
+        }
+
+        let rel_items: Vec<serde_json::Value> = relations
+            .iter()
+            .filter_map(|r| {
+                let target_id = if r.from_entity == entity.id {
+                    &r.to_entity
+                } else {
+                    &r.from_entity
+                };
+                let target_name = name_map.get(target_id)?;
+                Some(serde_json::json!({
+                    "type": r.relation_type,
+                    "target": target_name,
+                    "direction": if r.from_entity == entity.id { "outgoing" } else { "incoming" },
+                    "weight": r.weight,
+                }))
+            })
+            .collect();
+
+        let obs_items: Vec<serde_json::Value> = observations
+            .iter()
+            .map(|o| {
+                serde_json::json!({
+                    "observation_id": o.id,
+                    "fact": o.content,
+                    "confidence": o.confidence,
+                    "observed_at": o.observed_at,
+                    "source": o.source,
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "entity": entity.name,
+            "entity_type": entity.entity_type.as_str(),
+            "confidence": entity.confidence,
+            "observations": obs_items,
+            "relations": rel_items,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
 }
 
 #[tool_handler]
@@ -1057,6 +1245,10 @@ impl ServerHandler for SiftMcpServer {
                and relationships. Use for user preferences, project decisions, learned patterns.\n\
              - sift_recall: Search memory by natural language. Filter by entity_type or source. \
                Returns scored facts with observation IDs.\n\
+             - sift_list_entities: Browse all entities in memory with optional type filter and \
+               pagination. Shows observation counts. Use to discover what's stored.\n\
+             - sift_get_entity: Get all facts and relationships for a named entity. Use after \
+               sift_list_entities or sift_recall to see the full picture.\n\
              - sift_forget: Soft-delete a specific observation by ID (from sift_recall results). \
                Preserves audit trail.\n\
              - sift_memory_status: Show memory statistics (entity/observation/relation counts).\n\n\

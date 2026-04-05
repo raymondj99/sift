@@ -9,11 +9,11 @@ workspace = true
 
 [features]
 default = ["fts5", "sqlite", "hnsw"]
-sqlite = ["sift-store/sqlite"]
-fts5 = ["sqlite", "sift-store/fts5"]
-fulltext = ["sift-store/fulltext"]
-hnsw = ["sift-store/hnsw"]
-embeddings = ["dep:sift-embed"]
+sqlite = ["sift-store/sqlite", "sift-memory/sqlite"]
+fts5 = ["sqlite", "sift-store/fts5", "sift-memory/fts5"]
+fulltext = ["sift-store/fulltext", "sift-memory/fulltext"]
+hnsw = ["sift-store/hnsw", "sift-memory/hnsw"]
+embeddings = ["dep:sift-embed", "sift-memory/embeddings"]
 memory = []
 
 [dependencies]
