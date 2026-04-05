@@ -166,10 +166,80 @@ impl MemoryStore {
     }
 
     /// Set the embedder for vectorizing observations.
+    ///
+    /// This also rebuilds the search index so that all existing observations
+    /// are re-embedded with real vectors (replacing zero-vectors stored before
+    /// an embedder was available).
     #[cfg(feature = "embeddings")]
     pub fn with_embedder(mut self, embedder: std::sync::Arc<dyn sift_core::Embedder>) -> Self {
         self.embedder = Some(embedder);
+        if let Err(e) = self.rebuild_search_index() {
+            warn!("Failed to rebuild search index with embedder: {e}");
+        }
+        if let Err(e) = self.save() {
+            warn!("Failed to persist rebuilt search index: {e}");
+        }
         self
+    }
+
+    /// Rebuild the search index from all active observations in SQLite.
+    ///
+    /// Clears both vector and fulltext stores, then re-indexes every active
+    /// observation. Call this after attaching an embedder to replace stale
+    /// zero-vectors with real embeddings.
+    #[cfg(feature = "embeddings")]
+    fn rebuild_search_index(&self) -> MemResult<()> {
+        let observations: Vec<(String, String)> = {
+            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stmt = conn.prepare(
+                "SELECT o.id, o.content FROM observations o WHERE o.valid_until IS NULL",
+            )?;
+            let result: Vec<_> = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            result
+        };
+
+        // Clear existing entries so we don't get duplicates.
+        for (id, _) in &observations {
+            let uri = format!("memory://observation/{id}");
+            let _ = self.search.delete_by_uri(&uri);
+        }
+
+        // Re-index with (potentially real) embeddings.
+        let chunks: Vec<sift_core::EmbeddedChunk> = observations
+            .iter()
+            .map(|(id, content)| {
+                let vector = self.embed_observation(content);
+                sift_core::EmbeddedChunk {
+                    chunk: sift_core::Chunk {
+                        text: content.clone(),
+                        source_uri: format!("memory://observation/{id}"),
+                        chunk_index: 0,
+                        content_type: sift_core::ContentType::Text,
+                        file_type: "memory".to_string(),
+                        title: None,
+                        language: None,
+                        byte_range: None,
+                    },
+                    vector,
+                }
+            })
+            .collect();
+
+        if !chunks.is_empty() {
+            self.search.insert(&chunks)?;
+        }
+
+        tracing::info!(
+            "Rebuilt memory search index: {} observations re-embedded",
+            chunks.len()
+        );
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
