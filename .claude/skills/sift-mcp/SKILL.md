@@ -34,6 +34,20 @@ Sift is a local semantic search engine that indexes 30+ file formats and exposes
 - **Relationships** — directed edges between entities (e.g., "Raymond" → prefers → "Rust").
 - **Embeddings** — observations are embedded with nomic-embed-text-v2 for semantic recall. Index is rebuilt automatically when the embedder is first attached.
 
+## Gathering Context Before a Task
+
+At the start of a conversation or task, load relevant memory to inform your work:
+
+1. **`sift_recall`** with a query describing the task — retrieves scored facts that may be relevant.
+2. **`sift_list_entities`** — browse what's stored. Filter by `entity_type` (e.g., `person`, `project`, `preference`) to find relevant context quickly.
+3. **`sift_get_entity`** — for any entity that looks relevant, fetch its full observations and relationships.
+
+Do this proactively when:
+- Starting a new task or conversation
+- The user references prior work, decisions, or preferences
+- You need to understand who the user is or how they work
+- Working on a project that has been discussed before
+
 ## When to Use
 
 - **Finding code or docs** — `sift_search` with hybrid mode for conceptual queries, keyword mode for exact symbol names.
