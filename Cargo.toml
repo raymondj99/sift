@@ -10,6 +10,7 @@ members = [
     "crates/sift-store",
     "crates/sift-server",
     "crates/sift-mcp",
+    "crates/sift-memory",
 ]
 # Fast default build: excludes sift-server (pulls in tantivy ~43s) and
 # sift-embed (pulls in tokenizers+onig_sys ~20s). Use `cargo build --workspace`
@@ -22,6 +23,7 @@ default-members = [
     "crates/sift-chunker",
     "crates/sift-store",
     "crates/sift-mcp",
+    "crates/sift-memory",
 ]
 
 [workspace.package]
@@ -144,6 +146,7 @@ sift-embed = { path = "crates/sift-embed", default-features = false }
 sift-store = { path = "crates/sift-store", default-features = false }
 sift-server = { path = "crates/sift-server" }
 sift-mcp = { path = "crates/sift-mcp", default-features = false }
+sift-memory = { path = "crates/sift-memory", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

@@ -1,5 +1,5 @@
 [package]
-name = "sift-mcp"
+name = "sift-memory"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,29 +8,24 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["fts5", "sqlite", "hnsw"]
+default = ["fts5"]
 sqlite = ["sift-store/sqlite"]
 fts5 = ["sqlite", "sift-store/fts5"]
 fulltext = ["sift-store/fulltext"]
 hnsw = ["sift-store/hnsw"]
 embeddings = ["dep:sift-embed"]
-memory = []
 
 [dependencies]
 sift-core = { workspace = true }
 sift-store = { workspace = true, default-features = false }
-sift-parsers = { workspace = true, default-features = false }
 sift-embed = { workspace = true, default-features = false, optional = true }
-sift-memory = { workspace = true }
 
-rmcp = { workspace = true }
-schemars = { workspace = true }
-tokio = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-anyhow = { workspace = true }
-walkdir = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -91,6 +91,57 @@ pub struct ListSourcesRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Memory tool input types (behind `memory` feature)
+// ---------------------------------------------------------------------------
+
+/// Input parameters for the `sift_remember` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RememberRequest {
+    /// Entity name (e.g., 'Raymond', 'sift project', 'Rust')
+    pub entity: String,
+    /// Entity type: person, project, concept, tool, preference, fact, event, location, organization
+    pub entity_type: Option<String>,
+    /// List of facts/observations about the entity
+    pub observations: Vec<String>,
+    /// Relationships to other entities: [{"to": "entity_name", "type": "relation_type"}]
+    pub relations: Option<Vec<RelationInput>>,
+    /// Origin identifier (e.g., session ID)
+    pub source: Option<String>,
+}
+
+/// A relation input from the MCP tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RelationInput {
+    /// Target entity name
+    pub to: String,
+    /// Relationship type in active voice (e.g., 'maintains', 'prefers', 'works_on')
+    #[serde(rename = "type")]
+    pub relation_type: String,
+}
+
+/// Input parameters for the `sift_recall` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecallRequest {
+    /// What to search for in memory (natural language)
+    pub query: String,
+    /// Max results (1-50, default 10)
+    pub limit: Option<i32>,
+    /// Filter by entity type (e.g., 'person', 'preference')
+    pub entity_type: Option<String>,
+    /// Only return memories from this source/session
+    pub source: Option<String>,
+    /// Minimum confidence threshold (0.0-1.0)
+    pub min_confidence: Option<f32>,
+}
+
+/// Input parameters for the `sift_forget` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ForgetRequest {
+    /// Observation ID to invalidate
+    pub observation_id: String,
+}
+
+// ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
@@ -107,6 +158,7 @@ pub struct SiftMcpServer {
     metadata: Arc<MetadataStore>,
     #[cfg(feature = "embeddings")]
     embedder: Option<Arc<dyn sift_core::Embedder>>,
+    memory: Option<Arc<sift_memory::MemoryStore>>,
 }
 
 impl Clone for SiftMcpServer {
@@ -118,6 +170,7 @@ impl Clone for SiftMcpServer {
             metadata: self.metadata.clone(),
             #[cfg(feature = "embeddings")]
             embedder: self.embedder.clone(),
+            memory: self.memory.clone(),
         }
     }
 }
@@ -144,6 +197,20 @@ impl SiftMcpServer {
         // 50-entry LRU with 60s TTL balances memory usage with agentic hit rates.
         let cached = CachedSearchEngine::new(engine, 50, Duration::from_secs(60));
 
+        let memory = {
+            let memory_dir = config.index_dir().ok().map(|d| d.join("memory"));
+            memory_dir.and_then(|dir| match sift_memory::MemoryStore::open(&dir) {
+                Ok(store) => {
+                    info!("Memory store opened at {}", dir.display());
+                    Some(Arc::new(store))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to open memory store: {e}. Memory tools disabled.");
+                    None
+                }
+            })
+        };
+
         Ok(Self {
             tool_router: Self::tool_router(),
             config,
@@ -151,6 +218,7 @@ impl SiftMcpServer {
             metadata: Arc::new(metadata),
             #[cfg(feature = "embeddings")]
             embedder: embedder.map(|e| Arc::new(e) as Arc<dyn sift_core::Embedder>),
+            memory,
         })
     }
 
@@ -671,6 +739,226 @@ impl SiftMcpServer {
             "total": total,
             "showing": items.len(),
             "has_more": total > items.len(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory tools (behind `memory` feature)
+    // -----------------------------------------------------------------------
+
+    /// Store facts about an entity in persistent memory.
+    #[tool(
+        name = "sift_remember",
+        description = "Store facts about an entity in persistent memory. Creates or updates the entity and adds observations (facts) about it. Optionally creates relationships to other entities. Use this to persist knowledge across sessions — e.g., user preferences, project decisions, learned patterns.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_remember(
+        &self,
+        Parameters(req): Parameters<RememberRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        if req.entity.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Entity name must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+        if req.observations.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "At least one observation is required".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let entity_type = req
+            .entity_type
+            .as_deref()
+            .and_then(sift_memory::EntityType::parse)
+            .unwrap_or(sift_memory::EntityType::Concept);
+        let source = req.source.as_deref().unwrap_or("mcp");
+
+        let entity_id = memory
+            .save_entity(&req.entity, entity_type, 1.0, source)
+            .map_err(|e| internal_err(format!("Failed to save entity: {e}")))?;
+
+        let mut obs_ids = Vec::new();
+        for obs_text in &req.observations {
+            if obs_text.is_empty() {
+                continue;
+            }
+            let obs_id = memory
+                .add_observation(&entity_id, obs_text, 1.0, source)
+                .map_err(|e| internal_err(format!("Failed to add observation: {e}")))?;
+            obs_ids.push(obs_id);
+        }
+
+        let mut rel_ids = Vec::new();
+        if let Some(relations) = &req.relations {
+            for rel in relations {
+                // Ensure target entity exists
+                let target_id = memory
+                    .save_entity(&rel.to, sift_memory::EntityType::Concept, 1.0, source)
+                    .map_err(|e| internal_err(format!("Failed to save related entity: {e}")))?;
+                let rel_id = memory
+                    .add_relation(&entity_id, &target_id, &rel.relation_type, 1.0, source)
+                    .map_err(|e| internal_err(format!("Failed to add relation: {e}")))?;
+                rel_ids.push(rel_id);
+            }
+        }
+
+        // Persist to disk
+        let _ = memory.save();
+
+        let response = serde_json::json!({
+            "status": "remembered",
+            "entity_id": entity_id,
+            "entity": req.entity,
+            "observations_added": obs_ids.len(),
+            "relations_added": rel_ids.len(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Recall facts from memory by semantic search.
+    #[tool(
+        name = "sift_recall",
+        description = "Search persistent memory for facts about entities. Uses hybrid semantic + keyword search over stored observations. Returns facts with entity names, types, and relevance scores. Filters by entity type, source, or confidence.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    fn sift_recall(
+        &self,
+        Parameters(req): Parameters<RecallRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        if req.query.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Query must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let limit = req.limit.unwrap_or(10).clamp(1, 50) as usize;
+
+        let filters = sift_memory::RecallFilters {
+            entity_type: req
+                .entity_type
+                .as_deref()
+                .and_then(sift_memory::EntityType::parse),
+            source: req.source,
+            min_confidence: req.min_confidence,
+            ..Default::default()
+        };
+
+        let results = memory
+            .recall(&req.query, limit, &filters)
+            .map_err(|e| internal_err(format!("Recall failed: {e}")))?;
+
+        let items: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "entity": r.entity_name,
+                    "entity_type": r.entity_type.as_str(),
+                    "fact": r.observation.content,
+                    "observation_id": r.observation.id,
+                    "score": round2(r.score),
+                    "confidence": r.observation.confidence,
+                    "observed_at": r.observation.observed_at,
+                    "source": r.observation.source,
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "memories": items,
+            "total": items.len(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Invalidate a memory observation (soft delete).
+    #[tool(
+        name = "sift_forget",
+        description = "Invalidate a specific memory observation by ID. This is a soft delete — the observation is marked with an end timestamp but not physically removed, preserving the audit trail. Use observation_id from sift_recall results.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_forget(
+        &self,
+        Parameters(req): Parameters<ForgetRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        if req.observation_id.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Observation ID must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let invalidated = memory
+            .invalidate_observation(&req.observation_id)
+            .map_err(|e| internal_err(format!("Forget failed: {e}")))?;
+
+        let _ = memory.save();
+
+        let response = serde_json::json!({
+            "status": if invalidated { "forgotten" } else { "not_found" },
+            "observation_id": req.observation_id,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Show memory store statistics.
+    #[tool(
+        name = "sift_memory_status",
+        description = "Show memory store statistics: total entities, observations, relations, entity type breakdown, and oldest/newest memories.",
+        annotations(read_only_hint = true)
+    )]
+    fn sift_memory_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        let stats = memory
+            .stats()
+            .map_err(|e| internal_err(format!("Failed to get memory stats: {e}")))?;
+
+        let response = serde_json::json!({
+            "total_entities": stats.total_entities,
+            "total_observations": stats.total_observations,
+            "total_relations": stats.total_relations,
+            "entity_types": stats.entity_type_counts,
+            "oldest_observation": stats.oldest_observation,
+            "newest_observation": stats.newest_observation,
         });
 
         Ok(CallToolResult::success(vec![Content::text(

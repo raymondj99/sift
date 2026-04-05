@@ -3196,12 +3196,29 @@ dependencies = [
  "serde_json",
  "sift-core",
  "sift-embed",
+ "sift-memory",
  "sift-parsers",
  "sift-store",
  "tempfile",
  "tokio",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "sift-memory"
+version = "0.1.1"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sift-core",
+ "sift-embed",
+ "sift-store",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
