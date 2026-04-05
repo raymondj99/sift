@@ -23,6 +23,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Named indexes (`--index`)
 - JSON/CSV output formats (`--format json`)
 
+## [0.1.2] - 2026-04-04
+
+### Added
+- **sift-memory crate**: temporal knowledge graph for AI agent memory persistence.
+  Entities, observations (with bi-temporal validity), and directed relations stored
+  in SQLite. Hybrid recall via RRF fusion of vector + BM25 keyword search. Decay
+  scoring at query time (recency x confidence). Deterministic consolidation
+  (exact-text dedup, Jaccard-based contradiction detection). 28 tests.
+- **MCP tool `sift_index_text`**: store arbitrary text directly in the search index
+  with custom URIs (e.g., `memory://facts/...`). Supports auto-embedding when the
+  model is available, with keyword-only fallback.
+- **MCP tool `sift_delete`**: remove indexed content by exact URI match.
+- **MCP tool `sift_list_sources`**: browse indexed files with optional path
+  filtering and pagination.
+- **MCP tool `sift_remember`**: store entities, observations, and relations in
+  persistent memory via a single call.
+- **MCP tool `sift_recall`**: semantic search over stored memories with temporal
+  filtering, entity type filtering, confidence thresholds, and decay scoring.
+- **MCP tool `sift_forget`**: soft-delete memory observations (sets `valid_until`,
+  preserves audit trail).
+- **MCP tool `sift_memory_status`**: memory store statistics (entity/observation/
+  relation counts, type breakdown, age range).
+- Enhanced MCP `get_info()` instructions with agent-optimized tool discovery
+  guidance for all 10 tools.
+
+### Changed
+- MCP server expanded from 3 read-only tools to 10 tools (3 read + 3 write + 4
+  memory), transforming sift from a search engine into a memory-capable system.
+
 ## [0.1.1] - 2026-04-04
 
 ### Changed
