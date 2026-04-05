@@ -570,6 +570,98 @@ impl MemoryStore {
         Ok(updated > 0)
     }
 
+    /// Delete an entity entirely, cascading to all its observations and
+    /// relations (via `ON DELETE CASCADE`).  Also removes observation entries
+    /// from the search index.  Returns the number of observations that were
+    /// purged.
+    pub fn delete_entity(&self, name: &str) -> MemResult<usize> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Look up the entity id.
+        let entity_id: String = conn
+            .query_row("SELECT id FROM entities WHERE name = ?1", [name], |row| {
+                row.get(0)
+            })
+            .map_err(|_| MemoryError::EntityNotFound(name.to_string()))?;
+
+        // Collect all observation ids so we can remove them from the search
+        // index *before* the cascade deletes the rows.
+        let obs_ids: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM observations WHERE entity_id = ?1")?;
+            let ids = stmt
+                .query_map([&entity_id], |row| row.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            ids
+        };
+
+        // Delete the entity row — CASCADE removes observations & relations.
+        conn.execute("DELETE FROM entities WHERE id = ?1", [&entity_id])?;
+        drop(conn);
+
+        // Clean the search index.
+        for id in &obs_ids {
+            let uri = format!("memory://observation/{id}");
+            let _ = self.search.delete_by_uri(&uri);
+        }
+
+        Ok(obs_ids.len())
+    }
+
+    /// Prune all entities that have zero active (non-invalidated) observations
+    /// and no relations.  Returns the names of the entities that were removed.
+    pub fn prune_entities(&self) -> MemResult<Vec<String>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Find entities with no active observations AND no relations.
+        let targets: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT e.id, e.name \
+                 FROM entities e \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM observations o \
+                     WHERE o.entity_id = e.id AND o.valid_until IS NULL \
+                 ) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM relations r \
+                     WHERE (r.from_entity = e.id OR r.to_entity = e.id) \
+                       AND r.valid_until IS NULL \
+                 )",
+            )?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(Result::ok)
+                .collect();
+            rows
+        };
+
+        let mut pruned_names = Vec::with_capacity(targets.len());
+
+        for (entity_id, name) in &targets {
+            // Collect expired observation ids for search index cleanup.
+            let obs_ids: Vec<String> = {
+                let mut stmt = conn.prepare("SELECT id FROM observations WHERE entity_id = ?1")?;
+                let ids = stmt
+                    .query_map([entity_id], |row| row.get(0))?
+                    .filter_map(Result::ok)
+                    .collect();
+                ids
+            };
+
+            conn.execute("DELETE FROM entities WHERE id = ?1", [entity_id])?;
+
+            // Clean up search index entries for expired observations.
+            for id in &obs_ids {
+                let uri = format!("memory://observation/{id}");
+                let _ = self.search.delete_by_uri(&uri);
+            }
+
+            pruned_names.push(name.clone());
+        }
+
+        Ok(pruned_names)
+    }
+
     // -----------------------------------------------------------------------
     // Relation operations
     // -----------------------------------------------------------------------

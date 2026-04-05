@@ -234,6 +234,13 @@ pub struct ForgetRequest {
     pub observation_id: String,
 }
 
+/// Input parameters for the `sift_forget_entity` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ForgetEntityRequest {
+    /// Entity name to delete (exact match)
+    pub entity: String,
+}
+
 /// Input parameters for the `sift_list_entities` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListEntitiesRequest {
@@ -1033,6 +1040,79 @@ impl SiftMcpServer {
         )]))
     }
 
+    /// Delete an entire entity and all its observations and relations.
+    #[tool(
+        name = "sift_forget_entity",
+        description = "Delete an entire entity by name, including all its observations, relationships, and search index entries. This is a hard delete — the entity is permanently removed. Use sift_list_entities to find entity names.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_forget_entity(
+        &self,
+        Parameters(req): Parameters<ForgetEntityRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        if req.entity.is_empty() {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "Entity name must not be empty".to_string(),
+                None::<serde_json::Value>,
+            ));
+        }
+
+        let result = memory.delete_entity(&req.entity);
+        let _ = memory.save();
+
+        let response = match result {
+            Ok(obs_removed) => serde_json::json!({
+                "status": "deleted",
+                "entity": req.entity,
+                "observations_removed": obs_removed,
+            }),
+            Err(sift_memory::MemoryError::EntityNotFound(_)) => serde_json::json!({
+                "status": "not_found",
+                "entity": req.entity,
+            }),
+            Err(e) => return Err(internal_err(format!("Delete failed: {e}"))),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
+    /// Remove all entities with no active observations and no relations.
+    #[tool(
+        name = "sift_prune",
+        description = "Remove all entities that have zero active observations and no relationships. Cleans up ghost entities left behind by sift_forget. Returns the list of pruned entity names.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_prune(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        let pruned = memory
+            .prune_entities()
+            .map_err(|e| internal_err(format!("Prune failed: {e}")))?;
+
+        let _ = memory.save();
+
+        let response = serde_json::json!({
+            "status": "pruned",
+            "entities_removed": pruned.len(),
+            "removed": pruned,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
     /// Show memory store statistics.
     #[tool(
         name = "sift_memory_status",
@@ -1251,6 +1331,10 @@ impl ServerHandler for SiftMcpServer {
                sift_list_entities or sift_recall to see the full picture.\n\
              - sift_forget: Soft-delete a specific observation by ID (from sift_recall results). \
                Preserves audit trail.\n\
+             - sift_forget_entity: Hard-delete an entire entity and all its observations \
+               and relationships.\n\
+             - sift_prune: Remove all entities with zero active observations and no \
+               relationships. Cleans up ghost entities left by sift_forget.\n\
              - sift_memory_status: Show memory statistics (entity/observation/relation counts).\n\n\
              WORKFLOW:\n\
              1. Start with sift_status to understand the index.\n\
