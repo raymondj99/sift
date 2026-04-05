@@ -214,14 +214,22 @@ impl MemoryStore {
     fn rebuild_search_index(&self) -> MemResult<()> {
         let start = std::time::Instant::now();
 
-        let observations: Vec<(String, String)> = {
+        // Fetch observations with their entity names for prefixed indexing.
+        let observations: Vec<(String, String, String)> = {
             let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare(
-                "SELECT o.id, o.content FROM observations o WHERE o.valid_until IS NULL",
+                "SELECT o.id, e.name, o.content \
+                 FROM observations o \
+                 JOIN entities e ON o.entity_id = e.id \
+                 WHERE o.valid_until IS NULL",
             )?;
             let result: Vec<_> = stmt
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })?
                 .filter_map(Result::ok)
                 .collect();
@@ -229,19 +237,20 @@ impl MemoryStore {
         };
 
         // Clear existing entries so we don't get duplicates.
-        for (id, _) in &observations {
+        for (id, _, _) in &observations {
             let uri = format!("memory://observation/{id}");
             let _ = self.search.delete_by_uri(&uri);
         }
 
-        // Re-index with real embeddings.
+        // Re-index with "entity_name: content" text and real embeddings.
         let chunks: Vec<sift_core::EmbeddedChunk> = observations
             .iter()
-            .map(|(id, content)| {
-                let vector = self.embed_observation(content);
+            .map(|(id, entity_name, content)| {
+                let search_text = format!("{entity_name}: {content}");
+                let vector = self.embed_observation(&search_text);
                 sift_core::EmbeddedChunk {
                     chunk: sift_core::Chunk {
-                        text: content.clone(),
+                        text: search_text,
                         source_uri: format!("memory://observation/{id}"),
                         chunk_index: 0,
                         content_type: sift_core::ContentType::Text,
@@ -472,16 +481,28 @@ impl MemoryStore {
             rusqlite::params![now, entity_id],
         )?;
 
+        // Look up entity name to prefix the search text so keyword search
+        // for entity names (e.g. "Raymond") finds their observations.
+        let entity_name: String = conn
+            .query_row(
+                "SELECT name FROM entities WHERE id = ?1",
+                [entity_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+
         // Drop the lock before inserting into search (which takes its own locks)
         drop(conn);
 
-        // Index into hybrid search for recall
-        let vector = self.embed_observation(content);
+        // Index into hybrid search for recall. The indexed text is
+        // "entity_name: observation" so keyword search matches on entity names.
+        let search_text = format!("{entity_name}: {content}");
+        let vector = self.embed_observation(&search_text);
         let uri = format!("memory://observation/{id}");
 
         let chunk = sift_core::EmbeddedChunk {
             chunk: sift_core::Chunk {
-                text: content.to_string(),
+                text: search_text,
                 source_uri: uri,
                 chunk_index: 0,
                 content_type: sift_core::ContentType::Text,
@@ -727,6 +748,12 @@ impl MemoryStore {
         // Drop the lock before potential fallback (which re-acquires it).
         drop(conn);
 
+        // Drop results below a minimum relevance threshold. HNSW always
+        // returns approximate neighbors even for unrelated queries — this
+        // filter prevents garbage results from masking the entity-name fallback.
+        const MIN_SCORE: f32 = 0.3;
+        memory_results.retain(|r| r.score >= MIN_SCORE);
+
         // Sort by final score descending
         memory_results.sort_by(|a, b| {
             b.score
@@ -735,9 +762,8 @@ impl MemoryStore {
         });
         memory_results.truncate(top_k);
 
-        // Fallback: if search found nothing, try matching query terms against
-        // entity names. In practice this only fires in keyword-only mode
-        // (no embeddings) since HNSW always returns approximate neighbors.
+        // Fallback: if search found nothing relevant, try matching query
+        // terms against entity names and return those entities' observations.
         if memory_results.is_empty() {
             memory_results = self.recall_by_entity_names(query, top_k, filters)?;
         }
