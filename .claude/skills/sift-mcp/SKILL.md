@@ -1,7 +1,7 @@
 ---
 name: sift-mcp
 description: Local semantic search engine with hybrid search, 30+ format indexing, entity memory, and MCP integration
-version: 0.1.3
+version: 0.1.4
 tags: [search, indexing, memory, knowledge-graph, mcp]
 ---
 
@@ -30,6 +30,8 @@ Sift is a local semantic search engine that indexes 30+ file formats and exposes
 - **sift_list_entities** — browse all entities with optional type filter and pagination. Returns observation counts per entity.
 - **sift_get_entity** — get all observations and relationships for a named entity.
 - **sift_forget** — soft-delete observations by ID, preserving audit trail.
+- **sift_forget_entity** — hard-delete an entire entity and all its observations, relationships, and search index entries.
+- **sift_prune** — remove all entities with zero active observations and no active relationships. Cleans up ghost entities left by sift_forget.
 - **Entity types** — person, project, concept, tool, preference, fact, event, location, organization.
 - **Relationships** — directed edges between entities (e.g., "Raymond" → prefers → "Rust").
 - **Embeddings** — observations are embedded with nomic-embed-text-v2 for semantic recall. Index is rebuilt automatically when the embedder is first attached.
@@ -47,6 +49,10 @@ Do this proactively when:
 - The user references prior work, decisions, or preferences
 - You need to understand who the user is or how they work
 - Working on a project that has been discussed before
+
+## Persisting Insights
+
+Whenever you produce a `★ Insight` block, store the key points in memory using `sift_remember`. Pick the most relevant entity (or create one) and add the insight as observations. This ensures non-obvious learnings from conversations are preserved across sessions rather than lost when the conversation ends.
 
 ## When to Use
 
@@ -70,4 +76,6 @@ Do this proactively when:
 | `sift_list_entities` | Browse all entities | Yes |
 | `sift_get_entity` | Get entity details | Yes |
 | `sift_forget` | Soft-delete observation | No |
+| `sift_forget_entity` | Hard-delete entire entity | No |
+| `sift_prune` | Remove ghost entities | No |
 | `sift_memory_status` | Memory statistics | Yes |
