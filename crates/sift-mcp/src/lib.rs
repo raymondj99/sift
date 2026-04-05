@@ -22,53 +22,146 @@ use std::time::Duration;
 use tracing::info;
 
 // ---------------------------------------------------------------------------
+// Enum types for JSON Schema generation
+// ---------------------------------------------------------------------------
+
+/// Search mode controlling how results are ranked.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchModeParam {
+    /// Combine vector similarity and BM25 keyword search (default)
+    Hybrid,
+    /// BM25 full-text keyword search only — no embedding model needed
+    Keyword,
+    /// Pure cosine similarity vector search — requires embedding model
+    Vector,
+}
+
+/// Detail level for skill search results.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DetailLevel {
+    /// Name and description only (~100 tokens, default)
+    Metadata,
+    /// SKILL.md frontmatter + body content
+    Instructions,
+    /// Full body + directory file listing
+    Full,
+}
+
+/// Scope for skill search — where to look for SKILL.md files.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillScope {
+    /// Search all indexed locations (default)
+    All,
+    /// Only ~/.claude/skills/
+    Personal,
+    /// Only project-level .claude/skills/
+    Project,
+}
+
+/// Content type hint for indexed text.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentTypeParam {
+    /// Plain text or prose (default)
+    Text,
+    /// Source code
+    Code,
+    /// Structured data (JSON, CSV, etc.)
+    Data,
+}
+
+/// Entity type for the memory knowledge graph.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EntityTypeParam {
+    /// A person (user, teammate, etc.)
+    Person,
+    /// A software project or repository
+    Project,
+    /// An abstract concept, pattern, or idea (default)
+    Concept,
+    /// A tool, library, or framework
+    Tool,
+    /// A user preference or setting
+    Preference,
+    /// A standalone fact or observation
+    Fact,
+    /// A dated event (release, incident, meeting, etc.)
+    Event,
+    /// A physical or network location
+    Location,
+    /// A company or team
+    Organization,
+}
+
+impl EntityTypeParam {
+    fn to_memory_type(&self) -> sift_memory::EntityType {
+        match self {
+            Self::Person => sift_memory::EntityType::Person,
+            Self::Project => sift_memory::EntityType::Project,
+            Self::Concept => sift_memory::EntityType::Concept,
+            Self::Tool => sift_memory::EntityType::Tool,
+            Self::Preference => sift_memory::EntityType::Preference,
+            Self::Fact => sift_memory::EntityType::Fact,
+            Self::Event => sift_memory::EntityType::Event,
+            Self::Location => sift_memory::EntityType::Location,
+            Self::Organization => sift_memory::EntityType::Organization,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tool input types
 // ---------------------------------------------------------------------------
 
 /// Input parameters for the `sift_search` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchRequest {
-    /// Search query (natural language or keywords)
+    /// Search query — natural language or keywords (max 10,000 chars)
     pub query: String,
-    /// Max results to return (1-50)
+    /// Max results to return (default: 10, range: 1–50)
     pub limit: Option<i32>,
-    /// Skip first N results for pagination
+    /// Skip first N results for pagination (default: 0)
     pub offset: Option<i32>,
-    /// Search mode: hybrid (semantic+keyword), keyword (BM25 only), vector (embedding only)
-    pub mode: Option<String>,
-    /// Filter results to files under this path
+    /// Search mode (default: hybrid)
+    pub mode: Option<SearchModeParam>,
+    /// Filter results to files under this path (must not contain '..')
     pub path: Option<String>,
-    /// Filter by file type (e.g., 'rs', 'md', 'pdf')
+    /// Filter by file extension (e.g., 'rs', 'md', 'pdf')
     #[serde(rename = "type")]
     pub file_type: Option<String>,
-    /// Lines of surrounding context to include (0-10)
+    /// Lines of surrounding source context to include (default: 2, range: 0–10)
     pub context: Option<i32>,
 }
 
 /// Input parameters for the `sift_search_skills` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchSkillsRequest {
-    /// What capability you're looking for (e.g., 'pdf processing', 'code review')
+    /// What capability you're looking for (e.g., 'pdf processing', 'code review'; max 10,000 chars)
     pub query: String,
-    /// Detail level: metadata (~100 tokens), instructions (SKILL.md body), full (body + file listing)
-    pub detail: Option<String>,
-    /// Max skills to return
+    /// How much detail to return (default: metadata)
+    pub detail: Option<DetailLevel>,
+    /// Max skills to return (default: 5, range: 1–20)
     pub limit: Option<i32>,
-    /// Where to search: all locations, personal (~/.claude/skills), or project (.claude/skills)
-    pub scope: Option<String>,
+    /// Where to search for SKILL.md files (default: all)
+    pub scope: Option<SkillScope>,
 }
 
 /// Input parameters for the `sift_index_text` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct IndexTextRequest {
-    /// Text content to index
+    /// Text content to index (max 100,000 chars)
     pub text: String,
     /// URI identifier for this content (e.g., 'memory://facts/my-fact').
     /// If omitted, a unique memory:// URI is auto-generated.
+    /// Must not contain '..' (path traversal).
     pub uri: Option<String>,
-    /// Content type: text (default), code, or data
-    pub content_type: Option<String>,
-    /// File type hint for search filtering (e.g., 'md', 'txt', 'json')
+    /// Content type hint (default: text)
+    pub content_type: Option<ContentTypeParam>,
+    /// File type hint for search filtering (default: 'txt'; e.g., 'md', 'json')
     pub file_type: Option<String>,
     /// Optional title/label for this content
     pub title: Option<String>,
@@ -77,21 +170,21 @@ pub struct IndexTextRequest {
 /// Input parameters for the `sift_delete` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeleteRequest {
-    /// URI of the content to delete (exact match)
+    /// Exact URI of the content to delete (e.g., 'memory://agent/my-fact' or 'file:///path/to/file.txt')
     pub uri: String,
 }
 
 /// Input parameters for the `sift_list_sources` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListSourcesRequest {
-    /// Filter sources to those matching this path substring
+    /// Filter sources to those matching this path or URI substring
     pub path: Option<String>,
-    /// Max sources to return (1-500, default 50)
+    /// Max sources to return (default: 50, range: 1–500)
     pub limit: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
-// Memory tool input types (behind `memory` feature)
+// Memory tool input types
 // ---------------------------------------------------------------------------
 
 /// Input parameters for the `sift_remember` tool.
@@ -99,17 +192,17 @@ pub struct ListSourcesRequest {
 pub struct RememberRequest {
     /// Entity name (e.g., 'Raymond', 'sift project', 'Rust')
     pub entity: String,
-    /// Entity type: person, project, concept, tool, preference, fact, event, location, organization
-    pub entity_type: Option<String>,
-    /// List of facts/observations about the entity
+    /// Entity type (default: concept)
+    pub entity_type: Option<EntityTypeParam>,
+    /// List of facts/observations about the entity (at least one required)
     pub observations: Vec<String>,
-    /// Relationships to other entities: [{"to": "entity_name", "type": "relation_type"}]
+    /// Relationships to other entities
     pub relations: Option<Vec<RelationInput>>,
-    /// Origin identifier (e.g., session ID)
+    /// Origin identifier (default: 'mcp'; e.g., session ID)
     pub source: Option<String>,
 }
 
-/// A relation input from the MCP tool.
+/// A directed relationship from one entity to another.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RelationInput {
     /// Target entity name
@@ -124,20 +217,20 @@ pub struct RelationInput {
 pub struct RecallRequest {
     /// What to search for in memory (natural language)
     pub query: String,
-    /// Max results (1-50, default 10)
+    /// Max results to return (default: 10, range: 1–50)
     pub limit: Option<i32>,
-    /// Filter by entity type (e.g., 'person', 'preference')
-    pub entity_type: Option<String>,
+    /// Filter results to a specific entity type
+    pub entity_type: Option<EntityTypeParam>,
     /// Only return memories from this source/session
     pub source: Option<String>,
-    /// Minimum confidence threshold (0.0-1.0)
+    /// Minimum confidence threshold (range: 0.0–1.0)
     pub min_confidence: Option<f32>,
 }
 
 /// Input parameters for the `sift_forget` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ForgetRequest {
-    /// Observation ID to invalidate
+    /// Observation ID to invalidate (from sift_recall results)
     pub observation_id: String,
 }
 
@@ -261,17 +354,10 @@ impl SiftMcpServer {
         let offset = req.offset.unwrap_or(0).max(0) as usize;
         let context_lines = req.context.unwrap_or(2).clamp(0, 10) as usize;
 
-        let mode = match req.mode.as_deref() {
-            Some("keyword") => SearchMode::KeywordOnly,
-            Some("vector") => SearchMode::VectorOnly,
-            Some("hybrid") | None => SearchMode::Hybrid,
-            Some(other) => {
-                return Err(rmcp::ErrorData::new(
-                    rmcp::model::ErrorCode::INVALID_PARAMS,
-                    format!("Unknown search mode '{other}'. Valid modes: hybrid, keyword, vector"),
-                    None::<serde_json::Value>,
-                ));
-            }
+        let mode = match req.mode {
+            Some(SearchModeParam::Keyword) => SearchMode::KeywordOnly,
+            Some(SearchModeParam::Vector) => SearchMode::VectorOnly,
+            Some(SearchModeParam::Hybrid) | None => SearchMode::Hybrid,
         };
 
         let (query_vector, effective_mode) = self.embed_query(&req.query, mode);
@@ -436,26 +522,17 @@ impl SiftMcpServer {
 
         let limit = req.limit.unwrap_or(5).clamp(1, 20) as usize;
 
-        let detail = req.detail.as_deref().unwrap_or("metadata");
-        if !matches!(detail, "metadata" | "instructions" | "full") {
-            return Err(rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_PARAMS,
-                format!(
-                    "Unknown detail level '{detail}'. \
-                     Valid levels: metadata, instructions, full"
-                ),
-                None::<serde_json::Value>,
-            ));
-        }
+        let detail = req.detail.as_ref().map_or("metadata", |d| match d {
+            DetailLevel::Metadata => "metadata",
+            DetailLevel::Instructions => "instructions",
+            DetailLevel::Full => "full",
+        });
 
-        let scope = req.scope.as_deref().unwrap_or("all");
-        if !matches!(scope, "all" | "personal" | "project") {
-            return Err(rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_PARAMS,
-                format!("Unknown scope '{scope}'. Valid scopes: all, personal, project"),
-                None::<serde_json::Value>,
-            ));
-        }
+        let scope = req.scope.as_ref().map_or("all", |s| match s {
+            SkillScope::All => "all",
+            SkillScope::Personal => "personal",
+            SkillScope::Project => "project",
+        });
 
         let (query_vector, mode) = self.embed_query(&req.query, SearchMode::Hybrid);
 
@@ -592,17 +669,10 @@ impl SiftMcpServer {
             }
         }
 
-        let content_type = match req.content_type.as_deref() {
-            Some("code") => sift_core::ContentType::Code,
-            Some("data") => sift_core::ContentType::Data,
-            Some("text") | None => sift_core::ContentType::Text,
-            Some(other) => {
-                return Err(rmcp::ErrorData::new(
-                    rmcp::model::ErrorCode::INVALID_PARAMS,
-                    format!("Unknown content_type '{other}'. Valid types: text, code, data"),
-                    None::<serde_json::Value>,
-                ));
-            }
+        let content_type = match req.content_type {
+            Some(ContentTypeParam::Code) => sift_core::ContentType::Code,
+            Some(ContentTypeParam::Data) => sift_core::ContentType::Data,
+            Some(ContentTypeParam::Text) | None => sift_core::ContentType::Text,
         };
 
         let uri = req.uri.unwrap_or_else(|| {
@@ -780,11 +850,10 @@ impl SiftMcpServer {
             ));
         }
 
-        let entity_type = req
-            .entity_type
-            .as_deref()
-            .and_then(sift_memory::EntityType::parse)
-            .unwrap_or(sift_memory::EntityType::Concept);
+        let entity_type = req.entity_type.as_ref().map_or(
+            sift_memory::EntityType::Concept,
+            EntityTypeParam::to_memory_type,
+        );
         let source = req.source.as_deref().unwrap_or("mcp");
 
         let entity_id = memory
@@ -860,8 +929,8 @@ impl SiftMcpServer {
         let filters = sift_memory::RecallFilters {
             entity_type: req
                 .entity_type
-                .as_deref()
-                .and_then(sift_memory::EntityType::parse),
+                .as_ref()
+                .map(EntityTypeParam::to_memory_type),
             source: req.source,
             min_confidence: req.min_confidence,
             ..Default::default()
@@ -972,21 +1041,30 @@ impl ServerHandler for SiftMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Sift is a local semantic search engine indexing 30+ file formats.\n\n\
-             TOOLS:\n\
+             SEARCH TOOLS:\n\
              - sift_status: Call first to see what's indexed (directories, file types, chunk count).\n\
-             - sift_search: Hybrid semantic+keyword search. Use 'path' to scope, 'type' to filter \
-               extensions, 'context' (1-10) for surrounding lines.\n\
-             - sift_search_skills: Find SKILL.md agent capabilities. Use 'detail: instructions' \
-               for full content.\n\
-             - sift_index_text: Store text directly in the index (e.g., notes, facts, memory). \
-               Supports custom URIs like 'memory://...' for agent memory.\n\
-             - sift_delete: Remove content from the index by URI.\n\
+             - sift_search: Hybrid semantic+keyword search. Use 'mode' (hybrid/keyword/vector), \
+               'path' to scope, 'type' to filter extensions, 'context' (0-10) for surrounding lines.\n\
+             - sift_search_skills: Find SKILL.md agent capabilities. Use 'detail' \
+               (metadata/instructions/full) to control verbosity.\n\
              - sift_list_sources: Browse indexed files with optional path filtering.\n\n\
-             TIPS:\n\
-             - Start with sift_status to understand the index before searching.\n\
-             - Use hybrid mode (default) for conceptual queries, keyword mode for exact matches.\n\
-             - Increase limit (up to 50) for broad exploration.\n\
-             - Use sift_index_text to persist facts, notes, or agent memory across sessions."
+             WRITE TOOLS:\n\
+             - sift_index_text: Store text directly in the index. \
+               Supports custom URIs like 'memory://...' for organizing content.\n\
+             - sift_delete: Remove content from the index by exact URI.\n\n\
+             MEMORY TOOLS (entity-based knowledge graph):\n\
+             - sift_remember: Store facts about named entities with types, observations, \
+               and relationships. Use for user preferences, project decisions, learned patterns.\n\
+             - sift_recall: Search memory by natural language. Filter by entity_type or source. \
+               Returns scored facts with observation IDs.\n\
+             - sift_forget: Soft-delete a specific observation by ID (from sift_recall results). \
+               Preserves audit trail.\n\
+             - sift_memory_status: Show memory statistics (entity/observation/relation counts).\n\n\
+             WORKFLOW:\n\
+             1. Start with sift_status to understand the index.\n\
+             2. Use hybrid mode (default) for conceptual queries, keyword for exact matches.\n\
+             3. Use sift_remember/sift_recall to persist and retrieve knowledge across sessions.\n\
+             4. Use sift_index_text for raw text storage; use sift_remember for structured facts."
                 .to_string(),
         )
     }
@@ -1457,7 +1535,7 @@ mod tests {
                 query: "test query".to_string(),
                 limit: Some(5),
                 offset: None,
-                mode: Some("keyword".to_string()),
+                mode: Some(SearchModeParam::Keyword),
                 path: None,
                 file_type: None,
                 context: None,
@@ -1511,24 +1589,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sift_search_rejects_unknown_mode() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        with_home(tmp.path(), || {
-            let config = sift_core::Config::default();
-            let server = SiftMcpServer::new(config).unwrap();
-            let req = SearchRequest {
-                query: "test".to_string(),
-                limit: None,
-                offset: None,
-                mode: Some("embeddding".to_string()),
-                path: None,
-                file_type: None,
-                context: None,
-            };
-            let err = server.sift_search(Parameters(req)).unwrap_err();
-            assert!(err.message.contains("Unknown search mode"));
-            assert!(err.message.contains("embeddding"));
-        });
+    fn test_sift_search_rejects_unknown_mode_at_deserialization() {
+        // With enum-typed `mode`, invalid values are rejected by serde at
+        // deserialization time before the handler runs.
+        let json = r#"{"query":"test","mode":"embeddding"}"#;
+        let result = serde_json::from_str::<SearchRequest>(json);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1541,7 +1607,7 @@ mod tests {
                 query: "test".to_string(),
                 limit: Some(5),
                 offset: None,
-                mode: Some("hybrid".to_string()),
+                mode: Some(SearchModeParam::Hybrid),
                 path: None,
                 file_type: None,
                 context: None,
@@ -1562,7 +1628,7 @@ mod tests {
                 query: "test".to_string(),
                 limit: None,
                 offset: None,
-                mode: Some("keyword".to_string()),
+                mode: Some(SearchModeParam::Keyword),
                 path: Some("../../etc/passwd".to_string()),
                 file_type: None,
                 context: None,
@@ -1590,39 +1656,17 @@ mod tests {
     }
 
     #[test]
-    fn test_sift_search_skills_rejects_unknown_detail() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        with_home(tmp.path(), || {
-            let config = sift_core::Config::default();
-            let server = SiftMcpServer::new(config).unwrap();
-            let req = SearchSkillsRequest {
-                query: "code review".to_string(),
-                detail: Some("verbose".to_string()),
-                limit: None,
-                scope: None,
-            };
-            let err = server.sift_search_skills(Parameters(req)).unwrap_err();
-            assert!(err.message.contains("Unknown detail level"));
-            assert!(err.message.contains("verbose"));
-        });
+    fn test_sift_search_skills_rejects_unknown_detail_at_deserialization() {
+        let json = r#"{"query":"code review","detail":"verbose"}"#;
+        let result = serde_json::from_str::<SearchSkillsRequest>(json);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_sift_search_skills_rejects_unknown_scope() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        with_home(tmp.path(), || {
-            let config = sift_core::Config::default();
-            let server = SiftMcpServer::new(config).unwrap();
-            let req = SearchSkillsRequest {
-                query: "code review".to_string(),
-                detail: None,
-                limit: None,
-                scope: Some("global".to_string()),
-            };
-            let err = server.sift_search_skills(Parameters(req)).unwrap_err();
-            assert!(err.message.contains("Unknown scope"));
-            assert!(err.message.contains("global"));
-        });
+    fn test_sift_search_skills_rejects_unknown_scope_at_deserialization() {
+        let json = r#"{"query":"code review","scope":"global"}"#;
+        let result = serde_json::from_str::<SearchSkillsRequest>(json);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1633,9 +1677,9 @@ mod tests {
             let server = SiftMcpServer::new(config).unwrap();
             let req = SearchSkillsRequest {
                 query: "code review".to_string(),
-                detail: Some("instructions".to_string()),
+                detail: Some(DetailLevel::Instructions),
                 limit: Some(3),
-                scope: Some("personal".to_string()),
+                scope: Some(SkillScope::Personal),
             };
             // Should succeed (empty results from empty index, but no validation error)
             let result = server.sift_search_skills(Parameters(req)).unwrap();
@@ -1720,21 +1764,10 @@ mod tests {
     }
 
     #[test]
-    fn test_index_text_rejects_unknown_content_type() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        with_home(tmp.path(), || {
-            let config = sift_core::Config::default();
-            let server = SiftMcpServer::new(config).unwrap();
-            let req = IndexTextRequest {
-                text: "hello".to_string(),
-                uri: None,
-                content_type: Some("binary".to_string()),
-                file_type: None,
-                title: None,
-            };
-            let err = server.sift_index_text(Parameters(req)).unwrap_err();
-            assert!(err.message.contains("Unknown content_type"));
-        });
+    fn test_index_text_rejects_unknown_content_type_at_deserialization() {
+        let json = r#"{"text":"hello","content_type":"binary"}"#;
+        let result = serde_json::from_str::<IndexTextRequest>(json);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1777,7 +1810,7 @@ mod tests {
                 query: "systems programming".to_string(),
                 limit: Some(5),
                 offset: None,
-                mode: Some("keyword".to_string()),
+                mode: Some(SearchModeParam::Keyword),
                 path: None,
                 file_type: None,
                 context: None,
