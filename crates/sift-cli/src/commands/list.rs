@@ -2,6 +2,13 @@ use crate::{output, OutputFormat};
 use sift_core::{Config, SiftResult};
 
 pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
+    // Try daemon first
+    #[cfg(unix)]
+    if let Some(sources) = try_daemon_list() {
+        output::print_source_list(&sources, format);
+        return Ok(());
+    }
+
     #[cfg(feature = "sqlite")]
     let metadata_path = config.index_dir()?.join("metadata.db");
     #[cfg(not(feature = "sqlite"))]
@@ -24,6 +31,24 @@ pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
     output::print_source_list(&sources, format);
 
     Ok(())
+}
+
+/// Try to fetch source list from the daemon API.
+#[cfg(unix)]
+fn try_daemon_list() -> Option<Vec<(String, String, u32)>> {
+    let body = crate::daemon_client::get("/api/list")?;
+    let items: Vec<serde_json::Value> = serde_json::from_str(&body).ok()?;
+    let sources = items
+        .iter()
+        .filter_map(|item| {
+            Some((
+                item.get("uri")?.as_str()?.to_string(),
+                item.get("file_type")?.as_str()?.to_string(),
+                item.get("chunks")?.as_u64()? as u32,
+            ))
+        })
+        .collect();
+    Some(sources)
 }
 
 #[cfg(test)]

@@ -1,5 +1,8 @@
 pub mod config;
+#[cfg(feature = "serve")]
+pub mod daemon;
 pub mod export;
+pub mod init;
 pub mod list;
 #[cfg(feature = "mcp")]
 pub mod mcp;

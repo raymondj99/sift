@@ -5,6 +5,8 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(not(feature = "fancy"))]
 mod color_stub;
 mod commands;
+#[cfg(unix)]
+pub(crate) mod daemon_client;
 mod output;
 mod pipeline;
 
@@ -254,6 +256,13 @@ enum Commands {
         paths: Vec<String>,
     },
 
+    /// Initialize a .sift.toml project config in the current directory
+    Init {
+        /// Overwrite existing .sift.toml
+        #[arg(long)]
+        force: bool,
+    },
+
     /// View or set configuration
     Config {
         /// Configuration key
@@ -312,12 +321,37 @@ enum Commands {
         file_type: Option<String>,
     },
 
+    /// Manage the sift background daemon
+    #[cfg(feature = "serve")]
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
+    /// Manage the sift background daemon [requires: --features serve]
+    #[cfg(not(feature = "serve"))]
+    Daemon {},
+
     /// Generate shell completions
     #[cfg(feature = "completions")]
     Completions {
         /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
         shell: clap_complete::Shell,
     },
+}
+
+#[cfg(feature = "serve")]
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the daemon in the background
+    Start,
+    /// Stop the running daemon
+    Stop,
+    /// Check if the daemon is running
+    Status,
+    /// Run the daemon in the foreground (used internally by `start`)
+    #[command(hide = true)]
+    Run,
 }
 
 #[cfg(feature = "embeddings")]
@@ -494,6 +528,10 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             commands::remove::run(&config, &paths, format)?;
         }
 
+        Commands::Init { force } => {
+            commands::init::run(force)?;
+        }
+
         Commands::Config { key, value } => {
             commands::config::run(&config, key, value)?;
         }
@@ -536,6 +574,23 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             file_type,
         } => {
             commands::export::run(&config, vectors, output, file_type)?;
+        }
+
+        #[cfg(feature = "serve")]
+        Commands::Daemon { action } => match action {
+            DaemonAction::Start => commands::daemon::start(&config)?,
+            DaemonAction::Stop => commands::daemon::stop()?,
+            DaemonAction::Status => commands::daemon::status()?,
+            DaemonAction::Run => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to start async runtime: {}", e))?;
+                rt.block_on(commands::daemon::run_daemon(&config))?;
+            }
+        },
+
+        #[cfg(not(feature = "serve"))]
+        Commands::Daemon { .. } => {
+            anyhow::bail!("The `daemon` command requires the `serve` feature.\n  Rebuild with: cargo install sift --features serve");
         }
 
         #[cfg(feature = "completions")]
@@ -616,6 +671,9 @@ pub(crate) mod test_helpers {
 
     /// Global mutex to serialise all tests that set the HOME env var.
     pub(crate) static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Global mutex to serialise all tests that change the working directory.
+    pub(crate) static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Set `HOME` to `dir`, run `f`, then restore the previous value.
     /// Must be called while holding `HOME_MUTEX` to be race-free.

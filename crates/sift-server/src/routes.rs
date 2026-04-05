@@ -48,6 +48,14 @@ pub struct SearchResultItem {
     pub content_type: String,
     pub file_type: String,
     pub title: Option<String>,
+    pub byte_range: Option<(u64, u64)>,
+}
+
+#[derive(Serialize)]
+pub struct SourceItem {
+    pub uri: String,
+    pub file_type: String,
+    pub chunks: u32,
 }
 
 #[derive(Serialize)]
@@ -61,6 +69,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let api_routes = Router::new()
         .route("/api/search", get(search))
         .route("/api/status", get(status))
+        .route("/api/list", get(list))
         .layer(
             tower::ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|_: tower::BoxError| async {
@@ -154,6 +163,7 @@ async fn search(
             content_type: r.content_type.to_string(),
             file_type: r.file_type,
             title: r.title,
+            byte_range: r.byte_range,
         })
         .collect();
 
@@ -169,6 +179,26 @@ async fn search(
         total,
         mode: mode_str.to_string(),
     }))
+}
+
+async fn list(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<SourceItem>>, (StatusCode, String)> {
+    let sources = state
+        .metadata
+        .list_sources()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let items: Vec<SourceItem> = sources
+        .into_iter()
+        .map(|(uri, file_type, chunks)| SourceItem {
+            uri,
+            file_type,
+            chunks,
+        })
+        .collect();
+
+    Ok(Json(items))
 }
 
 async fn status(

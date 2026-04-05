@@ -17,6 +17,45 @@ pub fn run(
     quiet: bool,
     prune: bool,
 ) -> SiftResult<()> {
+    // Stop daemon if running — scan needs exclusive index access
+    #[cfg(unix)]
+    let daemon_was_running = crate::daemon_client::stop_if_running();
+    #[cfg(unix)]
+    if daemon_was_running && !quiet && *format == OutputFormat::Human {
+        println!(
+            "{}",
+            "Stopped daemon for indexing (will restart after)".dimmed()
+        );
+    }
+
+    let result = run_inner(config, options, model, format, quiet, prune);
+
+    // Restart daemon if it was running before
+    #[cfg(unix)]
+    if daemon_was_running {
+        if !quiet && *format == OutputFormat::Human {
+            print!("{}", "Restarting daemon... ".dimmed());
+        }
+        if crate::daemon_client::try_start() {
+            if !quiet && *format == OutputFormat::Human {
+                println!("{}", "done".green());
+            }
+        } else if !quiet && *format == OutputFormat::Human {
+            println!("{}", "failed (run `sift daemon start` manually)".yellow());
+        }
+    }
+
+    result
+}
+
+fn run_inner(
+    config: &Config,
+    options: &ScanOptions,
+    model: Option<&str>,
+    format: &OutputFormat,
+    quiet: bool,
+    prune: bool,
+) -> SiftResult<()> {
     if options.dry_run && !quiet && *format == OutputFormat::Human {
         println!("{}", "Dry run — no files will be indexed".yellow());
     }

@@ -1,7 +1,14 @@
 use crate::{output, OutputFormat};
-use sift_core::{Config, SiftResult};
+use sift_core::{Config, IndexStats, SiftResult};
 
 pub fn run(config: &Config, format: &OutputFormat) -> SiftResult<()> {
+    // Try daemon first
+    #[cfg(unix)]
+    if let Some(stats) = try_daemon_status() {
+        output::format_stats(&stats, format);
+        return Ok(());
+    }
+
     let index_dir = config.index_dir()?;
     #[cfg(feature = "sqlite")]
     let metadata_path = index_dir.join("metadata.db");
@@ -47,6 +54,15 @@ fn dir_size(path: &std::path::Path) -> u64 {
         .filter_map(|e| e.metadata().ok())
         .map(|m| m.len())
         .sum()
+}
+
+/// Try to fetch status from the daemon API.
+#[cfg(unix)]
+fn try_daemon_status() -> Option<IndexStats> {
+    let body = crate::daemon_client::get("/api/status")?;
+    let resp: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let stats = resp.get("stats")?;
+    serde_json::from_value(stats.clone()).ok()
 }
 
 #[cfg(test)]

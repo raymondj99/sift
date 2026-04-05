@@ -10,10 +10,28 @@ pub mod watch;
 pub use routes::create_router;
 pub use watch::WatchDaemon;
 
-/// Bind to `addr` and serve the given router.
+/// Bind to `addr` and serve the given router over TCP.
 pub async fn serve(addr: &str, app: axum::Router) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Serve the given router over a Unix domain socket with graceful shutdown.
+#[cfg(unix)]
+pub async fn serve_unix(
+    path: &std::path::Path,
+    app: axum::Router,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    // Remove stale socket file from a previous run
+    let _ = std::fs::remove_file(path);
+    let listener = tokio::net::UnixListener::bind(path)?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    // Clean up socket file on exit
+    let _ = std::fs::remove_file(path);
     Ok(())
 }
 

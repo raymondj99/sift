@@ -9,6 +9,38 @@ use sift_store::FullTextStore;
 use sift_store::VectorIndex;
 
 pub fn run(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResult<()> {
+    // Stop daemon if running — remove needs exclusive index access
+    #[cfg(unix)]
+    let daemon_was_running = crate::daemon_client::stop_if_running();
+    #[cfg(unix)]
+    if daemon_was_running && matches!(format, OutputFormat::Human) {
+        println!(
+            "{}",
+            "Stopped daemon for removal (will restart after)".dimmed()
+        );
+    }
+
+    let result = run_inner(config, paths, format);
+
+    // Restart daemon if it was running
+    #[cfg(unix)]
+    if daemon_was_running {
+        if matches!(format, OutputFormat::Human) {
+            print!("{}", "Restarting daemon... ".dimmed());
+        }
+        if crate::daemon_client::try_start() {
+            if matches!(format, OutputFormat::Human) {
+                println!("{}", "done".green());
+            }
+        } else if matches!(format, OutputFormat::Human) {
+            println!("{}", "failed (run `sift daemon start` manually)".yellow());
+        }
+    }
+
+    result
+}
+
+fn run_inner(config: &Config, paths: &[String], format: &OutputFormat) -> SiftResult<()> {
     let (engine, metadata) = crate::pipeline::open_engine(config)?;
 
     let mut removed = 0u64;

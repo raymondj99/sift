@@ -29,3 +29,7 @@ Thumbs.db
 fuzz/target/
 fuzz/Cargo.lock
 SUMMARY.md
+
+# Release artifacts
+*.tar.gz
+*.zip
