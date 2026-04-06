@@ -168,6 +168,8 @@ pub fn status() -> SiftResult<()> {
 ///
 /// Loads the search engine and embedding model, then serves the HTTP API
 /// over a Unix domain socket with graceful shutdown on SIGTERM/SIGINT.
+/// If `config.memory.enabled`, also spawns a background consolidation
+/// loop that periodically processes episodes into knowledge.
 pub async fn run_daemon(config: &Config) -> SiftResult<()> {
     let socket = socket_path()?;
     let pid_file = pid_path()?;
@@ -189,21 +191,67 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
     let embedder: Option<Box<dyn sift_core::Embedder>> = None;
 
     let has_embedder = embedder.is_some();
+    let memory_dir = config.index_dir().ok().map(|d| d.join("memory"));
+
+    // Open memory store once — shared across HTTP endpoints and consolidation loop
+    let memory_store: Option<Arc<sift_memory::MemoryStore>> =
+        memory_dir
+            .as_ref()
+            .and_then(|dir| match sift_memory::MemoryStore::open(dir) {
+                Ok(store) => {
+                    let store = store.with_decay_rate(config.memory.decay_rate);
+                    tracing::info!("Memory store opened at {}", dir.display());
+                    Some(Arc::new(store))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to open memory store: {e}. Memory features disabled.");
+                    None
+                }
+            });
+    let consolidation_config = sift_memory::ConsolidationConfig::from(&config.memory);
+
     let state = Arc::new(AppState {
         engine,
         metadata,
         embedder,
+        memory_dir: memory_dir.clone(),
+        memory: memory_store.clone(),
+        consolidation_config: Some(consolidation_config.clone()),
     });
     let app = create_router(state);
 
     tracing::info!(
-        "Daemon listening on {} (embedder: {})",
+        "Daemon listening on {} (embedder: {}, memory: {})",
         socket.display(),
-        if has_embedder { "loaded" } else { "none" }
+        if has_embedder { "loaded" } else { "none" },
+        if memory_store.is_some() {
+            "loaded"
+        } else {
+            "none"
+        }
     );
 
+    // Shutdown flag — shared between HTTP server and consolidation loop
+    let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // Spawn consolidation loop if memory is enabled and store opened successfully
+    let consolidation_handle = if let (true, Some(mem), Some(mem_dir)) =
+        (config.memory.enabled, memory_store, memory_dir)
+    {
+        let cfg = consolidation_config;
+        let interval = config.memory.consolidation_interval;
+        let flag = Arc::clone(&shutdown_flag);
+        Some(tokio::spawn(async move {
+            consolidation_loop(mem, mem_dir, cfg, interval, flag).await;
+        }))
+    } else {
+        tracing::info!("Memory consolidation disabled");
+        None
+    };
+
     // Graceful shutdown on SIGTERM / SIGINT
-    let shutdown = async {
+    let flag_for_shutdown = Arc::clone(&shutdown_flag);
+    let shutdown = async move {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to register SIGTERM");
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -212,17 +260,114 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
             _ = sigterm.recv() => tracing::info!("Received SIGTERM, shutting down"),
             _ = sigint.recv() => tracing::info!("Received SIGINT, shutting down"),
         }
+        flag_for_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     };
 
     sift_server::serve_unix(&socket, app, shutdown)
         .await
         .map_err(sift_core::SiftError::Other)?;
 
+    // Wait for consolidation loop to finish
+    if let Some(handle) = consolidation_handle {
+        let _ = handle.await;
+    }
+
     // Cleanup (socket is removed by serve_unix, but PID file needs cleanup)
     let _ = std::fs::remove_file(&pid_file);
     tracing::info!("Daemon stopped cleanly");
 
     Ok(())
+}
+
+/// Background consolidation loop.
+///
+/// Runs all 5 consolidation phases on a timer. The MemoryStore is opened
+/// once at daemon startup and shared via Arc. EpisodeStore is lightweight
+/// (SQLite only, no search engine) so it's opened per cycle to avoid
+/// holding a second connection across long sleep intervals.
+async fn consolidation_loop(
+    memory: Arc<sift_memory::MemoryStore>,
+    memory_dir: std::path::PathBuf,
+    config: sift_memory::ConsolidationConfig,
+    interval_secs: u64,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let interval = std::time::Duration::from_secs(interval_secs);
+
+    tracing::info!(
+        interval_secs = interval.as_secs(),
+        "Consolidation loop started"
+    );
+
+    loop {
+        // Sleep in 1-second increments so we can check the shutdown flag
+        let mut remaining = interval;
+        while !remaining.is_zero() {
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::info!("Consolidation loop shutting down");
+                return;
+            }
+            let tick = remaining.min(std::time::Duration::from_secs(1));
+            tokio::time::sleep(tick).await;
+            remaining = remaining.saturating_sub(tick);
+        }
+
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+
+        let mem = Arc::clone(&memory);
+        let dir = memory_dir.clone();
+        let cfg = config.clone();
+
+        let result =
+            tokio::task::spawn_blocking(move || run_consolidation_cycle(&mem, &dir, &cfg)).await;
+
+        match result {
+            Ok(Ok(report)) => {
+                if report.episodes_processed > 0
+                    || report.duplicates_merged > 0
+                    || report.promotions > 0
+                    || report.observations_pruned > 0
+                {
+                    tracing::info!(
+                        episodes = report.episodes_processed,
+                        dedup = report.duplicates_merged,
+                        promotions = report.promotions,
+                        pruned = report.observations_pruned,
+                        "Consolidation cycle completed"
+                    );
+                } else {
+                    tracing::debug!("Consolidation cycle: nothing to do");
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Consolidation cycle failed: {e}");
+            }
+            Err(e) => {
+                tracing::error!("Consolidation task panicked: {e}");
+            }
+        }
+    }
+}
+
+/// Run a single consolidation cycle (sync, runs inside spawn_blocking).
+///
+/// The MemoryStore is shared (opened once at daemon startup). The
+/// EpisodeStore is opened per cycle since it's lightweight (SQLite only).
+fn run_consolidation_cycle(
+    memory: &sift_memory::MemoryStore,
+    memory_dir: &std::path::Path,
+    config: &sift_memory::ConsolidationConfig,
+) -> Result<sift_memory::consolidation::FullConsolidationReport, sift_memory::MemoryError> {
+    let episodes = sift_memory::episodes::EpisodeStore::open(memory_dir)
+        .map_err(sift_memory::MemoryError::Sqlite)?;
+
+    let report = sift_memory::consolidation::run_consolidation(memory, &episodes, config)?;
+
+    memory.save()?;
+
+    Ok(report)
 }
 
 #[cfg(test)]

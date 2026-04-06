@@ -25,6 +25,14 @@ use tracing::warn;
 
 pub use types::*;
 
+/// Minimum score for direct recall results. HNSW always returns approximate
+/// neighbors, so this prevents garbage from masking the entity-name fallback.
+const RECALL_MIN_SCORE: f32 = 0.3;
+
+/// Minimum score for spreading-activation results (related entities).
+/// Lower than RECALL_MIN_SCORE since related memories are inherently weaker.
+const SPREADING_MIN_SCORE: f32 = 0.1;
+
 /// Error type for memory operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -347,6 +355,71 @@ impl MemoryStore {
             )?;
             Ok(id)
         }
+    }
+
+    /// Resolve an entity name against existing entities, returning the
+    /// canonical entity ID. Prevents entity fragmentation by matching:
+    ///
+    /// 1. **Exact match** — same name (already handled by `save_entity`)
+    /// 2. **Normalized match** — case-insensitive, stripped common prefixes
+    /// 3. **Suffix/alias match** — new name is a suffix of an existing entity
+    ///    (e.g., `"lib.rs"` matches `"sift-memory/src/lib.rs"`)
+    ///
+    /// Returns `Some(existing_id)` if a match is found, `None` if the name
+    /// is genuinely new. Callers should use `save_entity` with the returned
+    /// name if `None`, or `add_observation` on the returned ID if `Some`.
+    pub fn resolve_entity(&self, name: &str) -> MemResult<Option<(String, String)>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let normalized = normalize_entity_name(name);
+
+        // 1. Exact normalized match
+        let exact: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id, name FROM entities WHERE LOWER(name) = ?1",
+                [&normalized],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if exact.is_some() {
+            return Ok(exact);
+        }
+
+        // 2. Suffix match via SQL LIKE — avoids loading all entities into memory.
+        //    Matches at path boundaries (after '/').
+
+        // Check: existing name ends with /new_name
+        let suffix_pattern = format!("%/{normalized}");
+        let suffix_match: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id, name FROM entities WHERE LOWER(name) LIKE ?1 LIMIT 1",
+                [&suffix_pattern],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if suffix_match.is_some() {
+            return Ok(suffix_match);
+        }
+
+        // Check: new name ends with /existing_name (existing is a suffix of new)
+        // We can't use LIKE for this direction efficiently, but we can check
+        // if any existing name is a suffix of the normalized input.
+        // Use a bounded query: only check entities whose name length < input length.
+        let mut stmt = conn.prepare("SELECT id, name FROM entities WHERE LENGTH(name) < ?1")?;
+        let shorter: Vec<(String, String)> = stmt
+            .query_map([normalized.len() as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .filter_map(Result::ok)
+            .collect();
+
+        for (id, existing_name) in &shorter {
+            let existing_lower = existing_name.to_lowercase();
+            if normalized.ends_with(&format!("/{existing_lower}")) {
+                return Ok(Some((id.clone(), existing_name.clone())));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Retrieve an entity by name.
@@ -905,8 +978,7 @@ impl MemoryStore {
         // Drop results below a minimum relevance threshold. HNSW always
         // returns approximate neighbors even for unrelated queries — this
         // filter prevents garbage results from masking the entity-name fallback.
-        const MIN_SCORE: f32 = 0.3;
-        memory_results.retain(|r| r.score >= MIN_SCORE);
+        memory_results.retain(|r| r.score >= RECALL_MIN_SCORE);
 
         // Sort by final score descending
         memory_results.sort_by(|a, b| {
@@ -920,6 +992,16 @@ impl MemoryStore {
         // terms against entity names and return those entities' observations.
         if memory_results.is_empty() {
             memory_results = self.recall_by_entity_names(query, top_k, filters)?;
+        }
+
+        // --- Spreading activation: 1-hop relation traversal ---
+        // Surface observations from entities related to the matched ones.
+        // This handles "tell me about Raymond" surfacing sift observations
+        // if a Raymond→maintains→sift relation exists.
+        if memory_results.len() < top_k {
+            let slots = top_k - memory_results.len();
+            let related = self.spread_activation(&memory_results, slots, filters)?;
+            memory_results.extend(related);
         }
 
         // --- Log access for retrieval-dependent strengthening ---
@@ -1051,6 +1133,142 @@ impl MemoryStore {
         results.truncate(top_k);
 
         Ok(results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Spreading Activation
+    // -----------------------------------------------------------------------
+
+    /// Traverse 1-hop relations from matched entities to surface related
+    /// observations not found by direct search.
+    ///
+    /// For each entity in `seed_results`, finds related entities via the
+    /// relations table, then retrieves their top observations. Scores are
+    /// weighted by the relation weight (0.0–1.0) and a distance decay factor
+    /// of 0.5 (related memories are half as relevant as direct matches).
+    fn spread_activation(
+        &self,
+        seed_results: &[RecallResult],
+        max_related: usize,
+        filters: &RecallFilters,
+    ) -> MemResult<Vec<RecallResult>> {
+        if max_related == 0 || seed_results.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let valid_at = filters.valid_at.unwrap_or_else(now_secs);
+
+        // Collect unique entity IDs from the seed results
+        let seed_entity_ids: std::collections::HashSet<String> = seed_results
+            .iter()
+            .map(|r| r.observation.entity_id.clone())
+            .collect();
+
+        // Already-seen observation IDs to avoid duplicates
+        let seen_obs: std::collections::HashSet<String> = seed_results
+            .iter()
+            .map(|r| r.observation.id.clone())
+            .collect();
+
+        let mut related_results: Vec<RecallResult> = Vec::new();
+
+        // Prepare all statements once — reuse across iterations
+        let mut rel_stmt = conn.prepare(
+            "SELECT from_entity, to_entity, weight
+             FROM relations
+             WHERE (from_entity = ?1 OR to_entity = ?1) AND valid_until IS NULL",
+        )?;
+        let mut entity_stmt =
+            conn.prepare("SELECT name, entity_type FROM entities WHERE id = ?1")?;
+        let mut obs_stmt = conn.prepare(
+            "SELECT id, entity_id, content, observed_at, valid_from, valid_until,
+                    confidence, source, supersedes
+             FROM observations
+             WHERE entity_id = ?1 AND valid_until IS NULL
+             ORDER BY confidence DESC, observed_at DESC
+             LIMIT 3",
+        )?;
+
+        for entity_id in &seed_entity_ids {
+            let neighbors: Vec<(String, f32)> = rel_stmt
+                .query_map([entity_id], |row| {
+                    let from: String = row.get(0)?;
+                    let to: String = row.get(1)?;
+                    let weight: f32 = row.get(2)?;
+                    let neighbor = if from == *entity_id { to } else { from };
+                    Ok((neighbor, weight))
+                })?
+                .filter_map(Result::ok)
+                .filter(|(id, _)| !seed_entity_ids.contains(id))
+                .collect();
+
+            for (neighbor_id, rel_weight) in neighbors {
+                let entity_meta: Option<(String, String)> = entity_stmt
+                    .query_row([&neighbor_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .ok();
+
+                let (entity_name, entity_type_str) = match entity_meta {
+                    Some(m) => m,
+                    None => continue,
+                };
+
+                let entity_type =
+                    EntityType::parse(&entity_type_str).unwrap_or(EntityType::Concept);
+
+                if let Some(ref filter_type) = filters.entity_type {
+                    if entity_type != *filter_type {
+                        continue;
+                    }
+                }
+
+                let observations: Vec<Observation> = obs_stmt
+                    .query_map([&neighbor_id], |row| {
+                        Ok(Observation {
+                            id: row.get(0)?,
+                            entity_id: row.get(1)?,
+                            content: row.get(2)?,
+                            observed_at: row.get(3)?,
+                            valid_from: row.get(4)?,
+                            valid_until: row.get(5)?,
+                            confidence: row.get(6)?,
+                            source: row.get(7)?,
+                            supersedes: row.get(8)?,
+                        })
+                    })?
+                    .filter_map(Result::ok)
+                    .filter(|o| !seen_obs.contains(&o.id))
+                    .collect();
+
+                const DISTANCE_DECAY: f32 = 0.5;
+                for obs in observations {
+                    let days_since = (valid_at - obs.observed_at).max(0) as f64 / 86400.0;
+                    let recency = (-self.decay_rate * days_since).exp() as f32;
+                    let score = rel_weight * DISTANCE_DECAY * obs.confidence * recency;
+
+                    if score < SPREADING_MIN_SCORE {
+                        continue;
+                    }
+
+                    related_results.push(RecallResult {
+                        observation: obs,
+                        entity_name: entity_name.clone(),
+                        entity_type,
+                        score,
+                    });
+                }
+            }
+        }
+
+        // Sort by score descending and cap
+        related_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        related_results.truncate(max_related);
+
+        Ok(related_results)
     }
 
     // -----------------------------------------------------------------------
@@ -1349,6 +1567,35 @@ impl MemoryStore {
         }
         (vec![0.0f32; 768], sift_core::SearchMode::KeywordOnly)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Entity name normalization
+// ---------------------------------------------------------------------------
+
+/// Normalize an entity name for matching: lowercase, strip common path
+/// prefixes (/Users/*, /home/*, /tmp/*), and trim whitespace.
+fn normalize_entity_name(name: &str) -> String {
+    let mut s = name.trim().to_lowercase();
+
+    // Strip common home directory prefixes up to and including the username:
+    //   /users/rjow/sift/... → sift/...
+    //   /home/user/project/... → project/...
+    for prefix in &["/users/", "/home/", "/tmp/"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            if let Some(pos) = rest.find('/') {
+                s = rest[pos + 1..].to_string();
+            }
+            break; // Only one prefix can match
+        }
+    }
+
+    // Strip "session:" prefix for session entities (normalization only)
+    if let Some(rest) = s.strip_prefix("session:") {
+        s = rest.to_string();
+    }
+
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -1878,5 +2125,145 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM access_log", [], |row| row.get(0))
             .unwrap();
         assert_eq!(log_count, 0, "no access log entries for empty results");
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_entity_exact_match() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        store
+            .save_entity("sift-memory/src/lib.rs", EntityType::Project, 1.0, "test")
+            .unwrap();
+
+        // Exact match (case-insensitive)
+        let result = store.resolve_entity("sift-memory/src/lib.rs").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, "sift-memory/src/lib.rs");
+    }
+
+    #[test]
+    fn resolve_entity_suffix_match() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        store
+            .save_entity("sift-memory/src/lib.rs", EntityType::Project, 1.0, "test")
+            .unwrap();
+
+        // "src/lib.rs" is a suffix of "sift-memory/src/lib.rs"
+        let result = store.resolve_entity("src/lib.rs").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, "sift-memory/src/lib.rs");
+    }
+
+    #[test]
+    fn resolve_entity_reverse_suffix() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        store
+            .save_entity("src/lib.rs", EntityType::Project, 1.0, "test")
+            .unwrap();
+
+        // New name is longer and contains the existing as a suffix
+        let result = store.resolve_entity("sift-memory/src/lib.rs").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().1, "src/lib.rs");
+    }
+
+    #[test]
+    fn resolve_entity_no_match() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        store
+            .save_entity("sift-memory/src/lib.rs", EntityType::Project, 1.0, "test")
+            .unwrap();
+
+        let result = store.resolve_entity("completely-different").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn normalize_entity_name_strips_home_prefix() {
+        let n = normalize_entity_name("/Users/rjow/sift/crates/sift-memory/src/lib.rs");
+        assert_eq!(n, "sift/crates/sift-memory/src/lib.rs");
+    }
+
+    #[test]
+    fn normalize_entity_name_lowercases() {
+        let n = normalize_entity_name("Raymond");
+        assert_eq!(n, "raymond");
+    }
+
+    // -----------------------------------------------------------------------
+    // Spreading activation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spreading_activation_surfaces_related() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        // Create two entities with a relation
+        let person_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+        let project_id = store
+            .save_entity("sift", EntityType::Project, 1.0, "test")
+            .unwrap();
+        store
+            .add_relation(&person_id, &project_id, "maintains", 1.0, "test")
+            .unwrap();
+
+        // Add observations to both
+        store
+            .add_observation(&person_id, "prefers Rust over Python", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&project_id, "local semantic search engine", 1.0, "test")
+            .unwrap();
+
+        // Search for Raymond's observation — should also surface sift's via relation
+        let results = store
+            .recall("prefers Rust over Python", 10, &RecallFilters::default())
+            .unwrap();
+
+        // Should have Raymond's direct match AND sift's related observation
+        let entity_names: Vec<&str> = results.iter().map(|r| r.entity_name.as_str()).collect();
+        assert!(
+            entity_names.contains(&"Raymond"),
+            "Should find direct match: {entity_names:?}"
+        );
+        // The sift observation should appear via spreading activation
+        assert!(
+            entity_names.contains(&"sift"),
+            "Should find related entity via spreading activation: {entity_names:?}"
+        );
+    }
+
+    #[test]
+    fn spreading_activation_respects_top_k() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let person_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+        let project_id = store
+            .save_entity("sift", EntityType::Project, 1.0, "test")
+            .unwrap();
+        store
+            .add_relation(&person_id, &project_id, "maintains", 1.0, "test")
+            .unwrap();
+
+        store
+            .add_observation(&person_id, "prefers Rust over Python", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&project_id, "local semantic search engine", 1.0, "test")
+            .unwrap();
+
+        // With top_k=1, should only return the direct match, not the related one
+        let results = store
+            .recall("prefers Rust over Python", 1, &RecallFilters::default())
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entity_name, "Raymond");
     }
 }

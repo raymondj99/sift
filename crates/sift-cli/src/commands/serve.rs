@@ -16,10 +16,19 @@ pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
     let embedder: Option<Box<dyn sift_core::Embedder>> = None;
 
     let has_embedder = embedder.is_some();
+    let memory_dir = config.index_dir().ok().map(|d| d.join("memory"));
+    let memory = memory_dir.as_ref().and_then(|dir| {
+        sift_memory::MemoryStore::open(dir)
+            .map(|s| Arc::new(s.with_decay_rate(config.memory.decay_rate)))
+            .ok()
+    });
     let state = Arc::new(AppState {
         engine,
         metadata,
         embedder,
+        memory_dir,
+        memory,
+        consolidation_config: Some(sift_memory::ConsolidationConfig::from(&config.memory)),
     });
     let app = create_router(state);
 

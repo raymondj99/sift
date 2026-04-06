@@ -281,11 +281,17 @@ fn extract_from_post_tool_use(
     let mut observations = 0usize;
 
     if let Some(path) = file_path {
-        // Create entity for the file/project path
+        // Resolve against existing entities to prevent fragmentation
         let short_path = shorten_path(&path);
-        let entity_id =
-            memory.save_entity(&short_path, EntityType::Project, 0.6, "cortex:episode")?;
-        entities += 1;
+        let (entity_id, is_new) = if let Some((id, _name)) = memory.resolve_entity(&short_path)? {
+            (id, false)
+        } else {
+            let id = memory.save_entity(&short_path, EntityType::Project, 0.6, "cortex:episode")?;
+            (id, true)
+        };
+        if is_new {
+            entities += 1;
+        }
 
         // Create observation about what was done
         let action = match tool_name {
@@ -447,13 +453,13 @@ fn phase_skill_extraction(
         let mut seen_trigrams = std::collections::HashSet::new();
 
         for window in tools.windows(2) {
-            let key = format!("{}→{}", window[0], window[1]);
+            let key = format!("{}->{}", window[0], window[1]);
             if seen_bigrams.insert(key.clone()) {
                 *bigram_counts.entry(key).or_insert(0) += 1;
             }
         }
         for window in tools.windows(3) {
-            let key = format!("{}→{}→{}", window[0], window[1], window[2]);
+            let key = format!("{}->{}→{}", window[0], window[1], window[2]);
             if seen_trigrams.insert(key.clone()) {
                 *trigram_counts.entry(key).or_insert(0) += 1;
             }
@@ -577,6 +583,9 @@ fn phase_decay_and_pruning(
         .collect();
 
     let mut pruned_obs = 0usize;
+
+    conn.execute_batch("BEGIN")?;
+
     let mut update_stmt =
         conn.prepare("UPDATE observations SET utility_score = ?1 WHERE id = ?2")?;
     let mut invalidate_stmt =
@@ -628,6 +637,8 @@ fn phase_decay_and_pruning(
     drop(invalidate_stmt);
     drop(decay_stmt);
     drop(stmt);
+
+    conn.execute_batch("COMMIT")?;
     drop(conn);
 
     // Prune ghost entities left by soft-deleted observations

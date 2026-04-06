@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,12 @@ pub struct AppState {
     pub engine: HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
     pub metadata: MetadataStore,
     pub embedder: Option<Box<dyn Embedder>>,
+    /// Path to the memory directory. Enables `/api/memory/*` endpoints when set.
+    pub memory_dir: Option<std::path::PathBuf>,
+    /// Shared memory store — opened once, reused across requests.
+    pub memory: Option<Arc<sift_memory::MemoryStore>>,
+    /// Consolidation config from user settings (not just defaults).
+    pub consolidation_config: Option<sift_memory::ConsolidationConfig>,
 }
 
 #[derive(Deserialize)]
@@ -79,9 +85,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 .rate_limit(100, Duration::from_secs(60)),
         );
 
+    let memory_routes = Router::new()
+        .route("/api/memory/status", get(memory_status))
+        .route("/api/memory/consolidate", post(memory_consolidate));
+
     Router::new()
         .route("/health", get(health))
         .merge(api_routes)
+        .merge(memory_routes)
         .with_state(state)
 }
 
@@ -216,6 +227,95 @@ async fn status(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Memory endpoints
+// ---------------------------------------------------------------------------
+
+/// `GET /api/memory/status` — memory system statistics and tier breakdown.
+async fn memory_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let memory = state.memory.clone().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Memory not available".into(),
+    ))?;
+
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let stats = memory.stats().map_err(|e| format!("Stats failed: {e}"))?;
+        Ok(serde_json::json!({
+            "total_entities": stats.total_entities,
+            "total_observations": stats.total_observations,
+            "total_relations": stats.total_relations,
+            "entity_types": stats.entity_type_counts,
+            "memory_tiers": stats.tier_counts,
+            "pending_episodes": stats.pending_episodes,
+            "total_episodes": stats.total_episodes,
+            "last_consolidation": stats.last_consolidation,
+            "oldest_observation": stats.oldest_observation,
+            "newest_observation": stats.newest_observation,
+        }))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+    })?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(result))
+}
+
+/// `POST /api/memory/consolidate` — trigger on-demand consolidation.
+async fn memory_consolidate(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let memory = state.memory.clone().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Memory not available".into(),
+    ))?;
+    let dir = state
+        .memory_dir
+        .clone()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Memory dir not set".into()))?;
+    let config = state.consolidation_config.clone().unwrap_or_default();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let episodes = sift_memory::episodes::EpisodeStore::open(&dir)
+            .map_err(|e| format!("Episode store failed: {e}"))?;
+
+        let report = sift_memory::consolidation::run_consolidation(&memory, &episodes, &config)
+            .map_err(|e| format!("Consolidation failed: {e}"))?;
+
+        memory.save().map_err(|e| format!("Save failed: {e}"))?;
+
+        Ok(serde_json::json!({
+            "status": "completed",
+            "episodes_processed": report.episodes_processed,
+            "episodes_skipped": report.episodes_skipped,
+            "entities_created": report.entities_created,
+            "observations_created": report.observations_created,
+            "duplicates_merged": report.duplicates_merged,
+            "promotions": report.promotions,
+            "skills_created": report.skills_created,
+            "skills_updated": report.skills_updated,
+            "observations_pruned": report.observations_pruned,
+            "entities_pruned": report.entities_pruned,
+        }))
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+    })?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +341,9 @@ mod tests {
                 engine,
                 metadata,
                 embedder: None,
+                memory_dir: None,
+                memory: None,
+                consolidation_config: None,
             });
             TestHarness { state, _dir: dir }
         }
@@ -458,6 +561,9 @@ mod tests {
             engine,
             metadata,
             embedder: Some(Box::new(FakeEmbedder)),
+            memory_dir: None,
+            memory: None,
+            consolidation_config: None,
         });
         TestHarness { state, _dir: dir }
     }

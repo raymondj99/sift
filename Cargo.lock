@@ -3257,6 +3257,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sift-core",
+ "sift-memory",
  "sift-store",
  "tempfile",
  "thiserror 2.0.18",

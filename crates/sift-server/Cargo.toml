@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 sift-core = { workspace = true }
+sift-memory = { workspace = true, default-features = false, features = ["fts5"] }
 sift-store = { workspace = true, features = ["fts5", "sqlite"] }
 
 axum = { workspace = true }

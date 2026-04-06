@@ -33,9 +33,7 @@ impl EpisodeStore {
     pub fn connection(&self) -> &Connection {
         &self.db
     }
-}
 
-impl EpisodeStore {
     /// Open the episode store at the standard memory directory.
     pub fn open(memory_dir: &Path) -> Result<Self, rusqlite::Error> {
         std::fs::create_dir_all(memory_dir).map_err(|e| {
@@ -159,12 +157,18 @@ impl EpisodeStore {
     }
 
     /// Mark episodes as processed (or skipped) by a consolidation batch.
+    ///
+    /// All updates are batched in a single transaction.
     pub fn mark_processed(
         &self,
         episode_ids: &[String],
         state: EpisodeState,
         batch_id: &str,
     ) -> Result<(), rusqlite::Error> {
+        if episode_ids.is_empty() {
+            return Ok(());
+        }
+        self.db.execute_batch("BEGIN")?;
         let mut stmt = self
             .db
             .prepare("UPDATE episodes SET processed = ?1, batch_id = ?2 WHERE id = ?3")?;
@@ -172,6 +176,8 @@ impl EpisodeStore {
         for id in episode_ids {
             stmt.execute(rusqlite::params![state.as_i32(), batch_id, id])?;
         }
+        drop(stmt);
+        self.db.execute_batch("COMMIT")?;
 
         Ok(())
     }
