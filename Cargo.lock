@@ -3134,6 +3134,7 @@ dependencies = [
  "sift-core",
  "sift-embed",
  "sift-mcp",
+ "sift-memory",
  "sift-parsers",
  "sift-server",
  "sift-sources",

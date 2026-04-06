@@ -338,6 +338,33 @@ enum Commands {
         /// Shell to generate completions for (bash, zsh, fish, elvish, powershell)
         shell: clap_complete::Shell,
     },
+
+    /// Manage the Cortex automated memory system
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemoryAction {
+    /// Ingest a hook event (called by Claude Code hooks)
+    #[command(hide = true)]
+    Ingest {
+        /// Event type: post-tool-use, stop, post-compact
+        #[arg(long)]
+        event: String,
+    },
+    /// Show memory system status
+    Status,
+    /// Run consolidation pipeline (all phases or a specific one)
+    Consolidate {
+        /// Run only a specific phase: episodes, dedup, promote, skills, prune
+        #[arg(long)]
+        phase: Option<String>,
+    },
+    /// Print recommended Claude Code hooks configuration
+    InitHooks,
 }
 
 #[cfg(feature = "serve")]
@@ -598,6 +625,19 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "sift", &mut std::io::stdout());
         }
+
+        Commands::Memory { action } => match action {
+            MemoryAction::Ingest { event } => {
+                // Normalize event name: "post-tool-use" -> "post_tool_use"
+                let event_type = event.replace('-', "_");
+                commands::memory::ingest(&config, &event_type)?;
+            }
+            MemoryAction::Status => commands::memory::status(&config)?,
+            MemoryAction::Consolidate { phase } => {
+                commands::memory::consolidate(&config, phase.as_deref())?;
+            }
+            MemoryAction::InitHooks => commands::memory::init_hooks()?,
+        },
     }
 
     profiler.report();

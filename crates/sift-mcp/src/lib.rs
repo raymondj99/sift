@@ -225,6 +225,8 @@ pub struct RecallRequest {
     pub source: Option<String>,
     /// Minimum confidence threshold (range: 0.0–1.0)
     pub min_confidence: Option<f32>,
+    /// Filter by memory tier: "episodic", "semantic", or "procedural"
+    pub memory_tier: Option<String>,
 }
 
 /// Input parameters for the `sift_forget` tool.
@@ -939,7 +941,7 @@ impl SiftMcpServer {
     /// Recall facts from memory by semantic search.
     #[tool(
         name = "sift_recall",
-        description = "Search persistent memory for facts about entities. Uses hybrid semantic + keyword search over stored observations. Returns facts with entity names, types, and relevance scores. Filters by entity type, source, or confidence.",
+        description = "Search persistent memory for facts about entities. Uses hybrid semantic + keyword search over stored observations. Returns facts with entity names, types, and relevance scores. Filters by entity type, source, confidence, or memory tier (episodic/semantic/procedural).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     fn sift_recall(
@@ -968,6 +970,10 @@ impl SiftMcpServer {
                 .map(EntityTypeParam::to_memory_type),
             source: req.source,
             min_confidence: req.min_confidence,
+            memory_tier: req
+                .memory_tier
+                .as_deref()
+                .and_then(sift_memory::MemoryTier::parse),
             ..Default::default()
         };
 
@@ -1113,10 +1119,59 @@ impl SiftMcpServer {
         )]))
     }
 
+    /// Run the Cortex consolidation pipeline.
+    #[tool(
+        name = "sift_consolidate",
+        description = "Run the Cortex memory consolidation pipeline. Processes pending episodes into entities/observations, deduplicates, promotes episodic→semantic memories, extracts skills from repeated patterns, and prunes low-utility memories. Returns a detailed report of what changed.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    fn sift_consolidate(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let memory = self
+            .memory
+            .as_ref()
+            .ok_or_else(|| internal_err("Memory store not available".to_string()))?;
+
+        let memory_dir = self
+            .config
+            .index_dir()
+            .map(|d| d.join("memory"))
+            .map_err(|e| internal_err(format!("Cannot determine memory dir: {e}")))?;
+
+        let episodes = sift_memory::episodes::EpisodeStore::open(&memory_dir)
+            .map_err(|e| internal_err(format!("Cannot open episode store: {e}")))?;
+
+        let consolidation_config = sift_memory::ConsolidationConfig::from(&self.config.memory);
+
+        let report =
+            sift_memory::consolidation::run_consolidation(memory, &episodes, &consolidation_config)
+                .map_err(|e| internal_err(format!("Consolidation failed: {e}")))?;
+
+        let _ = memory.save();
+
+        let response = serde_json::json!({
+            "status": "completed",
+            "episodes_processed": report.episodes_processed,
+            "episodes_skipped": report.episodes_skipped,
+            "entities_created": report.entities_created,
+            "observations_created": report.observations_created,
+            "duplicates_merged": report.duplicates_merged,
+            "contradictions_found": report.contradictions_found,
+            "promotions": report.promotions,
+            "skills_created": report.skills_created,
+            "skills_updated": report.skills_updated,
+            "observations_pruned": report.observations_pruned,
+            "entities_pruned": report.entities_pruned,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,
+        )]))
+    }
+
     /// Show memory store statistics.
     #[tool(
         name = "sift_memory_status",
-        description = "Show memory store statistics: total entities, observations, relations, entity type breakdown, and oldest/newest memories.",
+        description = "Show memory store statistics: total entities, observations, relations, entity type breakdown, memory tier counts, episode stats, and oldest/newest memories.",
         annotations(read_only_hint = true)
     )]
     fn sift_memory_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -1134,6 +1189,10 @@ impl SiftMcpServer {
             "total_observations": stats.total_observations,
             "total_relations": stats.total_relations,
             "entity_types": stats.entity_type_counts,
+            "memory_tiers": stats.tier_counts,
+            "pending_episodes": stats.pending_episodes,
+            "total_episodes": stats.total_episodes,
+            "last_consolidation": stats.last_consolidation,
             "oldest_observation": stats.oldest_observation,
             "newest_observation": stats.newest_observation,
         });

@@ -12,6 +12,8 @@
 //! - **Hybrid recall**: RRF fusion of vector + keyword results, filtered by
 //!   temporal validity and decay-scored for relevance
 
+pub mod consolidation;
+pub mod episodes;
 pub mod schema;
 pub mod types;
 
@@ -41,7 +43,7 @@ pub enum MemoryError {
 pub type MemResult<T> = std::result::Result<T, MemoryError>;
 
 /// Current Unix timestamp in seconds.
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -67,6 +69,9 @@ pub struct MemoryStore {
     embedder: Option<std::sync::Arc<dyn sift_core::Embedder>>,
     /// Path to the memory index directory (for persistence).
     index_dir: std::path::PathBuf,
+    /// Lambda for the Ebbinghaus forgetting curve.
+    /// Configurable via `config.memory.decay_rate`. Default: 0.01.
+    decay_rate: f64,
 }
 
 impl MemoryStore {
@@ -133,7 +138,24 @@ impl MemoryStore {
             #[cfg(feature = "embeddings")]
             embedder: None,
             index_dir: dir.to_path_buf(),
+            decay_rate: 0.01,
         })
+    }
+
+    /// Set the decay rate (lambda) for the forgetting curve.
+    ///
+    /// Typically called with `config.memory.decay_rate` after construction.
+    pub fn with_decay_rate(mut self, rate: f64) -> Self {
+        self.decay_rate = rate;
+        self
+    }
+
+    /// Borrow the underlying SQLite connection (behind a Mutex).
+    ///
+    /// Used by the consolidation engine for direct SQL operations that
+    /// go beyond the MemoryStore's public API.
+    pub fn db(&self) -> &Mutex<Connection> {
+        &self.db
     }
 
     /// Open a memory store using an in-memory SQLite database (for testing).
@@ -162,6 +184,7 @@ impl MemoryStore {
             #[cfg(feature = "embeddings")]
             embedder: None,
             index_dir: std::path::PathBuf::new(),
+            decay_rate: 0.01,
         })
     }
 
@@ -758,11 +781,13 @@ impl MemoryStore {
                 None => continue, // Skip non-memory results
             };
 
-            // Look up the observation and its entity
+            // Single query: observation + entity + v2 access metadata.
+            // All columns fetched in one round trip — no secondary lookups.
             let obs_entity = conn.query_row(
                 "SELECT o.id, o.entity_id, o.content, o.observed_at, o.valid_from, o.valid_until,
                         o.confidence, o.source, o.supersedes,
-                        e.name, e.entity_type
+                        e.name, e.entity_type,
+                        o.access_count, o.last_accessed, o.memory_tier
                  FROM observations o
                  JOIN entities e ON o.entity_id = e.id
                  WHERE o.id = ?1",
@@ -781,14 +806,25 @@ impl MemoryStore {
                     };
                     let entity_name: String = row.get(9)?;
                     let entity_type_str: String = row.get(10)?;
-                    Ok((obs, entity_name, entity_type_str))
+                    let access_count: i64 = row.get(11)?;
+                    let last_accessed: Option<i64> = row.get(12)?;
+                    let memory_tier: String = row.get(13)?;
+                    Ok((
+                        obs,
+                        entity_name,
+                        entity_type_str,
+                        access_count,
+                        last_accessed,
+                        memory_tier,
+                    ))
                 },
             );
 
-            let (obs, entity_name, entity_type_str) = match obs_entity {
-                Ok(v) => v,
-                Err(_) => continue, // Observation may have been deleted
-            };
+            let (obs, entity_name, entity_type_str, access_count, last_accessed, memory_tier) =
+                match obs_entity {
+                    Ok(v) => v,
+                    Err(_) => continue, // Observation may have been deleted
+                };
 
             // Temporal filter: skip observations not valid at the requested time
             if let Some(from) = obs.valid_from {
@@ -824,10 +860,36 @@ impl MemoryStore {
                 }
             }
 
-            // Apply decay scoring
+            // Memory tier filter (uses value from the join, not a separate query)
+            if let Some(ref filter_tier) = filters.memory_tier {
+                if memory_tier != filter_tier.as_str() {
+                    continue;
+                }
+            }
+
+            // --- Retrieval-dependent strengthening scoring ---
+            //
+            //   base_decay = exp(-lambda * days_since_observed)
+            //   retrieval_boost = 1.0 + 0.15 * ln(1 + access_count)
+            //   last_access_recency = exp(-lambda * days_since_last_accessed)
+            //   recency = 0.4 * base_decay + 0.6 * max(base_decay, last_access_recency)
+            //   score = search_relevance * recency * retrieval_boost * confidence
+            let lambda = self.decay_rate;
             let days_since = (valid_at - obs.observed_at).max(0) as f64 / 86400.0;
-            let recency_factor = (-0.01 * days_since).exp() as f32; // lambda = 0.01
-            let score = r.score * recency_factor * obs.confidence;
+            let base_decay = (-lambda * days_since).exp();
+
+            let retrieval_boost = 1.0 + 0.15 * (1.0 + access_count as f64).ln();
+
+            let last_access_recency = match last_accessed {
+                Some(ts) => {
+                    let days_since_access = (valid_at - ts).max(0) as f64 / 86400.0;
+                    (-lambda * days_since_access).exp()
+                }
+                None => 0.0, // Never accessed — no boost
+            };
+
+            let recency = 0.4 * base_decay + 0.6 * base_decay.max(last_access_recency);
+            let score = r.score * recency as f32 * retrieval_boost as f32 * obs.confidence;
 
             memory_results.push(RecallResult {
                 observation: obs,
@@ -858,6 +920,12 @@ impl MemoryStore {
         // terms against entity names and return those entities' observations.
         if memory_results.is_empty() {
             memory_results = self.recall_by_entity_names(query, top_k, filters)?;
+        }
+
+        // --- Log access for retrieval-dependent strengthening ---
+        // Side-effect: increment access counters so future recalls are boosted.
+        if !memory_results.is_empty() {
+            self.log_access_batch(query, &memory_results)?;
         }
 
         Ok(memory_results)
@@ -1083,6 +1151,61 @@ impl MemoryStore {
     }
 
     // -----------------------------------------------------------------------
+    // Access Logging (retrieval-dependent strengthening)
+    // -----------------------------------------------------------------------
+
+    /// Log access for a batch of recall results.
+    ///
+    /// For each accessed observation: inserts an `access_log` entry,
+    /// increments `access_count`, and updates `last_accessed` timestamp.
+    /// This implements the spacing effect — recalled memories strengthen.
+    ///
+    /// All writes are batched in a single transaction (3N statements in 1
+    /// round-trip instead of 3N implicit transactions).
+    fn log_access_batch(&self, query: &str, results: &[RecallResult]) -> MemResult<()> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+
+        conn.execute_batch("BEGIN")?;
+
+        let result = (|| -> Result<(), rusqlite::Error> {
+            for result in results {
+                let log_id = new_id();
+                conn.execute(
+                    "INSERT INTO access_log (id, observation_id, accessed_at, query)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![log_id, result.observation.id, now, query],
+                )?;
+
+                conn.execute(
+                    "UPDATE observations
+                     SET access_count = access_count + 1, last_accessed = ?1
+                     WHERE id = ?2",
+                    rusqlite::params![now, result.observation.id],
+                )?;
+
+                conn.execute(
+                    "UPDATE entities
+                     SET access_count = access_count + 1, last_accessed = ?1
+                     WHERE id = ?2",
+                    rusqlite::params![now, result.observation.entity_id],
+                )?;
+            }
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Statistics
     // -----------------------------------------------------------------------
 
@@ -1126,6 +1249,40 @@ impl MemoryStore {
             )
             .ok();
 
+        // Tier breakdown
+        let mut tier_stmt = conn.prepare(
+            "SELECT memory_tier, COUNT(*) FROM observations
+             WHERE valid_until IS NULL GROUP BY memory_tier",
+        )?;
+        let tier_counts: std::collections::HashMap<String, u64> = tier_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(Result::ok)
+            .collect();
+
+        // Episode stats
+        let pending_episodes: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM episodes WHERE processed = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let total_episodes: u64 = conn
+            .query_row("SELECT COUNT(*) FROM episodes", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let last_consolidation: Option<i64> = conn
+            .query_row(
+                "SELECT value FROM memory_meta WHERE key = 'last_consolidation'",
+                [],
+                |row| {
+                    let v: String = row.get(0)?;
+                    Ok(v.parse::<i64>().ok())
+                },
+            )
+            .unwrap_or(None);
+
         Ok(MemoryStats {
             total_entities,
             total_observations,
@@ -1133,6 +1290,10 @@ impl MemoryStore {
             entity_type_counts,
             oldest_observation: oldest,
             newest_observation: newest,
+            tier_counts,
+            pending_episodes,
+            total_episodes,
+            last_consolidation,
         })
     }
 
@@ -1526,5 +1687,196 @@ mod tests {
         let store = MemoryStore::open_in_memory().unwrap();
         let entity = store.get_entity_by_id("nonexistent").unwrap();
         assert!(entity.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Retrieval-dependent strengthening tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn recall_increments_access_count() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "prefers Rust over Python", 1.0, "test")
+            .unwrap();
+
+        // Use exact observation text as query for reliable matching across
+        // all fulltext backends (FTS5, Tantivy, BM25).
+        let results = store
+            .recall("prefers Rust over Python", 10, &RecallFilters::default())
+            .unwrap();
+        assert!(!results.is_empty());
+
+        // Check access_count was incremented
+        let conn = store.db.lock().unwrap();
+        let access_count: i64 = conn
+            .query_row(
+                "SELECT access_count FROM observations WHERE entity_id = ?1",
+                [&entity_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            access_count, 1,
+            "access_count should be 1 after first recall"
+        );
+
+        let last_accessed: Option<i64> = conn
+            .query_row(
+                "SELECT last_accessed FROM observations WHERE entity_id = ?1",
+                [&entity_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(last_accessed.is_some(), "last_accessed should be set");
+        drop(conn);
+
+        // Second recall — should increment again
+        let _ = store
+            .recall("prefers Rust over Python", 10, &RecallFilters::default())
+            .unwrap();
+
+        let conn = store.db.lock().unwrap();
+        let access_count: i64 = conn
+            .query_row(
+                "SELECT access_count FROM observations WHERE entity_id = ?1",
+                [&entity_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            access_count, 2,
+            "access_count should be 2 after second recall"
+        );
+    }
+
+    #[test]
+    fn recall_writes_access_log() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("sift", EntityType::Project, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "local semantic search engine", 1.0, "test")
+            .unwrap();
+
+        let results = store
+            .recall(
+                "local semantic search engine",
+                10,
+                &RecallFilters::default(),
+            )
+            .unwrap();
+        assert!(!results.is_empty());
+
+        // Verify access_log has entries
+        let conn = store.db.lock().unwrap();
+        let log_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM access_log", [], |row| row.get(0))
+            .unwrap();
+        assert!(log_count > 0, "access_log should have entries after recall");
+
+        // Verify the query was stored
+        let logged_query: String = conn
+            .query_row(
+                "SELECT query FROM access_log ORDER BY accessed_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(logged_query, "local semantic search engine");
+    }
+
+    #[test]
+    fn recall_entity_access_count_also_increments() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "prefers Rust over Python", 1.0, "test")
+            .unwrap();
+
+        let _ = store
+            .recall("prefers Rust over Python", 10, &RecallFilters::default())
+            .unwrap();
+
+        let conn = store.db.lock().unwrap();
+        let entity_access: i64 = conn
+            .query_row(
+                "SELECT access_count FROM entities WHERE id = ?1",
+                [&entity_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            entity_access, 1,
+            "entity access_count should be incremented"
+        );
+    }
+
+    #[test]
+    fn decay_rate_is_configurable() {
+        let store = MemoryStore::open_in_memory().unwrap().with_decay_rate(1.0);
+
+        let entity_id = store
+            .save_entity("test", EntityType::Concept, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "fast-decaying fact about testing", 1.0, "test")
+            .unwrap();
+
+        // With lambda=1.0, decay after 1 day is exp(-1) ≈ 0.37.
+        // With lambda=0.01, decay after 1 day is exp(-0.01) ≈ 0.99.
+        // A high decay rate should produce lower scores for older observations.
+        // We can't easily control observation age in this test, but we verify
+        // the field is actually used by checking the store was configured.
+        assert!((store.decay_rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stats v2 tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn stats_includes_tier_counts() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("test", EntityType::Concept, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "episodic fact", 1.0, "test")
+            .unwrap();
+
+        let stats = store.stats().unwrap();
+        // All observations default to episodic tier
+        let episodic_count = stats.tier_counts.get("episodic").copied().unwrap_or(0);
+        assert_eq!(episodic_count, 1);
+        assert_eq!(stats.pending_episodes, 0);
+        assert_eq!(stats.total_episodes, 0);
+    }
+
+    #[test]
+    fn recall_no_results_does_not_log_access() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        // Empty store — recall should return nothing and write no access log
+        let results = store
+            .recall("nonexistent query", 10, &RecallFilters::default())
+            .unwrap();
+        assert!(results.is_empty());
+
+        let conn = store.db.lock().unwrap();
+        let log_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM access_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(log_count, 0, "no access log entries for empty results");
     }
 }

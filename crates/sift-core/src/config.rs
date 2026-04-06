@@ -13,6 +13,8 @@ pub struct Config {
     pub search: SearchConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +53,46 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "ServerConfig::default_port")]
     pub port: u16,
+}
+
+/// Configuration for the Cortex automated memory system.
+///
+/// Controls episode capture, consolidation pipeline tuning, and decay/pruning
+/// parameters. All values have sensible defaults informed by human memory
+/// science (Ebbinghaus forgetting curves, retrieval-dependent strengthening).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Whether the automated memory system is enabled.
+    #[serde(default = "MemoryConfig::default_enabled")]
+    pub enabled: bool,
+    /// Seconds between automatic consolidation runs in the daemon.
+    #[serde(default = "MemoryConfig::default_consolidation_interval")]
+    pub consolidation_interval: u64,
+    /// Lambda for the Ebbinghaus forgetting curve: `exp(-lambda * days)`.
+    /// Higher values = faster decay. 0.01 ≈ 50% at 69 days.
+    #[serde(default = "MemoryConfig::default_decay_rate")]
+    pub decay_rate: f64,
+    /// Minimum days before an episodic observation is eligible for promotion.
+    #[serde(default = "MemoryConfig::default_promotion_age_days")]
+    pub promotion_age_days: u32,
+    /// Minimum access count for promotion to semantic tier.
+    #[serde(default = "MemoryConfig::default_promotion_min_access")]
+    pub promotion_min_access: u32,
+    /// Utility score below which observations are eligible for pruning.
+    #[serde(default = "MemoryConfig::default_prune_utility_threshold")]
+    pub prune_utility_threshold: f32,
+    /// Minimum age in days before an observation can be pruned.
+    #[serde(default = "MemoryConfig::default_prune_min_age_days")]
+    pub prune_min_age_days: u32,
+    /// Cosine similarity threshold for semantic deduplication.
+    #[serde(default = "MemoryConfig::default_semantic_dedup_threshold")]
+    pub semantic_dedup_threshold: f32,
+    /// Whether skill extraction is enabled during consolidation.
+    #[serde(default = "MemoryConfig::default_skill_extraction")]
+    pub skill_extraction: bool,
+    /// Minimum pattern frequency to extract a skill.
+    #[serde(default = "MemoryConfig::default_skill_min_frequency")]
+    pub skill_min_frequency: u32,
 }
 
 impl Config {
@@ -174,6 +216,39 @@ impl Config {
             }
         }
 
+        if let Some(memory_table) = specified.get("memory").and_then(|v| v.as_table()) {
+            if memory_table.contains_key("enabled") {
+                merged.memory.enabled = other.memory.enabled;
+            }
+            if memory_table.contains_key("consolidation_interval") {
+                merged.memory.consolidation_interval = other.memory.consolidation_interval;
+            }
+            if memory_table.contains_key("decay_rate") {
+                merged.memory.decay_rate = other.memory.decay_rate;
+            }
+            if memory_table.contains_key("promotion_age_days") {
+                merged.memory.promotion_age_days = other.memory.promotion_age_days;
+            }
+            if memory_table.contains_key("promotion_min_access") {
+                merged.memory.promotion_min_access = other.memory.promotion_min_access;
+            }
+            if memory_table.contains_key("prune_utility_threshold") {
+                merged.memory.prune_utility_threshold = other.memory.prune_utility_threshold;
+            }
+            if memory_table.contains_key("prune_min_age_days") {
+                merged.memory.prune_min_age_days = other.memory.prune_min_age_days;
+            }
+            if memory_table.contains_key("semantic_dedup_threshold") {
+                merged.memory.semantic_dedup_threshold = other.memory.semantic_dedup_threshold;
+            }
+            if memory_table.contains_key("skill_extraction") {
+                merged.memory.skill_extraction = other.memory.skill_extraction;
+            }
+            if memory_table.contains_key("skill_min_frequency") {
+                merged.memory.skill_min_frequency = other.memory.skill_min_frequency;
+            }
+        }
+
         merged
     }
 
@@ -217,6 +292,23 @@ impl Config {
             return Err(crate::SiftError::Config(
                 "max_results must be greater than 0".into(),
             ));
+        }
+        if self.memory.decay_rate < 0.0 {
+            return Err(crate::SiftError::Config(
+                "memory.decay_rate must be non-negative".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.memory.semantic_dedup_threshold) {
+            return Err(crate::SiftError::Config(format!(
+                "memory.semantic_dedup_threshold ({}) must be between 0.0 and 1.0",
+                self.memory.semantic_dedup_threshold
+            )));
+        }
+        if !(0.0..=1.0).contains(&self.memory.prune_utility_threshold) {
+            return Err(crate::SiftError::Config(format!(
+                "memory.prune_utility_threshold ({}) must be between 0.0 and 1.0",
+                self.memory.prune_utility_threshold
+            )));
         }
         Ok(())
     }
@@ -271,6 +363,20 @@ impl Config {
                     .collect::<Vec<_>>()
                     .join(", "),
             ),
+            "memory.enabled" => Some(self.memory.enabled.to_string()),
+            "memory.consolidation_interval" => Some(self.memory.consolidation_interval.to_string()),
+            "memory.decay_rate" => Some(self.memory.decay_rate.to_string()),
+            "memory.promotion_age_days" => Some(self.memory.promotion_age_days.to_string()),
+            "memory.promotion_min_access" => Some(self.memory.promotion_min_access.to_string()),
+            "memory.prune_utility_threshold" => {
+                Some(self.memory.prune_utility_threshold.to_string())
+            }
+            "memory.prune_min_age_days" => Some(self.memory.prune_min_age_days.to_string()),
+            "memory.semantic_dedup_threshold" => {
+                Some(self.memory.semantic_dedup_threshold.to_string())
+            }
+            "memory.skill_extraction" => Some(self.memory.skill_extraction.to_string()),
+            "memory.skill_min_frequency" => Some(self.memory.skill_min_frequency.to_string()),
             _ => None,
         }
     }
@@ -284,6 +390,7 @@ impl Default for Config {
             ignore: IgnoreConfig::default(),
             search: SearchConfig::default(),
             server: ServerConfig::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
@@ -372,6 +479,56 @@ impl Default for ServerConfig {
         Self {
             host: Self::default_host(),
             port: Self::default_port(),
+        }
+    }
+}
+
+impl MemoryConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+    fn default_consolidation_interval() -> u64 {
+        1800 // 30 minutes
+    }
+    fn default_decay_rate() -> f64 {
+        0.01
+    }
+    fn default_promotion_age_days() -> u32 {
+        3
+    }
+    fn default_promotion_min_access() -> u32 {
+        2
+    }
+    fn default_prune_utility_threshold() -> f32 {
+        0.05
+    }
+    fn default_prune_min_age_days() -> u32 {
+        30
+    }
+    fn default_semantic_dedup_threshold() -> f32 {
+        0.92
+    }
+    fn default_skill_extraction() -> bool {
+        true
+    }
+    fn default_skill_min_frequency() -> u32 {
+        3
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Self::default_enabled(),
+            consolidation_interval: Self::default_consolidation_interval(),
+            decay_rate: Self::default_decay_rate(),
+            promotion_age_days: Self::default_promotion_age_days(),
+            promotion_min_access: Self::default_promotion_min_access(),
+            prune_utility_threshold: Self::default_prune_utility_threshold(),
+            prune_min_age_days: Self::default_prune_min_age_days(),
+            semantic_dedup_threshold: Self::default_semantic_dedup_threshold(),
+            skill_extraction: Self::default_skill_extraction(),
+            skill_min_frequency: Self::default_skill_min_frequency(),
         }
     }
 }
@@ -807,5 +964,88 @@ chunk_size = 256
         // This may or may not find a root depending on whether there's a .git
         // above the tempdir. Just verify it doesn't panic.
         let _ = Config::find_project_root(&nested);
+    }
+
+    // -----------------------------------------------------------------------
+    // MemoryConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_memory_config_defaults() {
+        let config = Config::default();
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.consolidation_interval, 1800);
+        assert!((config.memory.decay_rate - 0.01).abs() < f64::EPSILON);
+        assert_eq!(config.memory.promotion_age_days, 3);
+        assert_eq!(config.memory.promotion_min_access, 2);
+        assert!((config.memory.semantic_dedup_threshold - 0.92).abs() < f32::EPSILON);
+        assert!(config.memory.skill_extraction);
+    }
+
+    #[test]
+    fn test_memory_config_get_value() {
+        let config = Config::default();
+        assert_eq!(config.get_value("memory.enabled").unwrap(), "true");
+        assert_eq!(
+            config.get_value("memory.consolidation_interval").unwrap(),
+            "1800"
+        );
+        assert_eq!(config.get_value("memory.decay_rate").unwrap(), "0.01");
+        assert_eq!(config.get_value("memory.skill_extraction").unwrap(), "true");
+    }
+
+    #[test]
+    fn test_memory_config_validation_decay_rate() {
+        let mut config = Config::default();
+        config.memory.decay_rate = -0.1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("decay_rate"));
+    }
+
+    #[test]
+    fn test_memory_config_validation_dedup_threshold() {
+        let mut config = Config::default();
+        config.memory.semantic_dedup_threshold = 1.5;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("semantic_dedup_threshold"));
+    }
+
+    #[test]
+    fn test_memory_config_validation_prune_threshold() {
+        let mut config = Config::default();
+        config.memory.prune_utility_threshold = -0.1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("prune_utility_threshold"));
+    }
+
+    #[test]
+    fn test_memory_config_merge() {
+        let global = Config::default();
+        let project_toml = r#"
+[memory]
+decay_rate = 0.05
+skill_extraction = false
+"#;
+        let project: Config = toml::from_str(project_toml).unwrap();
+        let table: toml::Table = toml::from_str(project_toml).unwrap();
+        let merged = global.merge(&project, &table);
+
+        // Specified keys should be overridden
+        assert!((merged.memory.decay_rate - 0.05).abs() < f64::EPSILON);
+        assert!(!merged.memory.skill_extraction);
+        // Unspecified keys should keep defaults
+        assert_eq!(merged.memory.consolidation_interval, 1800);
+        assert_eq!(merged.memory.promotion_age_days, 3);
+    }
+
+    #[test]
+    fn test_memory_config_roundtrip_toml() {
+        let mut config = Config::default();
+        config.memory.decay_rate = 0.02;
+        config.memory.enabled = false;
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+        assert!(!deserialized.memory.enabled);
+        assert!((deserialized.memory.decay_rate - 0.02).abs() < f64::EPSILON);
     }
 }

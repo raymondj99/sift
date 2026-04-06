@@ -39,12 +39,12 @@ archive = ["sift-parsers/archive"]
 data = ["sift-parsers/data"]
 audio = ["sift-parsers/audio"]
 # Embedding & search
-embeddings = ["dep:sift-embed", "sift-mcp?/embeddings"]
+embeddings = ["dep:sift-embed", "sift-mcp?/embeddings", "sift-memory/embeddings"]
 vision = ["embeddings", "sift-embed/vision"]
-fulltext = ["sift-store/fulltext", "sift-mcp?/fulltext"]
-fts5 = ["sift-store/fts5", "sift-mcp?/fts5"]
-sqlite = ["sift-store/sqlite", "sift-embed?/sqlite", "sift-mcp?/sqlite"]
-hnsw = ["sift-store/hnsw", "sift-mcp?/hnsw"]
+fulltext = ["sift-store/fulltext", "sift-mcp?/fulltext", "sift-memory/fulltext"]
+fts5 = ["sift-store/fts5", "sift-mcp?/fts5", "sift-memory/fts5"]
+sqlite = ["sift-store/sqlite", "sift-embed?/sqlite", "sift-mcp?/sqlite", "sift-memory/sqlite"]
+hnsw = ["sift-store/hnsw", "sift-mcp?/hnsw", "sift-memory/hnsw"]
 simd = ["sift-store/simd"]
 # Server & UI
 serve = ["dep:sift-server", "dep:tokio"]
@@ -57,6 +57,7 @@ full = ["standard", "serve", "mcp", "hnsw", "fulltext", "vision", "audio", "simd
 
 [dependencies]
 sift-core = { workspace = true }
+sift-memory = { workspace = true, default-features = false }
 sift-sources = { workspace = true }
 sift-parsers = { workspace = true, default-features = false }
 sift-chunker = { workspace = true, default-features = false }

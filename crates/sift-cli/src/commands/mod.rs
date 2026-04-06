@@ -6,6 +6,7 @@ pub mod init;
 pub mod list;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod memory;
 #[cfg(feature = "embeddings")]
 pub mod models;
 pub mod remove;
