@@ -3128,6 +3128,7 @@ dependencies = [
  "indicatif",
  "predicates",
  "rayon",
+ "rusqlite",
  "serde",
  "serde_json",
  "sift-chunker",

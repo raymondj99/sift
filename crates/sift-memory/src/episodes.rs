@@ -46,6 +46,13 @@ impl EpisodeStore {
         Ok(Self { db: conn })
     }
 
+    /// Open an in-memory episode store (for benchmarks and external tests).
+    pub fn open_in_memory_for_bench() -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open_in_memory()?;
+        schema::init_schema(&conn)?;
+        Ok(Self { db: conn })
+    }
+
     /// Open an in-memory episode store (for testing).
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {

@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod config;
 #[cfg(feature = "serve")]
 pub mod daemon;

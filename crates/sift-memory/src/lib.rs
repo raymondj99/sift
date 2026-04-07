@@ -51,7 +51,7 @@ pub enum MemoryError {
 pub type MemResult<T> = std::result::Result<T, MemoryError>;
 
 /// Current Unix timestamp in seconds.
-pub(crate) fn now_secs() -> i64 {
+pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -166,9 +166,18 @@ impl MemoryStore {
         &self.db
     }
 
+    /// Open an in-memory memory store (for benchmarks and external tests).
+    pub fn open_in_memory_for_bench() -> MemResult<Self> {
+        Self::open_in_memory_impl()
+    }
+
     /// Open a memory store using an in-memory SQLite database (for testing).
     #[cfg(test)]
     fn open_in_memory() -> MemResult<Self> {
+        Self::open_in_memory_impl()
+    }
+
+    fn open_in_memory_impl() -> MemResult<Self> {
         let conn = Connection::open_in_memory()?;
         schema::init_schema(&conn)?;
 

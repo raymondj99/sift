@@ -344,6 +344,13 @@ enum Commands {
         #[command(subcommand)]
         action: MemoryAction,
     },
+
+    /// Run Cortex memory system benchmarks
+    Bench {
+        /// Run a specific benchmark (latency-ingest, latency-recall, strengthening,
+        /// forgetting, consolidation, skill-extraction, e2e) or "all"
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -638,6 +645,10 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             }
             MemoryAction::InitHooks => commands::memory::init_hooks()?,
         },
+
+        Commands::Bench { name } => {
+            commands::bench::run(name.as_deref())?;
+        }
     }
 
     profiler.report();
