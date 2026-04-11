@@ -847,8 +847,14 @@ impl MemoryStore {
     ) -> MemResult<Vec<RecallResult>> {
         let (vector, mode) = self.embed_for_search(query);
 
-        // Fetch extra candidates for post-filtering
-        let fetch_k = top_k * 3;
+        // When entity-filtering, cast a wider net since most results will
+        // be filtered out. Without filtering, 3x is sufficient.
+        let has_entity_filter = filters.entity_names.is_some();
+        let fetch_k = if has_entity_filter {
+            top_k * 10
+        } else {
+            top_k * 3
+        };
         let results = self.search.search(&vector, query, fetch_k, mode)?;
 
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -924,6 +930,14 @@ impl MemoryStore {
             let entity_type = EntityType::parse(&entity_type_str).unwrap_or(EntityType::Concept);
             if let Some(ref filter_type) = filters.entity_type {
                 if entity_type != *filter_type {
+                    continue;
+                }
+            }
+
+            // Entity name filter (case-insensitive)
+            if let Some(ref names) = filters.entity_names {
+                let name_lower = entity_name.to_lowercase();
+                if !names.iter().any(|n| n.to_lowercase() == name_lower) {
                     continue;
                 }
             }
@@ -2274,5 +2288,78 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].entity_name, "Raymond");
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity-filtered recall tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn recall_with_entity_name_filter() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let person_id = store
+            .save_entity("Alice", EntityType::Person, 1.0, "test")
+            .unwrap();
+        let other_id = store
+            .save_entity("Bob", EntityType::Person, 1.0, "test")
+            .unwrap();
+
+        store
+            .add_observation(&person_id, "Alice went to Paris in June", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&other_id, "Bob went to Paris in July", 1.0, "test")
+            .unwrap();
+
+        // Without filter — should find both
+        let results = store
+            .recall("went to Paris", 10, &RecallFilters::default())
+            .unwrap();
+        let names: Vec<&str> = results.iter().map(|r| r.entity_name.as_str()).collect();
+        assert!(names.contains(&"Alice"));
+        assert!(names.contains(&"Bob"));
+
+        // With entity_names filter — should only find Alice
+        let filtered = store
+            .recall(
+                "went to Paris",
+                10,
+                &RecallFilters {
+                    entity_names: Some(vec!["Alice".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!filtered.is_empty());
+        assert!(
+            filtered.iter().all(|r| r.entity_name == "Alice"),
+            "All results should be Alice's, got: {:?}",
+            filtered.iter().map(|r| &r.entity_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn recall_entity_filter_case_insensitive() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let id = store
+            .save_entity("Caroline", EntityType::Person, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&id, "Caroline likes hiking in mountains", 1.0, "test")
+            .unwrap();
+
+        let results = store
+            .recall(
+                "hiking mountains",
+                10,
+                &RecallFilters {
+                    entity_names: Some(vec!["caroline".to_string()]), // lowercase
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!results.is_empty(), "Case-insensitive filter should match");
     }
 }

@@ -1,0 +1,539 @@
+{
+  "version": "0.2.0",
+  "description": "CodingMem — coding assistant memory benchmark for evaluating cross-session knowledge retention, preference learning, temporal reasoning, correction handling, workflow detection, project isolation, and codebase expertise in coding agents.",
+  "scenarios": [
+
+    {
+      "id": "cross-session-basic",
+      "category": "cross_session",
+      "description": "Recall basic project architecture decisions from a previous session.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User is building a REST API using Axum in Rust. Decided to use SQLite with WAL mode for the database. The project is called 'taskflow' and uses a layered architecture: handlers -> services -> repositories."}},
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/main.rs"}}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What web framework is the taskflow project using?", "answer": "Axum", "category": "cross_session"},
+        {"question": "What database and mode did we decide on for taskflow?", "answer": "SQLite with WAL mode", "category": "cross_session"},
+        {"question": "What architecture pattern does taskflow use?", "answer": "Layered architecture: handlers, services, repositories", "category": "cross_session"}
+      ]
+    },
+
+    {
+      "id": "cross-session-deployment",
+      "category": "cross_session",
+      "description": "Recall deployment and infrastructure decisions across sessions.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Set up the CI/CD pipeline for the payments service. Using GitHub Actions with three stages: lint, test, deploy. Deployment targets are staging (auto-deploy on merge to main) and production (manual approval required). Docker images are pushed to ECR and deployed via ECS Fargate."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Added monitoring. Using Datadog for metrics and alerting, PagerDuty for on-call rotation. Set up alerts for p99 latency > 500ms and error rate > 1%. Structured logging with tracing crate, logs shipped to Datadog via fluentbit."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What CI/CD platform do we use for the payments service?", "answer": "GitHub Actions", "category": "cross_session"},
+        {"question": "How many stages does the CI pipeline have?", "answer": "Three: lint, test, deploy", "category": "cross_session"},
+        {"question": "What triggers a production deployment?", "answer": "Manual approval", "category": "cross_session"},
+        {"question": "Where are Docker images stored?", "answer": "ECR (Elastic Container Registry)", "category": "cross_session"},
+        {"question": "What monitoring platform are we using?", "answer": "Datadog", "category": "cross_session"},
+        {"question": "What is the p99 latency alert threshold?", "answer": "500ms", "category": "cross_session"}
+      ]
+    },
+
+    {
+      "id": "cross-session-api-design",
+      "category": "cross_session",
+      "description": "Recall API design decisions made across multiple sessions.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Designed the authentication API. Using JWT tokens with RS256 signing. Access tokens expire in 15 minutes, refresh tokens in 7 days. Tokens are stored in httpOnly cookies, not localStorage (XSS prevention). Rate limiting set to 100 requests/minute per user."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Designed the pagination strategy. All list endpoints use cursor-based pagination, not offset-based (better performance on large datasets). Cursor is an opaque base64-encoded string. Default page size is 25, max is 100. Response format includes next_cursor and has_more fields."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What signing algorithm do we use for JWT tokens?", "answer": "RS256", "category": "cross_session"},
+        {"question": "How long do access tokens last?", "answer": "15 minutes", "category": "cross_session"},
+        {"question": "Where are tokens stored on the client side?", "answer": "httpOnly cookies (not localStorage)", "category": "cross_session"},
+        {"question": "What pagination strategy do our list endpoints use?", "answer": "Cursor-based pagination", "category": "cross_session"},
+        {"question": "What is the maximum page size?", "answer": "100", "category": "cross_session"}
+      ]
+    },
+
+    {
+      "id": "preference-code-style",
+      "category": "preference",
+      "description": "Remember user's code style and formatting preferences.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User prefers snake_case for Rust function names and 4-space indentation. They dislike excessive comments and prefer self-documenting code. They always want error handling with thiserror, not anyhow in libraries."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected the agent: don't use unwrap() in production code, always use proper error propagation with ?. They also prefer logging with tracing over println!."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What naming convention does the user prefer for Rust functions?", "answer": "snake_case", "category": "preference"},
+        {"question": "What error handling crate should be used in libraries?", "answer": "thiserror, not anyhow", "category": "preference"},
+        {"question": "Should we use unwrap() in production code?", "answer": "No, use proper error propagation with ?", "category": "preference"},
+        {"question": "What logging approach does the user prefer?", "answer": "tracing, not println!", "category": "preference"}
+      ]
+    },
+
+    {
+      "id": "preference-workflow",
+      "category": "preference",
+      "description": "Remember user's development workflow preferences.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User's git workflow: always create feature branches from main, never commit directly to main. Branch naming convention is feat/description or fix/description. Commits should be atomic with conventional commit messages (feat:, fix:, docs:, refactor:). Always rebase before merging, never merge commits."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User wants tests written before implementation (TDD approach). Unit tests go in the same file as the code (mod tests). Integration tests go in tests/ directory. Always run cargo clippy before committing. No warnings allowed in CI."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What branch naming convention does the user follow?", "answer": "feat/description or fix/description", "category": "preference"},
+        {"question": "What commit message format does the user require?", "answer": "Conventional commits (feat:, fix:, docs:, refactor:)", "category": "preference"},
+        {"question": "Should we use merge commits or rebase?", "answer": "Always rebase, never merge commits", "category": "preference"},
+        {"question": "Does the user prefer TDD?", "answer": "Yes, tests written before implementation", "category": "preference"},
+        {"question": "Where do unit tests go?", "answer": "Same file as the code, in mod tests", "category": "preference"}
+      ]
+    },
+
+    {
+      "id": "preference-documentation",
+      "category": "preference",
+      "description": "Remember documentation and communication preferences.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User prefers minimal documentation: doc comments only on public API functions and complex logic. No README files unless the user explicitly asks. Never add TODO comments — use GitHub issues instead. Error messages should be user-facing and actionable, not developer-facing stack traces."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "When should we add doc comments?", "answer": "Only on public API functions and complex logic", "category": "preference"},
+        {"question": "Should we create README files?", "answer": "No, only if the user explicitly asks", "category": "preference"},
+        {"question": "How should TODO items be tracked?", "answer": "GitHub issues, not TODO comments in code", "category": "preference"},
+        {"question": "What style should error messages use?", "answer": "User-facing and actionable, not developer-facing stack traces", "category": "preference"}
+      ]
+    },
+
+    {
+      "id": "temporal-version-upgrade",
+      "category": "temporal",
+      "description": "Handle version upgrades — latest information should supersede older.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "The project uses React 18 with TypeScript. State management is done with Redux Toolkit. The CI pipeline runs on GitHub Actions."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Migrated from Redux Toolkit to Zustand for state management — simpler API, less boilerplate. Also upgraded to React 19 for the new compiler optimizations."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What version of React is the project using?", "answer": "React 19", "category": "temporal"},
+        {"question": "What state management library does the project use?", "answer": "Zustand (migrated from Redux Toolkit)", "category": "temporal"}
+      ]
+    },
+
+    {
+      "id": "temporal-dependency-changes",
+      "category": "temporal",
+      "description": "Track dependency and tooling changes over time.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Project initialized with npm as package manager, Jest for testing, and Webpack for bundling. Using ESLint with Airbnb config for linting."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Migrated from npm to pnpm for faster installs and better monorepo support. Switched from Webpack to Vite for 10x faster dev server startup."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Replaced Jest with Vitest for testing — native ESM support and Vite integration. Migrated from ESLint to Biome for combined linting and formatting (3x faster)."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What package manager does the project use?", "answer": "pnpm", "category": "temporal"},
+        {"question": "What bundler is the project using?", "answer": "Vite", "category": "temporal"},
+        {"question": "What testing framework does the project use?", "answer": "Vitest (migrated from Jest)", "category": "temporal"},
+        {"question": "What linter does the project use?", "answer": "Biome (migrated from ESLint)", "category": "temporal"},
+        {"question": "Why did we switch from Webpack to Vite?", "answer": "10x faster dev server startup", "category": "temporal"}
+      ]
+    },
+
+    {
+      "id": "temporal-rollback",
+      "category": "temporal",
+      "description": "Handle a change that was later reverted — agent should know the final state.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Database is PostgreSQL 15 with the pgvector extension for embeddings."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Experimented with switching to CockroachDB for better horizontal scaling. Migrated the schema and ran load tests."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Rolled back from CockroachDB to PostgreSQL — CockroachDB doesn't support pgvector and the latency overhead wasn't worth the scaling benefits for our current load. Staying with PostgreSQL 15."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What database does the project use?", "answer": "PostgreSQL 15 (tried CockroachDB but rolled back)", "category": "temporal"},
+        {"question": "Why did we not switch to CockroachDB?", "answer": "No pgvector support and latency overhead wasn't worth it for current load", "category": "temporal"}
+      ]
+    },
+
+    {
+      "id": "correction-sql-patterns",
+      "category": "correction",
+      "description": "Learn from corrections about SQL patterns.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected the agent: never use SELECT * in SQL queries, always enumerate columns explicitly. This caused a production bug when a column was added to the table."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User reminded: always add database migrations as separate files, never modify existing migration files. Use sequential numbering like 001_create_users.sql, 002_add_email.sql."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "Should we use SELECT * in SQL queries?", "answer": "No, always enumerate columns explicitly to avoid bugs when columns are added", "category": "correction"},
+        {"question": "How should database migrations be organized?", "answer": "Separate files with sequential numbering, never modify existing migrations", "category": "correction"}
+      ]
+    },
+
+    {
+      "id": "correction-api-patterns",
+      "category": "correction",
+      "description": "Learn from corrections about API design mistakes.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected: don't return 200 OK for errors — always use appropriate HTTP status codes. 400 for validation, 401 for auth, 404 for not found, 409 for conflicts. The response body should include an error code, message, and optional details field."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected: never expose internal IDs in URLs — use UUIDs instead of auto-incrementing integers. Also never include sensitive data in query parameters (they get logged); use request body instead."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected: all API endpoints must be idempotent. POST for create should use an idempotency key header. PUT should be a full replacement, PATCH for partial updates. DELETE should be idempotent (return 204 even if already deleted)."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What HTTP status code should be returned for validation errors?", "answer": "400", "category": "correction"},
+        {"question": "What should the error response body include?", "answer": "Error code, message, and optional details field", "category": "correction"},
+        {"question": "Should we use auto-incrementing IDs in URLs?", "answer": "No, use UUIDs instead", "category": "correction"},
+        {"question": "Where should sensitive data go in API requests?", "answer": "Request body, not query parameters (they get logged)", "category": "correction"},
+        {"question": "How should POST create endpoints handle duplicate requests?", "answer": "Use an idempotency key header", "category": "correction"},
+        {"question": "What should DELETE return for an already-deleted resource?", "answer": "204 (idempotent — same result regardless of state)", "category": "correction"}
+      ]
+    },
+
+    {
+      "id": "correction-security",
+      "category": "correction",
+      "description": "Learn from security-related corrections.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected: never log sensitive data (passwords, tokens, PII). The agent had included a user's email in a debug log statement. All log fields with user data must use the Redacted wrapper type."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User corrected: never hardcode secrets or API keys in source code, even for testing. Always use environment variables loaded through a config module. Tests should use a .env.test file that is gitignored."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "How should user data be handled in logs?", "answer": "Never log sensitive data; use the Redacted wrapper type for user data fields", "category": "correction"},
+        {"question": "How should secrets be managed in the codebase?", "answer": "Environment variables via config module, never hardcoded. Tests use .env.test (gitignored)", "category": "correction"}
+      ]
+    },
+
+    {
+      "id": "workflow-edit-test-cycle",
+      "category": "workflow",
+      "description": "Detect the basic edit-test-fix workflow pattern.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/lib.rs"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo test"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/lib.rs"}}},
+            {"type": "stop", "content": {"last_assistant_message": "Fixed the failing test."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/api.rs"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo test"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/api.rs"}}},
+            {"type": "stop", "content": {"last_assistant_message": "All tests pass."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/db.rs"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo test"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/db.rs"}}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What is the typical workflow pattern when editing code?", "answer": "Edit -> run cargo test -> Edit (modify-test-fix cycle)", "category": "workflow"}
+      ]
+    },
+
+    {
+      "id": "workflow-pre-commit",
+      "category": "workflow",
+      "description": "Detect a lint-before-commit workflow.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/main.rs"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo fmt"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo clippy"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'feat: add user endpoint'"}}},
+            {"type": "stop", "content": {"last_assistant_message": "Committed after formatting and lint checks."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_tool_use", "content": {"tool_name": "Edit", "tool_input": {"file_path": "/src/routes.rs"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo fmt"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "cargo clippy"}}},
+            {"type": "post_tool_use", "content": {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'fix: handle empty input'"}}},
+            {"type": "stop", "content": {"last_assistant_message": "Formatted, linted, and committed."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What steps happen before a git commit?", "answer": "cargo fmt (formatting) then cargo clippy (linting)", "category": "workflow"},
+        {"question": "Is code formatted before committing?", "answer": "Yes, cargo fmt is always run before committing", "category": "workflow"}
+      ]
+    },
+
+    {
+      "id": "isolation-overlapping-stacks",
+      "category": "isolation",
+      "description": "Keep facts separate for projects with overlapping technology stacks.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Working on project Alpha — a Python FastAPI backend. Uses PostgreSQL for the database and Celery for background tasks. Deployed on AWS ECS."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Working on project Beta — a Rust CLI tool for data processing. Uses SQLite for local storage and tokio for async runtime. Distributed as a single binary via cargo install."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What database does project Alpha use?", "answer": "PostgreSQL", "category": "isolation"},
+        {"question": "What database does project Beta use?", "answer": "SQLite", "category": "isolation"},
+        {"question": "How is project Beta distributed?", "answer": "Single binary via cargo install", "category": "isolation"},
+        {"question": "What task queue does project Alpha use?", "answer": "Celery", "category": "isolation"}
+      ]
+    },
+
+    {
+      "id": "isolation-shared-team",
+      "category": "isolation",
+      "description": "Projects with shared team members but different configurations.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Working on the frontend repo. Uses Next.js 14 with App Router. Styling with Tailwind CSS. Testing with Playwright for E2E and React Testing Library for components. Sarah owns the design system components."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Working on the backend repo. Uses Express.js with TypeScript. Testing with Jest and Supertest. Sarah also contributes to the auth module here. Database is MongoDB with Mongoose ODM."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What framework does the frontend repo use?", "answer": "Next.js 14 with App Router", "category": "isolation"},
+        {"question": "What framework does the backend repo use?", "answer": "Express.js with TypeScript", "category": "isolation"},
+        {"question": "What testing tools does the frontend use?", "answer": "Playwright for E2E, React Testing Library for components", "category": "isolation"},
+        {"question": "What testing tools does the backend use?", "answer": "Jest and Supertest", "category": "isolation"},
+        {"question": "What does Sarah work on in the frontend?", "answer": "Design system components", "category": "isolation"},
+        {"question": "What database does the backend use?", "answer": "MongoDB with Mongoose ODM", "category": "isolation"}
+      ]
+    },
+
+    {
+      "id": "isolation-monorepo",
+      "category": "isolation",
+      "description": "Different packages within a monorepo with distinct configurations.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "The monorepo has three packages: @app/web (React SPA, port 3000), @app/api (Node.js API, port 4000), and @app/shared (shared types and utilities). The web package uses Vite, the API uses tsx for dev, and shared is built with tsup."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What port does the web package run on?", "answer": "Port 3000", "category": "isolation"},
+        {"question": "What port does the API package run on?", "answer": "Port 4000", "category": "isolation"},
+        {"question": "What build tool does the shared package use?", "answer": "tsup", "category": "isolation"},
+        {"question": "How many packages are in the monorepo?", "answer": "Three: @app/web, @app/api, @app/shared", "category": "isolation"}
+      ]
+    },
+
+    {
+      "id": "expertise-architecture",
+      "category": "expertise",
+      "description": "Accumulate deep knowledge about a codebase's architecture.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Explored the sift codebase. It has 10 crates: sift-core (types, config), sift-cli (CLI commands), sift-store (vector + FTS storage), sift-memory (knowledge graph), sift-embed (embedding models), sift-mcp (MCP server), sift-server (HTTP API), sift-sources (file discovery), sift-parsers (30+ format parsers), sift-chunker (text splitting)."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Learned that sift-memory uses SQLite with WAL mode and a bi-temporal data model (observed_at vs valid_from/valid_until). The MemoryStore struct holds a Mutex<Connection> and a HybridSearchEngine. Recall uses RRF fusion of BM25 + vector results."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "How many crates does the sift project have?", "answer": "10 crates", "category": "expertise"},
+        {"question": "What does sift-store handle?", "answer": "Vector and FTS (full-text search) storage", "category": "expertise"},
+        {"question": "What temporal model does sift-memory use?", "answer": "Bi-temporal model with observed_at and valid_from/valid_until", "category": "expertise"},
+        {"question": "What concurrency primitive does MemoryStore use for SQLite?", "answer": "Mutex<Connection>", "category": "expertise"},
+        {"question": "How does sift recall fuse search results?", "answer": "RRF (Reciprocal Rank Fusion) of BM25 + vector results", "category": "expertise"}
+      ]
+    },
+
+    {
+      "id": "expertise-performance",
+      "category": "expertise",
+      "description": "Remember performance characteristics and bottlenecks.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Profiled the search pipeline. The embedding step takes 15ms per query (ONNX CPU inference). BM25 search takes 2ms. Vector search (HNSW) takes 5ms. The RRF fusion and post-filtering takes <1ms. Total recall latency is ~25ms for a typical query with 1000 observations."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Identified memory bottleneck: the consolidation engine holds the SQLite mutex for its entire duration. With 10K observations, consolidation takes ~2 seconds, blocking all other writers. Future optimization: batch updates in a single transaction and minimize lock hold time."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "How long does embedding take per query?", "answer": "15ms (ONNX CPU inference)", "category": "expertise"},
+        {"question": "What is the total recall latency for a typical query?", "answer": "~25ms with 1000 observations", "category": "expertise"},
+        {"question": "What is the main bottleneck in the consolidation engine?", "answer": "Holds the SQLite mutex for its entire duration, blocking writers", "category": "expertise"},
+        {"question": "How long does consolidation take with 10K observations?", "answer": "~2 seconds", "category": "expertise"}
+      ]
+    },
+
+    {
+      "id": "expertise-testing-patterns",
+      "category": "expertise",
+      "description": "Remember testing patterns and conventions in the codebase.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Testing conventions: unit tests use MemoryStore::open_in_memory() for fast isolated tests. Integration tests in tests/ use tempfile::TempDir for temporary on-disk databases. The test helper HOME_MUTEX serializes tests that modify the HOME env var. All tests must pass with --all-features to avoid CI failures from feature-gated code."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "How do unit tests create an isolated memory store?", "answer": "MemoryStore::open_in_memory()", "category": "expertise"},
+        {"question": "What do integration tests use for temporary databases?", "answer": "tempfile::TempDir for on-disk temp directories", "category": "expertise"},
+        {"question": "Why is HOME_MUTEX needed in tests?", "answer": "To serialize tests that modify the HOME environment variable", "category": "expertise"},
+        {"question": "What feature flag must tests pass with?", "answer": "--all-features (to catch feature-gated code issues in CI)", "category": "expertise"}
+      ]
+    }
+  ]
+}

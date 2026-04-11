@@ -303,6 +303,10 @@ pub struct RecallFilters {
     pub min_confidence: Option<f32>,
     /// Only return observations in this memory tier.
     pub memory_tier: Option<MemoryTier>,
+    /// Only return observations belonging to these entities (case-insensitive).
+    /// When set, recall is scoped to the named entities, dramatically improving
+    /// precision for entity-specific questions.
+    pub entity_names: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------

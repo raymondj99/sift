@@ -227,6 +227,8 @@ pub struct RecallRequest {
     pub min_confidence: Option<f32>,
     /// Filter by memory tier: "episodic", "semantic", or "procedural"
     pub memory_tier: Option<String>,
+    /// Only return memories about these entities (case-insensitive name match)
+    pub entity_names: Option<Vec<String>>,
 }
 
 /// Input parameters for the `sift_forget` tool.
@@ -941,7 +943,7 @@ impl SiftMcpServer {
     /// Recall facts from memory by semantic search.
     #[tool(
         name = "sift_recall",
-        description = "Search persistent memory for facts about entities. Uses hybrid semantic + keyword search over stored observations. Returns facts with entity names, types, and relevance scores. Filters by entity type, source, confidence, or memory tier (episodic/semantic/procedural).",
+        description = "Search persistent memory for facts about entities. Uses hybrid semantic + keyword search over stored observations. Returns facts with entity names, types, and relevance scores. Filters by entity type, source, confidence, memory tier (episodic/semantic/procedural), or specific entity names (for high-precision entity-scoped recall).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     fn sift_recall(
@@ -974,6 +976,7 @@ impl SiftMcpServer {
                 .memory_tier
                 .as_deref()
                 .and_then(sift_memory::MemoryTier::parse),
+            entity_names: req.entity_names,
             ..Default::default()
         };
 
