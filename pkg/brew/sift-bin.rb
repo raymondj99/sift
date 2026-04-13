@@ -1,18 +1,19 @@
 class SiftBin < Formula
-  version "0.1.0"
-  desc "Point at anything, search everything — fast file indexer and search tool"
+  version "0.1.4"
+  desc "Local semantic search engine — index 30+ formats, hybrid search, AI agent memory"
   homepage "https://github.com/raymondj99/sift"
+  license "MIT"
 
   if OS.mac?
     if Hardware::CPU.arm?
-      url "https://github.com/raymondj99/sift/releases/download/#{version}/sift-#{version}-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/raymondj99/sift/releases/download/v#{version}/sift-v#{version}-aarch64-apple-darwin.tar.gz"
       sha256 "PLACEHOLDER"
     else
-      url "https://github.com/raymondj99/sift/releases/download/#{version}/sift-#{version}-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/raymondj99/sift/releases/download/v#{version}/sift-v#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "PLACEHOLDER"
     end
   elsif OS.linux?
-    url "https://github.com/raymondj99/sift/releases/download/#{version}/sift-#{version}-x86_64-unknown-linux-musl.tar.gz"
+    url "https://github.com/raymondj99/sift/releases/download/v#{version}/sift-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
     sha256 "PLACEHOLDER"
   end
 
@@ -26,6 +27,6 @@ class SiftBin < Formula
   end
 
   test do
-    assert_match "sift #{version}", shell_output("#{bin}/vx --version")
+    assert_match "sift #{version}", shell_output("#{bin}/sift --version")
   end
 end

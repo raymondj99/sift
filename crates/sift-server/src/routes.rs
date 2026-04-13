@@ -646,4 +646,83 @@ mod tests {
         let resp: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(resp["status"], "ok");
     }
+
+    // ── Input validation tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_empty_query_returns_400() {
+        let h = TestHarness::new();
+        let (status, body) = get(h.app(), "/api/search?q=").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_search_limit_zero_returns_400() {
+        let h = TestHarness::new();
+        let (status, body) = get(h.app(), "/api/search?q=test&limit=0").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("Limit must be"));
+    }
+
+    #[tokio::test]
+    async fn test_search_limit_too_high_returns_400() {
+        let h = TestHarness::new();
+        let (status, body) = get(h.app(), "/api/search?q=test&limit=9999").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("Limit must be"));
+    }
+
+    // ── List endpoint tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_empty_index() {
+        let h = TestHarness::new();
+        let (status, body) = get(h.app(), "/api/list").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let items: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_with_sources() {
+        let h = TestHarness::new();
+
+        // Insert metadata for a source
+        h.state
+            .metadata
+            .upsert_source("file:///test.rs", &[0u8; 32], 100, "rs", None, 3)
+            .unwrap();
+
+        let (status, body) = get(h.app(), "/api/list").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let items: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["uri"], "file:///test.rs");
+        assert_eq!(items[0]["file_type"], "rs");
+        assert_eq!(items[0]["chunks"], 3);
+    }
+
+    // ── Memory endpoint tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_memory_status_without_memory_returns_503() {
+        let h = TestHarness::new();
+        let (status, _body) = get(h.app(), "/api/memory/status").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_memory_consolidate_without_memory_returns_503() {
+        let h = TestHarness::new();
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/memory/consolidate")
+            .body(Body::empty())
+            .unwrap();
+        let resp = h.app().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

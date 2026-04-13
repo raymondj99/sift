@@ -210,6 +210,13 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
             });
     let consolidation_config = sift_memory::ConsolidationConfig::from(&config.memory);
 
+    // Derive watch paths before metadata moves into AppState
+    let watch_paths = if config.watch.enabled {
+        Some(derive_watch_paths(&metadata)?)
+    } else {
+        None
+    };
+
     let state = Arc::new(AppState {
         engine,
         metadata,
@@ -231,7 +238,7 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
         }
     );
 
-    // Shutdown flag — shared between HTTP server and consolidation loop
+    // Shutdown flag — shared between HTTP server, consolidation loop, and watcher
     let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Spawn consolidation loop if memory is enabled and store opened successfully
@@ -246,6 +253,14 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
         }))
     } else {
         tracing::info!("Memory consolidation disabled");
+        None
+    };
+
+    // Spawn filesystem watcher if enabled
+    let watch_handle = if let Some(paths) = watch_paths {
+        spawn_watcher(config, paths, &shutdown_flag)?
+    } else {
+        tracing::info!("Filesystem watcher disabled (set watch.enabled = true to enable)");
         None
     };
 
@@ -267,9 +282,12 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
         .await
         .map_err(sift_core::SiftError::Other)?;
 
-    // Wait for consolidation loop to finish
+    // Wait for background tasks to finish
     if let Some(handle) = consolidation_handle {
         let _ = handle.await;
+    }
+    if let Some(handle) = watch_handle {
+        let _ = handle.join();
     }
 
     // Cleanup (socket is removed by serve_unix, but PID file needs cleanup)
@@ -394,6 +412,144 @@ fn run_consolidation_cycle(
     Ok(report)
 }
 
+/// Derive unique root directories from indexed file URIs.
+///
+/// Given file:// URIs from the metadata store, extracts parent directories
+/// and deduplicates them. If a directory is a prefix of another, only the
+/// parent is kept to avoid redundant watches.
+fn derive_watch_paths(
+    metadata: &sift_store::MetadataStore,
+) -> sift_core::SiftResult<Vec<std::path::PathBuf>> {
+    let sources = metadata.list_sources()?;
+    let mut dirs: std::collections::BTreeSet<std::path::PathBuf> =
+        std::collections::BTreeSet::new();
+
+    for (uri, _file_type, _chunks) in &sources {
+        if let Some(path_str) = uri.strip_prefix("file://") {
+            if let Some(parent) = std::path::Path::new(path_str).parent() {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+    }
+
+    // Collapse nested directories: if /a/b and /a are both present, keep /a only.
+    let all: Vec<std::path::PathBuf> = dirs.into_iter().collect();
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for dir in &all {
+        let already_covered = roots.iter().any(|root| dir.starts_with(root));
+        if !already_covered {
+            // Remove any existing roots that are children of this new dir
+            roots.retain(|root| !root.starts_with(dir));
+            roots.push(dir.clone());
+        }
+    }
+
+    Ok(roots)
+}
+
+/// Spawn the filesystem watcher thread if there are directories to watch.
+fn spawn_watcher(
+    config: &sift_core::Config,
+    watch_paths: Vec<std::path::PathBuf>,
+    shutdown_flag: &Arc<std::sync::atomic::AtomicBool>,
+) -> sift_core::SiftResult<Option<std::thread::JoinHandle<()>>> {
+    if watch_paths.is_empty() {
+        tracing::info!("Watcher enabled but no indexed paths found — nothing to watch");
+        return Ok(None);
+    }
+
+    tracing::info!(
+        paths = watch_paths.len(),
+        "Starting filesystem watcher for indexed directories"
+    );
+    for p in &watch_paths {
+        tracing::info!("  Watching: {}", p.display());
+    }
+
+    let debounce_ms = config.watch.debounce_ms;
+    let config = config.clone();
+    let flag = Arc::clone(shutdown_flag);
+
+    let handle = std::thread::Builder::new()
+        .name("sift-watcher".into())
+        .spawn(move || {
+            let daemon = sift_server::WatchDaemon::new(watch_paths, debounce_ms);
+            if let Err(e) = daemon.run_with_shutdown(
+                |changed_paths| {
+                    reindex_changed_files(&config, &changed_paths);
+                },
+                flag,
+            ) {
+                tracing::error!("Watcher error: {e}");
+            }
+        })
+        .map_err(|e| {
+            sift_core::SiftError::Other(anyhow::anyhow!("Failed to spawn watcher: {e}"))
+        })?;
+
+    Ok(Some(handle))
+}
+
+/// Re-index a batch of changed files. Opens a fresh engine per batch to
+/// ensure writes don't interfere with the daemon's read-only search engine.
+fn reindex_changed_files(config: &sift_core::Config, paths: &[std::path::PathBuf]) {
+    let unique_dirs: Vec<std::path::PathBuf> = {
+        let mut dirs = std::collections::BTreeSet::new();
+        for p in paths {
+            if let Some(parent) = p.parent() {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+        dirs.into_iter().collect()
+    };
+
+    let options = sift_core::ScanOptions {
+        paths: unique_dirs,
+        ..Default::default()
+    };
+
+    match crate::pipeline::open_engine(config) {
+        Ok((engine, metadata)) => {
+            #[cfg(feature = "embeddings")]
+            let embedder = crate::pipeline::load_embedder(None);
+            #[cfg(feature = "embeddings")]
+            let embedder_ref = embedder.as_ref().map(|e| e as &dyn sift_core::Embedder);
+            #[cfg(not(feature = "embeddings"))]
+            let embedder_ref: Option<&dyn sift_core::Embedder> = None;
+            let token = sift_core::CancellationToken::new();
+            match crate::pipeline::run_scan_pipeline(
+                config,
+                &options,
+                &engine,
+                &metadata,
+                embedder_ref,
+                #[cfg(feature = "vision")]
+                None,
+                &token,
+                true, // quiet — don't print progress bars in daemon mode
+            ) {
+                Ok(stats) => {
+                    if stats.indexed > 0 {
+                        tracing::info!(
+                            indexed = stats.indexed,
+                            chunks = stats.chunks,
+                            "Watcher: re-indexed changed files"
+                        );
+                    } else {
+                        tracing::debug!(skipped = stats.skipped, "Watcher: all files unchanged");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Watcher: re-index error: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Watcher: engine error: {e}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +585,142 @@ mod tests {
     fn test_is_process_alive_for_nonexistent_pid() {
         // PID 99999999 is very unlikely to exist
         assert!(!is_process_alive(99_999_999));
+    }
+
+    #[test]
+    fn test_derive_watch_paths_collapses_nested() {
+        // When /a/b and /a are both indexed, only /a should be watched
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_dir = dir.path().join("index");
+        std::fs::create_dir_all(&index_dir).unwrap();
+
+        #[cfg(feature = "sqlite")]
+        let metadata_path = index_dir.join("metadata.db");
+        #[cfg(not(feature = "sqlite"))]
+        let metadata_path = index_dir.join("metadata.json");
+        let metadata = sift_store::MetadataStore::open(&metadata_path).unwrap();
+
+        // Simulate indexed files in nested directories
+        let parent = dir.path().join("code");
+        let child = parent.join("src");
+        std::fs::create_dir_all(&child).unwrap();
+        let f1 = parent.join("README.md");
+        let f2 = child.join("main.rs");
+        std::fs::write(&f1, "hello").unwrap();
+        std::fs::write(&f2, "fn main() {}").unwrap();
+
+        metadata
+            .upsert_source(
+                &format!("file://{}", f1.display()),
+                &[0u8; 32],
+                5,
+                "md",
+                None,
+                1,
+            )
+            .unwrap();
+        metadata
+            .upsert_source(
+                &format!("file://{}", f2.display()),
+                &[1u8; 32],
+                12,
+                "rs",
+                None,
+                1,
+            )
+            .unwrap();
+
+        let paths = derive_watch_paths(&metadata).unwrap();
+
+        // Should collapse to the parent directory only
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], parent);
+    }
+
+    #[test]
+    fn test_derive_watch_paths_disjoint_dirs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_dir = dir.path().join("index");
+        std::fs::create_dir_all(&index_dir).unwrap();
+
+        #[cfg(feature = "sqlite")]
+        let metadata_path = index_dir.join("metadata.db");
+        #[cfg(not(feature = "sqlite"))]
+        let metadata_path = index_dir.join("metadata.json");
+        let metadata = sift_store::MetadataStore::open(&metadata_path).unwrap();
+
+        let dir_a = dir.path().join("project_a");
+        let dir_b = dir.path().join("project_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let f1 = dir_a.join("a.txt");
+        let f2 = dir_b.join("b.txt");
+        std::fs::write(&f1, "a").unwrap();
+        std::fs::write(&f2, "b").unwrap();
+
+        metadata
+            .upsert_source(
+                &format!("file://{}", f1.display()),
+                &[0u8; 32],
+                1,
+                "txt",
+                None,
+                1,
+            )
+            .unwrap();
+        metadata
+            .upsert_source(
+                &format!("file://{}", f2.display()),
+                &[1u8; 32],
+                1,
+                "txt",
+                None,
+                1,
+            )
+            .unwrap();
+
+        let paths = derive_watch_paths(&metadata).unwrap();
+
+        // Both directories should be watched (they're disjoint)
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&dir_a));
+        assert!(paths.contains(&dir_b));
+    }
+
+    #[test]
+    fn test_derive_watch_paths_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_dir = dir.path().join("index");
+        std::fs::create_dir_all(&index_dir).unwrap();
+
+        #[cfg(feature = "sqlite")]
+        let metadata_path = index_dir.join("metadata.db");
+        #[cfg(not(feature = "sqlite"))]
+        let metadata_path = index_dir.join("metadata.json");
+        let metadata = sift_store::MetadataStore::open(&metadata_path).unwrap();
+
+        let paths = derive_watch_paths(&metadata).unwrap();
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_derive_watch_paths_ignores_non_file_uris() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_dir = dir.path().join("index");
+        std::fs::create_dir_all(&index_dir).unwrap();
+
+        #[cfg(feature = "sqlite")]
+        let metadata_path = index_dir.join("metadata.db");
+        #[cfg(not(feature = "sqlite"))]
+        let metadata_path = index_dir.join("metadata.json");
+        let metadata = sift_store::MetadataStore::open(&metadata_path).unwrap();
+
+        // Memory URIs should be ignored
+        metadata
+            .upsert_source("memory://agent/fact-1", &[0u8; 32], 10, "txt", None, 1)
+            .unwrap();
+
+        let paths = derive_watch_paths(&metadata).unwrap();
+        assert!(paths.is_empty());
     }
 }

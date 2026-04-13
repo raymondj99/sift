@@ -31,6 +31,9 @@ version = "0.1.4"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
+description = "Local semantic search engine — index 30+ formats, hybrid search, AI agent memory"
+repository = "https://github.com/raymondj99/sift"
+homepage = "https://github.com/raymondj99/sift"
 
 [workspace.dependencies]
 # Core

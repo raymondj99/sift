@@ -15,6 +15,8 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub watch: WatchConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,37 @@ pub struct MemoryConfig {
     /// Minimum pattern frequency to extract a skill.
     #[serde(default = "MemoryConfig::default_skill_min_frequency")]
     pub skill_min_frequency: u32,
+}
+
+/// Configuration for the filesystem watcher.
+///
+/// When enabled and the daemon is running, sift automatically re-indexes
+/// files that change on disk. Watch paths are derived from already-indexed
+/// sources unless explicitly specified.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchConfig {
+    /// Enable the filesystem watcher in daemon mode.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Debounce interval in milliseconds. Changes within this window are
+    /// batched into a single re-index operation.
+    #[serde(default = "WatchConfig::default_debounce_ms")]
+    pub debounce_ms: u64,
+}
+
+impl WatchConfig {
+    fn default_debounce_ms() -> u64 {
+        1000
+    }
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            debounce_ms: Self::default_debounce_ms(),
+        }
+    }
 }
 
 impl Config {
@@ -249,6 +282,15 @@ impl Config {
             }
         }
 
+        if let Some(watch_table) = specified.get("watch").and_then(|v| v.as_table()) {
+            if watch_table.contains_key("enabled") {
+                merged.watch.enabled = other.watch.enabled;
+            }
+            if watch_table.contains_key("debounce_ms") {
+                merged.watch.debounce_ms = other.watch.debounce_ms;
+            }
+        }
+
         merged
     }
 
@@ -309,6 +351,11 @@ impl Config {
                 "memory.prune_utility_threshold ({}) must be between 0.0 and 1.0",
                 self.memory.prune_utility_threshold
             )));
+        }
+        if self.watch.debounce_ms == 0 {
+            return Err(crate::SiftError::Config(
+                "watch.debounce_ms must be greater than 0".into(),
+            ));
         }
         Ok(())
     }
@@ -377,6 +424,8 @@ impl Config {
             }
             "memory.skill_extraction" => Some(self.memory.skill_extraction.to_string()),
             "memory.skill_min_frequency" => Some(self.memory.skill_min_frequency.to_string()),
+            "watch.enabled" => Some(self.watch.enabled.to_string()),
+            "watch.debounce_ms" => Some(self.watch.debounce_ms.to_string()),
             _ => None,
         }
     }
@@ -391,6 +440,7 @@ impl Default for Config {
             search: SearchConfig::default(),
             server: ServerConfig::default(),
             memory: MemoryConfig::default(),
+            watch: WatchConfig::default(),
         }
     }
 }
@@ -1047,5 +1097,73 @@ skill_extraction = false
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert!(!deserialized.memory.enabled);
         assert!((deserialized.memory.decay_rate - 0.02).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // WatchConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_watch_config_defaults() {
+        let config = Config::default();
+        assert!(!config.watch.enabled);
+        assert_eq!(config.watch.debounce_ms, 1000);
+    }
+
+    #[test]
+    fn test_watch_config_get_value() {
+        let config = Config::default();
+        assert_eq!(config.get_value("watch.enabled").unwrap(), "false");
+        assert_eq!(config.get_value("watch.debounce_ms").unwrap(), "1000");
+    }
+
+    #[test]
+    fn test_watch_config_merge() {
+        let global = Config::default();
+        let project_toml = r#"
+[watch]
+enabled = true
+debounce_ms = 500
+"#;
+        let project: Config = toml::from_str(project_toml).unwrap();
+        let table: toml::Table = toml::from_str(project_toml).unwrap();
+        let merged = global.merge(&project, &table);
+
+        assert!(merged.watch.enabled);
+        assert_eq!(merged.watch.debounce_ms, 500);
+    }
+
+    #[test]
+    fn test_watch_config_partial_merge() {
+        let global = Config::default();
+        let project_toml = r#"
+[watch]
+enabled = true
+"#;
+        let project: Config = toml::from_str(project_toml).unwrap();
+        let table: toml::Table = toml::from_str(project_toml).unwrap();
+        let merged = global.merge(&project, &table);
+
+        assert!(merged.watch.enabled);
+        assert_eq!(merged.watch.debounce_ms, 1000); // default preserved
+    }
+
+    #[test]
+    fn test_watch_config_validation_debounce_zero() {
+        let mut config = Config::default();
+        config.watch.debounce_ms = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("debounce_ms"));
+    }
+
+    #[test]
+    fn test_watch_config_roundtrip_toml() {
+        let mut config = Config::default();
+        config.watch.enabled = true;
+        config.watch.debounce_ms = 2000;
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+        assert!(deserialized.watch.enabled);
+        assert_eq!(deserialized.watch.debounce_ms, 2000);
     }
 }

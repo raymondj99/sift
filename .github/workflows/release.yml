@@ -195,6 +195,57 @@ jobs:
             echo '```'
           } >> RELEASE_NOTES.md
 
+      - name: Generate Homebrew formula
+        working-directory: release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          # Read SHA256 sums from the checksums file
+          sha_arm_mac=$(grep "aarch64-apple-darwin" SHA256SUMS.txt | awk '{print $1}')
+          sha_x64_mac=$(grep "x86_64-apple-darwin" SHA256SUMS.txt | awk '{print $1}')
+          sha_x64_linux=$(grep "x86_64-unknown-linux-gnu" SHA256SUMS.txt | awk '{print $1}')
+
+          cat > sift-bin.rb << FORMULA
+          class SiftBin < Formula
+            version "${version}"
+            desc "Local semantic search engine — index 30+ formats, hybrid search, AI agent memory"
+            homepage "https://github.com/${{ github.repository }}"
+            license "MIT"
+
+            if OS.mac?
+              if Hardware::CPU.arm?
+                url "https://github.com/${{ github.repository }}/releases/download/v#{version}/sift-v#{version}-aarch64-apple-darwin.tar.gz"
+                sha256 "${sha_arm_mac}"
+              else
+                url "https://github.com/${{ github.repository }}/releases/download/v#{version}/sift-v#{version}-x86_64-apple-darwin.tar.gz"
+                sha256 "${sha_x64_mac}"
+              end
+            elsif OS.linux?
+              url "https://github.com/${{ github.repository }}/releases/download/v#{version}/sift-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${sha_x64_linux}"
+            end
+
+            def install
+              bin.install "sift"
+
+              bash_completion.install "complete/sift.bash" if File.exist? "complete/sift.bash"
+              zsh_completion.install "complete/_sift" if File.exist? "complete/_sift"
+              fish_completion.install "complete/sift.fish" if File.exist? "complete/sift.fish"
+            end
+
+            test do
+              assert_match "sift #{version}", shell_output("#{bin}/sift --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc indentation
+          sed -i 's/^          //' sift-bin.rb
+
+          echo "Generated Homebrew formula for v${version}:"
+          cat sift-bin.rb
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
