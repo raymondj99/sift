@@ -1404,14 +1404,24 @@ impl MemoryStore {
     // Consolidation
     // -----------------------------------------------------------------------
 
-    /// Run deterministic consolidation: dedup similar observations and
-    /// detect contradictions.
-    ///
-    /// - Observations with identical content on the same entity are merged
-    ///   (newer supersedes older).
-    /// - Observations with very similar content (>0.95 cosine similarity by
-    ///   text overlap) on the same entity are flagged as duplicates.
+    /// Run deduplication with the default threshold (0.92 text similarity).
     pub fn consolidate(&self) -> MemResult<ConsolidationReport> {
+        self.consolidate_with_threshold(0.92)
+    }
+
+    /// Run deduplication with a configurable similarity threshold.
+    ///
+    /// Dedup works in three passes:
+    /// 1. **Exact text match** — identical content (case-insensitive) → merge
+    /// 2. **High text overlap** — Jaccard > `text_threshold` → merge
+    /// 3. **Semantic similarity** — embedding cosine > `text_threshold` when
+    ///    text overlap is moderate (0.3–threshold) → merge
+    /// 4. **Contradiction detection** — moderate text overlap (0.1–0.8) with
+    ///    high embedding similarity but low text similarity → flag
+    pub fn consolidate_with_threshold(
+        &self,
+        text_threshold: f32,
+    ) -> MemResult<ConsolidationReport> {
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let mut report = ConsolidationReport::default();
         let now = now_secs();
@@ -1439,7 +1449,7 @@ impl MemoryStore {
                 .filter_map(Result::ok)
                 .collect();
 
-            // Pairwise exact-text dedup
+            // Pairwise dedup
             let mut superseded: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
@@ -1456,7 +1466,7 @@ impl MemoryStore {
                     let content_j = observations[j].1.trim().to_lowercase();
 
                     if content_i == content_j {
-                        // Exact duplicate — supersede the older one
+                        // Pass 1: Exact duplicate — supersede the older one
                         let older_id = &observations[i].0;
                         let newer_id = &observations[j].0;
 
@@ -1472,42 +1482,54 @@ impl MemoryStore {
                         superseded.insert(older_id.clone());
                         report.duplicates_merged += 1;
                         report.superseded_ids.push(older_id.clone());
-                    } else {
-                        // Check for potential contradiction using embedding
-                        // similarity + text dissimilarity. This catches "same
-                        // topic, different answer" that Jaccard alone misses.
-                        let text_sim = text_similarity(&content_i, &content_j);
+                        continue;
+                    }
 
-                        // Near-duplicate by text alone (high overlap but not exact)
-                        if text_sim > 0.92 {
-                            // Treat as duplicate — supersede the older one
-                            let older_id = &observations[i].0;
-                            let newer_id = &observations[j].0;
-                            conn.execute(
-                                "UPDATE observations SET valid_until = ?1 WHERE id = ?2",
-                                rusqlite::params![now, older_id],
-                            )?;
-                            conn.execute(
-                                "UPDATE observations SET supersedes = ?1 WHERE id = ?2",
-                                rusqlite::params![older_id, newer_id],
-                            )?;
-                            superseded.insert(older_id.clone());
-                            report.duplicates_merged += 1;
-                            report.superseded_ids.push(older_id.clone());
-                        } else if text_sim > 0.1 && text_sim < 0.8 {
-                            // Moderate text overlap — use embeddings to check
-                            // if they're semantically about the same thing
-                            let vec_i = self.embed_observation(&observations[i].1);
-                            let vec_j = self.embed_observation(&observations[j].1);
-                            let embed_sim = cosine_similarity(&vec_i, &vec_j);
-                            let conflict_score = embed_sim * (1.0 - text_sim);
+                    let text_sim = text_similarity(&content_i, &content_j);
 
-                            if conflict_score > 0.15 && embed_sim > 0.7 {
-                                report.contradictions_found += 1;
-                                report
-                                    .contradiction_pairs
-                                    .push((observations[i].0.clone(), observations[j].0.clone()));
-                            }
+                    if text_sim > text_threshold {
+                        // Pass 2: Near-duplicate by text (high Jaccard overlap)
+                        Self::supersede_observation(
+                            &conn,
+                            &observations[i].0,
+                            &observations[j].0,
+                            now,
+                            &mut superseded,
+                            &mut report,
+                        )?;
+                    } else if text_sim > 0.3 && text_sim <= text_threshold {
+                        // Pass 3: Moderate text overlap — check embedding similarity.
+                        // This catches semantically equivalent observations with
+                        // different wording (e.g., "Prefers Rust for systems work"
+                        // vs "Uses Rust for low-level programming").
+                        let vec_i = self.embed_observation(&observations[i].1);
+                        let vec_j = self.embed_observation(&observations[j].1);
+                        let embed_sim = cosine_similarity(&vec_i, &vec_j);
+
+                        if embed_sim > text_threshold {
+                            // Semantically identical — merge
+                            Self::supersede_observation(
+                                &conn,
+                                &observations[i].0,
+                                &observations[j].0,
+                                now,
+                                &mut superseded,
+                                &mut report,
+                            )?;
+                        }
+                    } else if text_sim > 0.1 && text_sim < 0.8 {
+                        // Pass 4: Contradiction detection — same topic but
+                        // different answer (high embed sim, low text sim)
+                        let vec_i = self.embed_observation(&observations[i].1);
+                        let vec_j = self.embed_observation(&observations[j].1);
+                        let embed_sim = cosine_similarity(&vec_i, &vec_j);
+                        let conflict_score = embed_sim * (1.0 - text_sim);
+
+                        if conflict_score > 0.15 && embed_sim > 0.7 {
+                            report.contradictions_found += 1;
+                            report
+                                .contradiction_pairs
+                                .push((observations[i].0.clone(), observations[j].0.clone()));
                         }
                     }
                 }
@@ -1523,6 +1545,29 @@ impl MemoryStore {
         }
 
         Ok(report)
+    }
+
+    /// Mark the older observation as superseded by the newer one.
+    fn supersede_observation(
+        conn: &rusqlite::Connection,
+        older_id: &str,
+        newer_id: &str,
+        now: i64,
+        superseded: &mut std::collections::HashSet<String>,
+        report: &mut ConsolidationReport,
+    ) -> MemResult<()> {
+        conn.execute(
+            "UPDATE observations SET valid_until = ?1 WHERE id = ?2",
+            rusqlite::params![now, older_id],
+        )?;
+        conn.execute(
+            "UPDATE observations SET supersedes = ?1 WHERE id = ?2",
+            rusqlite::params![older_id, newer_id],
+        )?;
+        superseded.insert(older_id.to_string());
+        report.duplicates_merged += 1;
+        report.superseded_ids.push(older_id.to_string());
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -2075,6 +2120,95 @@ mod tests {
         // Only one active observation should remain
         let obs = store.get_entity_observations(&entity_id).unwrap();
         assert_eq!(obs.len(), 1);
+    }
+
+    #[test]
+    fn consolidate_with_threshold_uses_config_value() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+
+        // Two observations with ~0.6 Jaccard overlap (not exact, not near-exact)
+        // "Prefers Rust for systems programming" vs "Prefers Rust for low level programming"
+        // share "Prefers Rust for programming" but differ on "systems" vs "low level"
+        store
+            .add_observation(
+                &entity_id,
+                "Prefers Rust for systems programming work",
+                0.8,
+                "session1",
+            )
+            .unwrap();
+        store
+            .add_observation(
+                &entity_id,
+                "Prefers Rust for systems programming tasks",
+                1.0,
+                "session2",
+            )
+            .unwrap();
+
+        // With high threshold (0.95), these should NOT be merged (Jaccard < 0.95)
+        let report = store.consolidate_with_threshold(0.95).unwrap();
+        let obs = store.get_entity_observations(&entity_id).unwrap();
+        // Both should still be active (text similarity is ~0.83, under 0.95)
+        assert_eq!(obs.len(), 2, "Should not merge with high threshold");
+        assert_eq!(report.duplicates_merged, 0);
+    }
+
+    #[test]
+    fn consolidate_with_low_threshold_merges_more() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("Raymond", EntityType::Person, 1.0, "test")
+            .unwrap();
+
+        // Near-duplicates with moderate text overlap (~0.83 Jaccard)
+        store
+            .add_observation(
+                &entity_id,
+                "Prefers Rust for systems programming work",
+                0.8,
+                "session1",
+            )
+            .unwrap();
+        store
+            .add_observation(
+                &entity_id,
+                "Prefers Rust for systems programming tasks",
+                1.0,
+                "session2",
+            )
+            .unwrap();
+
+        // With low threshold (0.7), these SHOULD be merged (text sim ~0.83 > 0.7)
+        let report = store.consolidate_with_threshold(0.7).unwrap();
+        let obs = store.get_entity_observations(&entity_id).unwrap();
+        assert_eq!(obs.len(), 1, "Should merge with lower threshold");
+        assert_eq!(report.duplicates_merged, 1);
+    }
+
+    #[test]
+    fn consolidate_default_backward_compatible() {
+        // consolidate() should work identically to consolidate_with_threshold(0.92)
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        let entity_id = store
+            .save_entity("test", EntityType::Concept, 1.0, "test")
+            .unwrap();
+
+        store
+            .add_observation(&entity_id, "exact duplicate fact", 0.8, "s1")
+            .unwrap();
+        store
+            .add_observation(&entity_id, "Exact Duplicate Fact", 1.0, "s2")
+            .unwrap();
+
+        let report = store.consolidate().unwrap();
+        assert_eq!(report.duplicates_merged, 1);
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub fn run_consolidation(
     report.observations_created = observations;
 
     // Phase 2: Deduplication (extends existing consolidate())
-    let dedup = phase_deduplication(memory)?;
+    let dedup = phase_deduplication(memory, config)?;
     report.duplicates_merged = dedup.duplicates_merged;
     report.contradictions_found = dedup.contradictions_found;
 
@@ -380,8 +380,11 @@ fn extract_from_post_tool_use(
 // ===========================================================================
 
 /// Run deduplication — delegates to existing MemoryStore::consolidate().
-fn phase_deduplication(memory: &MemoryStore) -> crate::MemResult<ConsolidationReport> {
-    let report = memory.consolidate()?;
+fn phase_deduplication(
+    memory: &MemoryStore,
+    config: &ConsolidationConfig,
+) -> crate::MemResult<ConsolidationReport> {
+    let report = memory.consolidate_with_threshold(config.semantic_dedup_threshold)?;
     debug!(
         merged = report.duplicates_merged,
         contradictions = report.contradictions_found,

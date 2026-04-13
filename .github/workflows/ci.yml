@@ -115,3 +115,54 @@ jobs:
         with:
           files: cobertura.xml
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  bench:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libbz2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ort
+            ~/ort
+          key: ort-${{ runner.os }}-${{ env.ORT_VERSION }}
+      - name: Build sift
+        run: cargo build -p sift-cli --features "standard,mcp,serve"
+      - name: Run benchmarks
+        run: ./target/debug/sift bench all
+
+  bench-codingmem:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev libbz2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ort
+            ~/ort
+          key: ort-${{ runner.os }}-${{ env.ORT_VERSION }}
+      - name: Build sift
+        run: cargo build -p sift-cli --features "standard,mcp,serve"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: pip install uv
+      - name: Install bench dependencies
+        working-directory: bench
+        run: uv sync
+      - name: Run CodingMem benchmark (dry-run)
+        working-directory: bench
+        run: SIFT_BIN=../target/debug/sift uv run python eval_codingmem.py --dry-run
