@@ -244,6 +244,24 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
     println!("  Observations pruned: {}", report.observations_pruned);
     println!("  Entities pruned:     {}", report.entities_pruned);
 
+    // Regenerate agent rules after consolidation
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
+    match sift_memory::rules::generate_all_rules(&memory_store, &project_root) {
+        Ok(r) if r.files_written > 0 => {
+            println!();
+            println!(
+                "{}",
+                format!(
+                    "Rules regenerated: {} rules, ~{} tokens",
+                    r.total_rules, r.total_tokens_approx
+                )
+                .green()
+            );
+        }
+        _ => {}
+    }
+
     Ok(())
 }
 
@@ -324,6 +342,11 @@ pub fn init_hooks() -> anyhow::Result<()> {
                             "type": "command",
                             "command": format!("{exe} memory ingest --event stop"),
                             "timeout": 5000
+                        },
+                        {
+                            "type": "command",
+                            "command": format!("{exe} memory consolidate --quiet"),
+                            "timeout": 30000
                         }
                     ]
                 }

@@ -367,6 +367,30 @@ fn run_consolidation_cycle(
 
     memory.save()?;
 
+    // Regenerate agent rules if consolidation did meaningful work.
+    let did_work = report.episodes_processed > 0
+        || report.duplicates_merged > 0
+        || report.promotions > 0
+        || report.observations_pruned > 0;
+
+    if did_work {
+        if let Ok(cwd) = std::env::current_dir() {
+            let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
+            match sift_memory::rules::generate_all_rules(memory, &project_root) {
+                Ok(r) => {
+                    tracing::info!(
+                        rules = r.total_rules,
+                        tokens = r.total_tokens_approx,
+                        "Rules regenerated"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!("Rule generation skipped: {e}");
+                }
+            }
+        }
+    }
+
     Ok(report)
 }
 
