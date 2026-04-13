@@ -223,22 +223,28 @@ fn extract_from_post_compact(
     )?;
 
     memory.add_observation(&entity_id, content, 0.9, "cortex:compact")?;
-    let entities = 1usize;
+    let mut entities = 1usize;
     let mut observations = 1usize;
 
     // Extract procedural knowledge from the LLM-distilled summary.
     // PostCompact is free LLM work — Claude Code already ran the model
     // to compress context. We decompose the result into individual
-    // procedural statements and store them at higher confidence.
-    for procedure in extract_procedural_statements(content) {
+    // procedural statements and store them on a dedicated entity so
+    // they surface in recall (session entities rank poorly because
+    // their names don't match semantic queries).
+    let procedures = extract_procedural_statements(content);
+    if !procedures.is_empty() {
         let proc_entity_id = memory.save_entity(
-            &format!("session:{}", &ep.session_id),
-            EntityType::Event,
-            0.8,
-            "cortex:episode",
+            "workflow rules",
+            EntityType::Concept,
+            0.9,
+            "cortex:procedural",
         )?;
-        memory.add_observation(&proc_entity_id, &procedure, 0.95, "cortex:procedural")?;
-        observations += 1;
+        entities += 1;
+        for procedure in &procedures {
+            memory.add_observation(&proc_entity_id, procedure, 0.95, "cortex:procedural")?;
+            observations += 1;
+        }
     }
 
     Ok((entities, observations))
@@ -288,9 +294,18 @@ fn extract_from_stop(
     let mut observations = 1usize;
 
     // Extract procedural knowledge from the final message.
-    for procedure in extract_procedural_statements(message) {
-        memory.add_observation(&entity_id, &procedure, 0.9, "cortex:procedural")?;
-        observations += 1;
+    let procedures = extract_procedural_statements(message);
+    if !procedures.is_empty() {
+        let proc_entity_id = memory.save_entity(
+            "workflow rules",
+            EntityType::Concept,
+            0.9,
+            "cortex:procedural",
+        )?;
+        for procedure in &procedures {
+            memory.add_observation(&proc_entity_id, procedure, 0.9, "cortex:procedural")?;
+            observations += 1;
+        }
     }
 
     Ok((1, observations))

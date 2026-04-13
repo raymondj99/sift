@@ -103,7 +103,7 @@ fn classify_from_store(memory: &MemoryStore) -> crate::MemResult<ClassifiedRules
             Ok(ObservationRow {
                 content: row.get(0)?,
                 confidence: row.get(1)?,
-                _source: row.get(2)?,
+                source: row.get(2)?,
                 _tier: row.get(3)?,
                 entity_name: row.get(4)?,
                 entity_type: row.get(5)?,
@@ -481,7 +481,7 @@ fn truncate_entries(entries: &[String], max_tokens: usize) -> String {
 struct ObservationRow {
     content: String,
     confidence: f32,
-    _source: String,
+    source: String,
     _tier: String,
     entity_name: String,
     entity_type: String,
@@ -635,6 +635,14 @@ fn is_stale_plan(content_lower: &str, entity_name_lower: &str) -> bool {
 fn classify(row: &ObservationRow) -> Category {
     let name_lower = row.entity_name.to_lowercase();
     let content_lower = row.content.to_lowercase();
+
+    // --- Layer 0: Source-based classification (highest priority) ---
+    // Procedural observations extracted by Cortex from PostCompact/Stop hooks
+    // are workflow rules by definition — they contain "always", "never",
+    // "the flow is", etc.
+    if row.source == "cortex:procedural" {
+        return Category::Decision;
+    }
 
     // --- Layer 1: Entity type (strongest signal) ---
     match row.entity_type.as_str() {
