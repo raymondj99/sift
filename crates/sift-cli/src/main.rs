@@ -370,6 +370,8 @@ enum MemoryAction {
         #[arg(long)]
         phase: Option<String>,
     },
+    /// Generate .claude/rules/ files from consolidated memory
+    GenerateRules,
     /// Print recommended Claude Code hooks configuration
     InitHooks,
 }
@@ -643,6 +645,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             MemoryAction::Consolidate { phase } => {
                 commands::memory::consolidate(&config, phase.as_deref())?;
             }
+            MemoryAction::GenerateRules => commands::memory::generate_rules(&config)?,
             MemoryAction::InitHooks => commands::memory::init_hooks()?,
         },
 

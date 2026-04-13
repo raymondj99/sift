@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """CodingMem — novel coding assistant memory benchmark.
 
-7 categories no existing benchmark covers: cross-session knowledge,
+8 categories no existing benchmark covers: cross-session knowledge,
 preference retention, temporal updates, correction learning, workflow
-patterns, multi-project isolation, codebase expertise.
+patterns, multi-project isolation, codebase expertise, and proactive
+memory surfacing (corrections prioritized, preferences applied, conflicts
+resolved, contextual recall).
 
 Usage:
     uv run python eval_codingmem.py --batch         # Anthropic batch API

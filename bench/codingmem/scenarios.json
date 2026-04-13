@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
-  "description": "CodingMem — coding assistant memory benchmark for evaluating cross-session knowledge retention, preference learning, temporal reasoning, correction handling, workflow detection, project isolation, and codebase expertise in coding agents.",
+  "version": "0.3.0",
+  "description": "CodingMem — coding assistant memory benchmark for evaluating cross-session knowledge retention, preference learning, temporal reasoning, correction handling, workflow detection, project isolation, codebase expertise, and proactive memory surfacing in coding agents.",
   "scenarios": [
 
     {
@@ -533,6 +533,129 @@
         {"question": "What do integration tests use for temporary databases?", "answer": "tempfile::TempDir for on-disk temp directories", "category": "expertise"},
         {"question": "Why is HOME_MUTEX needed in tests?", "answer": "To serialize tests that modify the HOME environment variable", "category": "expertise"},
         {"question": "What feature flag must tests pass with?", "answer": "--all-features (to catch feature-gated code issues in CI)", "category": "expertise"}
+      ]
+    },
+
+    {
+      "id": "proactive-correction-priority",
+      "category": "proactive",
+      "description": "Test that corrections are recalled with higher priority than normal observations when both match a query.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Set up error handling in the payments service. Using thiserror for custom error types, anyhow for propagation. All handlers return Result<Json<T>, AppError> where AppError implements IntoResponse."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "stop", "content": {"last_assistant_message": "I apologize for using unwrap() in the payment handler. The issue was that unwrap causes a panic in production. The correct approach is to always use the ? operator or match/if-let for error handling. I've fixed all instances to use proper error propagation."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Reviewed error handling patterns. Key lesson from session 2: never use unwrap() in production code, always use ? operator. Added clippy lint deny(clippy::unwrap_used) to the workspace Cargo.toml."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What is the main error handling rule for the payments service?", "answer": "Never use unwrap() in production code, always use the ? operator", "category": "proactive"},
+        {"question": "What clippy lint was added to prevent unwrap usage?", "answer": "deny(clippy::unwrap_used)", "category": "proactive"},
+        {"question": "What crates are used for error handling?", "answer": "thiserror for custom error types, anyhow for propagation", "category": "proactive"},
+        {"question": "What mistake was corrected in session 2?", "answer": "Using unwrap() in payment handler, which causes panics in production", "category": "proactive"}
+      ]
+    },
+
+    {
+      "id": "proactive-preference-surfacing",
+      "category": "proactive",
+      "description": "Test that user preferences are recalled accurately and proactively when relevant context is queried.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User prefers functional programming style — no mutable state, prefer map/filter/fold over for loops. Always use const over let when possible. Arrow functions only, no function keyword. TypeScript strict mode required."}},
+            {"type": "stop", "content": {"last_assistant_message": "Finished setting up the TypeScript project with strict mode, ESLint configured for functional style."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "User prefers 2-space indentation, single quotes, no trailing commas, no semicolons. Prettier config set up. Also prefers named exports over default exports for better refactoring support."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What programming style does the user prefer for this TypeScript project?", "answer": "Functional programming — no mutable state, map/filter/fold over for loops, const over let, arrow functions only", "category": "proactive"},
+        {"question": "What indentation and quote style should be used?", "answer": "2-space indentation, single quotes, no semicolons", "category": "proactive"},
+        {"question": "Should we use default exports or named exports?", "answer": "Named exports, for better refactoring support", "category": "proactive"},
+        {"question": "Is TypeScript strict mode required?", "answer": "Yes, TypeScript strict mode is required", "category": "proactive"}
+      ]
+    },
+
+    {
+      "id": "proactive-conflict-resolution",
+      "category": "proactive",
+      "description": "Test that when conflicting information exists across sessions, the most recent version is recalled.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Database design: using PostgreSQL 14 with connection pooling via PgBouncer. Max pool size is 20 connections. Schema uses UUID primary keys and soft-delete pattern (deleted_at column)."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Migrated database from PostgreSQL to CockroachDB for multi-region support. Updated connection strings, changed pool size to 50 (CockroachDB handles more connections efficiently). Kept UUID primary keys and soft-delete pattern."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Tuned CockroachDB connection pool. Reduced from 50 to 30 connections after observing connection timeout issues in the us-west region. Added connection health checks with 5-second timeout."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What database does the project currently use?", "answer": "CockroachDB (migrated from PostgreSQL)", "category": "proactive"},
+        {"question": "What is the current connection pool size?", "answer": "30 connections (reduced from 50)", "category": "proactive"},
+        {"question": "Why was the pool size changed to 30?", "answer": "Connection timeout issues in the us-west region", "category": "proactive"},
+        {"question": "Are UUID primary keys still used?", "answer": "Yes, UUID primary keys were kept during the migration", "category": "proactive"}
+      ]
+    },
+
+    {
+      "id": "proactive-contextual-recall",
+      "category": "proactive",
+      "description": "Test that file-specific and module-specific knowledge is recalled when the relevant context is mentioned.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "The auth module (src/auth/) uses passport.js with JWT strategy. Token validation middleware is in src/auth/middleware.ts. Important: the refresh token rotation is custom-built (not from passport) because passport-jwt doesn't support refresh tokens natively."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "The billing module (src/billing/) uses Stripe SDK v14. Webhook handler is in src/billing/webhooks.ts. Critical: always verify webhook signatures before processing — use Stripe.webhooks.constructEvent() not manual parsing. Idempotency keys are stored in the payments table."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "stop", "content": {"last_assistant_message": "I apologize for the confusion with the billing webhook. The correct approach is to ALWAYS verify the Stripe webhook signature using constructEvent(), never parse the raw body directly. This is a security requirement."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What authentication library does the auth module use?", "answer": "passport.js with JWT strategy", "category": "proactive"},
+        {"question": "Why is the refresh token rotation custom-built?", "answer": "passport-jwt doesn't support refresh tokens natively", "category": "proactive"},
+        {"question": "What is critical when handling Stripe webhooks?", "answer": "Always verify webhook signatures using Stripe.webhooks.constructEvent(), never parse raw body directly", "category": "proactive"},
+        {"question": "Where are Stripe idempotency keys stored?", "answer": "In the payments table", "category": "proactive"}
       ]
     }
   ]

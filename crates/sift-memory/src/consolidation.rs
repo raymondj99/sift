@@ -229,6 +229,9 @@ fn extract_from_post_compact(
 ///
 /// The `last_assistant_message` contains the agent's final output for the
 /// session. We extract the first meaningful paragraph as a session summary.
+///
+/// If self-correction language is detected, the observation is tagged with
+/// `cortex:correction` source and gets boosted confidence (0.9 vs 0.7).
 fn extract_from_stop(
     memory: &MemoryStore,
     ep: &Episode,
@@ -242,8 +245,6 @@ fn extract_from_stop(
         _ => return Ok((0, 0)),
     };
 
-    // Extract a reasonable summary — take the first ~500 chars, trimmed to
-    // a sentence boundary if possible.
     let content = truncate_to_sentence(message, 500);
     if content.is_empty() {
         return Ok((0, 0));
@@ -256,7 +257,15 @@ fn extract_from_stop(
         "cortex:episode",
     )?;
 
-    memory.add_observation(&entity_id, &content, 0.7, "cortex:stop")?;
+    // Check for self-correction signals in the assistant's final message.
+    let is_correction = contains_correction_language(message);
+    let (confidence, source) = if is_correction {
+        (0.9, "cortex:correction")
+    } else {
+        (0.7, "cortex:stop")
+    };
+
+    memory.add_observation(&entity_id, &content, confidence, source)?;
 
     Ok((1, 1))
 }
@@ -328,6 +337,35 @@ fn extract_from_post_tool_use(
                     &format!("Ran: {short_cmd}"),
                     0.4,
                     "cortex:tool",
+                )?;
+                observations += 1;
+            }
+        }
+    }
+
+    // --- Correction detection: Bash command failures ---
+    // Check if this is a Bash tool use with error indicators in stdout.
+    // Build/test failures are high-value correction opportunities.
+    if tool_name == "Bash" {
+        if let Some(stdout) = parsed
+            .get("tool_response")
+            .and_then(|r| r.get("stdout"))
+            .and_then(|v| v.as_str())
+        {
+            if let Some(error_summary) = extract_bash_error(stdout) {
+                let cmd = extract_bash_command(parsed).unwrap_or_default();
+                let short_cmd = if cmd.len() > 80 { &cmd[..80] } else { &cmd };
+                let entity_id = memory.save_entity(
+                    &format!("session:{}", &ep.session_id),
+                    EntityType::Event,
+                    0.7,
+                    "cortex:episode",
+                )?;
+                memory.add_observation(
+                    &entity_id,
+                    &format!("Command `{short_cmd}` failed: {error_summary}"),
+                    0.8,
+                    "cortex:correction",
                 )?;
                 observations += 1;
             }
@@ -711,6 +749,117 @@ fn shorten_path(path: &str) -> String {
     parts[parts.len() - 3..].join("/")
 }
 
+/// Extract a concise error summary from Bash stdout, or None if no error.
+///
+/// Looks for common build/test failure patterns (Rust, Node, Python, etc.)
+/// and returns a truncated summary suitable for an observation.
+fn extract_bash_error(stdout: &str) -> Option<String> {
+    // Only check if stdout is long enough to contain meaningful errors
+    // and short enough that it's not just verbose output
+    if stdout.len() < 20 || stdout.len() > 50_000 {
+        return None;
+    }
+
+    let lower = stdout.to_lowercase();
+
+    // Rust compilation errors
+    if lower.contains("error[e") || lower.contains("error: could not compile") {
+        // Find the first "error" line
+        for line in stdout.lines() {
+            if line.starts_with("error") && line.len() > 10 {
+                let truncated = if line.len() > 200 { &line[..200] } else { line };
+                return Some(truncated.to_string());
+            }
+        }
+    }
+
+    // Test failures
+    if lower.contains("test result: failed") || lower.contains("failures:") {
+        // Extract the "test result" line
+        for line in stdout.lines() {
+            if line.contains("test result: FAILED") || line.contains("test result: failed") {
+                return Some(line.trim().to_string());
+            }
+        }
+    }
+
+    // General "Exit code 1" pattern (Claude Code sometimes adds this)
+    if lower.contains("exit code 1") || lower.contains("exited with code") {
+        // Find the most informative error line
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty()
+                && trimmed.len() > 10
+                && (trimmed.contains("error")
+                    || trimmed.contains("Error")
+                    || trimmed.contains("FAILED"))
+            {
+                let truncated = if trimmed.len() > 200 {
+                    &trimmed[..200]
+                } else {
+                    trimmed
+                };
+                return Some(truncated.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect self-correction language in the agent's final message.
+///
+/// Patterns: apology + fix indicators, explicit acknowledgement of mistakes,
+/// retries after errors. These suggest the agent learned something corrective
+/// during the session — worth boosting in memory.
+fn contains_correction_language(text: &str) -> bool {
+    let lower = text.to_lowercase();
+
+    // Apology + fix patterns (agent acknowledging a mistake)
+    let apology_patterns = [
+        "i apologize",
+        "sorry about that",
+        "my mistake",
+        "that was incorrect",
+        "i was wrong",
+        "let me fix",
+        "let me correct",
+        "actually, i should",
+        "actually, that",
+    ];
+
+    // Correction action patterns (agent describing what they fixed)
+    let correction_patterns = [
+        "the issue was",
+        "the problem was",
+        "the fix is",
+        "the correct approach",
+        "instead of",
+        "should have used",
+        "the error occurred because",
+    ];
+
+    // Require at least one pattern match. We check both categories
+    // because an apology without a fix description isn't useful, and
+    // a fix description without correction context might be normal.
+    for pattern in &apology_patterns {
+        if lower.contains(pattern) {
+            return true;
+        }
+    }
+    for pattern in &correction_patterns {
+        if lower.contains(pattern) {
+            // Only count correction patterns if the message is short enough
+            // to be about the fix itself, not a general discussion.
+            if text.len() < 1000 {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Truncate text to a maximum length, trying to break at a sentence boundary.
 fn truncate_to_sentence(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
@@ -913,5 +1062,105 @@ mod tests {
 
         let report = run_consolidation(&store, &episodes, &config).unwrap();
         assert_eq!(report.duplicates_merged, 1);
+    }
+
+    // -- Correction detection tests --
+
+    #[test]
+    fn test_correction_language_detection() {
+        assert!(contains_correction_language(
+            "I apologize for the confusion. Let me fix that."
+        ));
+        assert!(contains_correction_language(
+            "Sorry about that — the issue was a missing import."
+        ));
+        assert!(contains_correction_language(
+            "My mistake, I should have used the other function."
+        ));
+        assert!(!contains_correction_language(
+            "I've finished implementing the feature. All tests pass."
+        ));
+        assert!(!contains_correction_language(
+            "The build completed successfully."
+        ));
+    }
+
+    #[test]
+    fn test_bash_error_extraction() {
+        // Rust compilation error
+        let stdout = "   Compiling sift v0.1.0\nerror[E0433]: failed to resolve: use of undeclared crate\n --> src/main.rs:1:5\n\nerror: could not compile `sift`";
+        let error = extract_bash_error(stdout);
+        assert!(error.is_some());
+        assert!(error.unwrap().contains("error"));
+
+        // Test failure
+        let stdout = "running 5 tests\ntest foo ... ok\ntest bar ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed";
+        let error = extract_bash_error(stdout);
+        assert!(error.is_some());
+        assert!(error.unwrap().contains("FAILED"));
+
+        // Clean output — no error
+        let stdout = "   Compiling sift v0.1.0\n    Finished dev [unoptimized] target(s) in 2.5s";
+        assert!(extract_bash_error(stdout).is_none());
+
+        // Too short
+        assert!(extract_bash_error("ok").is_none());
+    }
+
+    #[test]
+    fn test_stop_correction_gets_tagged() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let episodes = EpisodeStore::open_in_memory().unwrap();
+
+        // Stop event with correction language
+        let content = r#"{"last_assistant_message": "I apologize for the confusion. The issue was a missing import statement. I've fixed it now and the build passes."}"#;
+        episodes.ingest("sess1", "stop", content).unwrap();
+
+        let config = ConsolidationConfig::default();
+        let report = run_consolidation(&store, &episodes, &config).unwrap();
+
+        assert_eq!(report.episodes_processed, 1);
+
+        // Verify the observation has the correction source
+        let conn = store.db().lock().unwrap();
+        let source: String = conn
+            .query_row(
+                "SELECT source FROM observations WHERE entity_id IN
+                 (SELECT id FROM entities WHERE name = 'session:sess1')
+                 AND valid_until IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source, "cortex:correction");
+    }
+
+    #[test]
+    fn test_bash_error_creates_correction_observation() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let episodes = EpisodeStore::open_in_memory().unwrap();
+
+        // Bash command with compilation error in stdout
+        let content = r#"{"tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_response": {"stdout": "   Compiling sift\nerror[E0433]: failed to resolve\nerror: could not compile", "stderr": "", "interrupted": false}}"#;
+        episodes.ingest("sess1", "post_tool_use", content).unwrap();
+
+        let config = ConsolidationConfig::default();
+        let report = run_consolidation(&store, &episodes, &config).unwrap();
+
+        // At minimum, the correction observation should exist.
+        // ("cargo build" is short enough that the regular "Ran:" observation
+        // may be skipped, but the correction always fires.)
+        assert!(report.observations_created >= 1);
+
+        // Verify correction observation exists
+        let conn = store.db().lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE source = 'cortex:correction'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(count >= 1);
     }
 }

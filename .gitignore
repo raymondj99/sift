@@ -24,6 +24,9 @@ Thumbs.db
 # sift index data
 .sift/
 
+# Cortex auto-generated rule files
+.claude/rules/cortex-*.md
+
 # Benchmark results
 /benchsuite/results/
 fuzz/target/

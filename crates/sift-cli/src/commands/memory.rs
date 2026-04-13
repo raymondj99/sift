@@ -242,6 +242,59 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Generate .claude/rules/ files from consolidated memory.
+pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
+    let dir = memory_dir(config)?;
+
+    if !dir.join("memory.db").exists() {
+        anyhow::bail!("Memory system not initialized. Run some sessions with hooks first.");
+    }
+
+    let memory_store = sift_memory::MemoryStore::open(&dir)?;
+
+    // Determine rules directory — use project .claude/rules/ if in a project,
+    // otherwise user-level ~/.claude/rules/
+    let rules_dir = if let Some(project_root) =
+        sift_core::Config::find_project_root(&std::env::current_dir().unwrap_or_default())
+    {
+        project_root.join(".claude").join("rules")
+    } else {
+        dirs_home()?.join(".claude").join("rules")
+    };
+
+    println!(
+        "{}",
+        format!("Generating rules to {}", rules_dir.display()).bold()
+    );
+
+    let report = sift_memory::rules::generate_rules(&memory_store, &rules_dir)?;
+
+    println!("  Files written:    {}", report.files_written);
+    println!("  Total rules:      {}", report.total_rules);
+    println!("  Approx tokens:    {}", report.total_tokens_approx);
+
+    if report.files_written == 0 {
+        println!(
+            "\n{}",
+            "No rules generated — run some sessions and consolidate first.".dimmed()
+        );
+    } else {
+        println!(
+            "\n{}",
+            "Rules will be auto-loaded by Claude Code on next session.".green()
+        );
+    }
+
+    Ok(())
+}
+
+fn dirs_home() -> anyhow::Result<std::path::PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))
+}
+
 /// Print recommended Claude Code hooks configuration to stdout.
 pub fn init_hooks() -> anyhow::Result<()> {
     // Resolve the sift binary path

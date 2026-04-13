@@ -14,6 +14,7 @@
 
 pub mod consolidation;
 pub mod episodes;
+pub mod rules;
 pub mod schema;
 pub mod types;
 
@@ -32,6 +33,11 @@ const RECALL_MIN_SCORE: f32 = 0.3;
 /// Minimum score for spreading-activation results (related entities).
 /// Lower than RECALL_MIN_SCORE since related memories are inherently weaker.
 const SPREADING_MIN_SCORE: f32 = 0.1;
+
+/// Retrieval boost multiplier for correction-tagged observations
+/// (source = "cortex:correction"). These are "don't repeat this mistake"
+/// memories — higher priority during recall.
+const CORRECTION_RETRIEVAL_BOOST: f32 = 1.3;
 
 /// Error type for memory operations.
 #[derive(Debug, thiserror::Error)]
@@ -985,7 +991,21 @@ impl MemoryStore {
             };
 
             let recency = 0.4 * base_decay + 0.6 * base_decay.max(last_access_recency);
-            let score = r.score * recency as f32 * retrieval_boost as f32 * obs.confidence;
+
+            // Correction boost: observations tagged as corrections get a 1.3x
+            // multiplier. These are high-value "don't repeat this mistake"
+            // memories that should surface more readily.
+            let correction_boost: f32 = if obs.source == "cortex:correction" {
+                CORRECTION_RETRIEVAL_BOOST
+            } else {
+                1.0
+            };
+
+            let score = r.score
+                * recency as f32
+                * retrieval_boost as f32
+                * obs.confidence
+                * correction_boost;
 
             memory_results.push(RecallResult {
                 observation: obs,
