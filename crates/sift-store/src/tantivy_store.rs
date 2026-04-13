@@ -140,8 +140,14 @@ impl FullTextStore for TantivyStore {
 
         let query_parser =
             QueryParser::for_index(&self.index, vec![self.text_field, self.title_field]);
+
+        // Sanitize query: strip characters that Tantivy's query parser treats
+        // as syntax (parentheses, brackets, colons, etc.). Without this, natural
+        // language queries like "Should we use unwrap()?" cause parse errors.
+        let sanitized = sanitize_tantivy_query(query);
+
         let query = query_parser
-            .parse_query(query)
+            .parse_query(&sanitized)
             .map_err(|e| sift_core::SiftError::Search(format!("Query parse error: {e}")))?;
 
         let top_docs = searcher
@@ -216,6 +222,23 @@ impl FullTextStore for TantivyStore {
         // Tantivy doesn't return delete count easily, just return 0
         Ok(0)
     }
+}
+
+/// Strip characters that Tantivy's query parser treats as syntax.
+///
+/// Tantivy's default QueryParser uses Lucene-style syntax where `()`, `[]`,
+/// `{}`, `:`, `"`, `~`, `^`, `+`, `-` have special meaning. Natural language
+/// queries (especially from LLM recall) frequently contain these characters
+/// (e.g., "unwrap()" or "What is foo::bar?"). Stripping them lets the query
+/// degrade gracefully to a bag-of-words search.
+fn sanitize_tantivy_query(query: &str) -> String {
+    query
+        .chars()
+        .map(|c| match c {
+            '(' | ')' | '[' | ']' | '{' | '}' | ':' | '"' | '~' | '^' | '+' | '\\' => ' ',
+            _ => c,
+        })
+        .collect()
 }
 
 #[cfg(test)]
