@@ -1,10 +1,16 @@
-//! Generate `.claude/rules/` files from consolidated memory.
+//! Generate agent instruction files from consolidated memory.
 //!
 //! This is the agent reasoning layer: transforms passive stored memories
-//! into proactive context that Claude Code auto-loads at session start.
+//! into proactive context that coding agents auto-load at session start.
 //!
-//! Quality over quantity: only high-confidence, concise, actionable
-//! observations become rules. Token budget is 5K total — exceeding that
+//! **Universal output**: `AGENTS.md` at project root — the Linux Foundation
+//! standard read by 20+ tools (Codex, Copilot, Cursor, Windsurf, Aider,
+//! Cline, Amp, Devin, Zed, Gemini CLI, etc.).
+//!
+//! **Claude Code native**: `.claude/rules/cortex-*.md` — path-targeted
+//! rule files, only generated when `.claude/` directory is detected.
+//!
+//! Quality over quantity: token budget is 5K total — exceeding that
 //! degrades agent performance (PlugMem, Microsoft 2026).
 
 use crate::MemoryStore;
@@ -20,6 +26,8 @@ pub struct RuleGenReport {
     pub total_tokens_approx: usize,
     pub skipped_noise: usize,
     pub skipped_long: usize,
+    /// Which output formats were written.
+    pub formats: Vec<String>,
 }
 
 /// Maximum word count for a single rule entry.
@@ -31,46 +39,47 @@ const MAX_TOTAL_TOKENS: usize = 5000;
 /// Per-category token budget.
 const MAX_CATEGORY_TOKENS: usize = MAX_TOTAL_TOKENS / 4;
 
-/// Rule file names managed by Cortex (cleaned up between runs).
-const RULE_FILES: &[&str] = &[
+/// Rule file names managed by Cortex in `.claude/rules/`.
+const CLAUDE_RULE_FILES: &[&str] = &[
     "cortex-preferences.md",
     "cortex-corrections.md",
     "cortex-decisions.md",
     "cortex-workflows.md",
 ];
 
-/// Generate rule files from the memory store's consolidated observations.
+/// Markers for the Cortex-managed section in AGENTS.md.
+const AGENTS_MD_START: &str = "<!-- cortex:start -->";
+const AGENTS_MD_END: &str = "<!-- cortex:end -->";
+
+// ===========================================================================
+// Classified rules (intermediate representation)
+// ===========================================================================
+
+/// Classified and deduplicated rules ready for output.
 ///
-/// Pipeline:
-/// 1. Query active observations (prefer semantic tier, skip noise)
-/// 2. Classify into categories using entity name + type + content signals
-/// 3. Deduplicate within each category
-/// 4. Write `.md` files to the rules directory (capped at token budget)
-pub fn generate_rules(memory: &MemoryStore, rules_dir: &Path) -> crate::MemResult<RuleGenReport> {
-    let mut report = RuleGenReport::default();
+/// This is the intermediate representation between DB queries and file writing.
+/// Built once, written to multiple output formats.
+struct ClassifiedRules {
+    preferences: Vec<String>,
+    corrections: Vec<String>,
+    decisions: Vec<String>,
+    workflows: Vec<String>,
+    skipped_noise: usize,
+    skipped_long: usize,
+}
 
-    std::fs::create_dir_all(rules_dir)
-        .map_err(|e| crate::MemoryError::InvalidInput(format!("Cannot create rules dir: {e}")))?;
-
-    // Clean stale cortex-* files from prior runs before writing new ones.
-    for name in RULE_FILES {
-        let path = rules_dir.join(name);
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-
+/// Classify observations from the memory store into rule categories.
+fn classify_from_store(memory: &MemoryStore) -> crate::MemResult<ClassifiedRules> {
     let conn = memory.db().lock().unwrap_or_else(|e| e.into_inner());
 
-    let mut preferences: Vec<String> = Vec::new();
-    let mut corrections: Vec<String> = Vec::new();
-    let mut decisions: Vec<String> = Vec::new();
-    let mut workflows: Vec<String> = Vec::new();
-
+    let mut preferences = Vec::new();
+    let mut corrections = Vec::new();
+    let mut decisions = Vec::new();
+    let mut workflows = Vec::new();
+    let mut skipped_noise = 0usize;
+    let mut skipped_long = 0usize;
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Query active observations with entity metadata.
-    // Order: procedural > semantic > episodic, then by confidence and access count.
     let mut stmt = conn.prepare(
         "SELECT o.content, o.confidence, o.source, o.memory_tier,
                 e.name, e.entity_type
@@ -104,42 +113,35 @@ pub fn generate_rules(memory: &MemoryStore, rules_dir: &Path) -> crate::MemResul
         .collect();
 
     for row in &rows {
-        // --- Quality gate ---
-
         if row.confidence < 0.5 {
             continue;
         }
-
         if is_noise(&row.content, &row.entity_name, &row.entity_type) {
-            report.skipped_noise += 1;
+            skipped_noise += 1;
             continue;
         }
-
         let word_count = row.content.split_whitespace().count();
         if word_count > MAX_ENTRY_WORDS {
-            report.skipped_long += 1;
+            skipped_long += 1;
             continue;
         }
         if word_count < 5 {
-            report.skipped_noise += 1;
+            skipped_noise += 1;
             continue;
         }
-
-        // Dedup by normalized content.
         let norm = row.content.to_lowercase().trim().to_string();
         if seen.contains(&norm) {
             continue;
         }
         seen.insert(norm);
 
-        // --- Classification ---
         match classify(row) {
-            Category::Preference => preferences.push(format!("- {}", row.content)),
-            Category::Correction => corrections.push(format!("- {}", row.content)),
+            Category::Preference => preferences.push(row.content.clone()),
+            Category::Correction => corrections.push(row.content.clone()),
             Category::Decision => {
-                decisions.push(format!("- [{}] {}", row.entity_name, row.content));
+                decisions.push(format!("[{}] {}", row.entity_name, row.content));
             }
-            Category::Workflow => workflows.push(format!("- {}", row.content)),
+            Category::Workflow => workflows.push(row.content.clone()),
             Category::Skip => {}
         }
     }
@@ -153,53 +155,75 @@ pub fn generate_rules(memory: &MemoryStore, rules_dir: &Path) -> crate::MemResul
 
     for (_name, pattern, frequency) in &skill_rows {
         if *frequency >= 3 {
-            workflows.push(format!("- {pattern} (detected {frequency} times)"));
+            workflows.push(format!("{pattern} (detected {frequency} times)"));
         }
     }
 
-    drop(stmt);
-    drop(conn);
+    Ok(ClassifiedRules {
+        preferences,
+        corrections,
+        decisions,
+        workflows,
+        skipped_noise,
+        skipped_long,
+    })
+}
 
-    // --- Write rule files ---
-    let mut total_tokens = 0usize;
+// ===========================================================================
+// Public API
+// ===========================================================================
 
-    total_tokens += write_rule_file(
-        rules_dir,
-        "cortex-preferences.md",
-        "User Preferences",
-        "These preferences were learned from past sessions. Apply them without asking.",
-        &preferences,
-        &mut report,
-    )?;
+/// Generate rules to all applicable formats for the given project root.
+///
+/// Always writes/updates `AGENTS.md` at `project_root`.
+/// If `.claude/` directory exists, also writes `.claude/rules/cortex-*.md`.
+pub fn generate_all_rules(
+    memory: &MemoryStore,
+    project_root: &Path,
+) -> crate::MemResult<RuleGenReport> {
+    let rules = classify_from_store(memory)?;
+    let mut report = RuleGenReport {
+        skipped_noise: rules.skipped_noise,
+        skipped_long: rules.skipped_long,
+        ..Default::default()
+    };
 
-    total_tokens += write_rule_file(
-        rules_dir,
-        "cortex-corrections.md",
-        "Corrections & Patterns to Avoid",
-        "These mistakes were corrected in past sessions. Do not repeat them.",
-        &corrections,
-        &mut report,
-    )?;
+    // 1. Always: update AGENTS.md
+    let agents_tokens = write_agents_md(project_root, &rules, &mut report)?;
+    report.total_tokens_approx += agents_tokens;
 
-    total_tokens += write_rule_file(
-        rules_dir,
-        "cortex-decisions.md",
-        "Project Decisions",
-        "Architecture and technology choices from past sessions.",
-        &decisions,
-        &mut report,
-    )?;
+    // 2. If Claude Code detected: also write .claude/rules/
+    let claude_dir = project_root.join(".claude");
+    if claude_dir.is_dir() {
+        let rules_dir = claude_dir.join("rules");
+        let claude_tokens = write_claude_rules(&rules_dir, &rules, &mut report)?;
+        report.total_tokens_approx += claude_tokens;
+    }
 
-    total_tokens += write_rule_file(
-        rules_dir,
-        "cortex-workflows.md",
-        "Workflow Patterns",
-        "Tool usage patterns detected across sessions.",
-        &workflows,
-        &mut report,
-    )?;
+    info!(
+        files = report.files_written,
+        rules = report.total_rules,
+        tokens = report.total_tokens_approx,
+        formats = ?report.formats,
+        skipped_noise = report.skipped_noise,
+        skipped_long = report.skipped_long,
+        "Rule generation complete"
+    );
 
-    report.total_tokens_approx = total_tokens;
+    Ok(report)
+}
+
+/// Generate rules only to `.claude/rules/` (backward-compatible API).
+pub fn generate_rules(memory: &MemoryStore, rules_dir: &Path) -> crate::MemResult<RuleGenReport> {
+    let rules = classify_from_store(memory)?;
+    let mut report = RuleGenReport {
+        skipped_noise: rules.skipped_noise,
+        skipped_long: rules.skipped_long,
+        ..Default::default()
+    };
+
+    let tokens = write_claude_rules(rules_dir, &rules, &mut report)?;
+    report.total_tokens_approx = tokens;
 
     info!(
         files = report.files_written,
@@ -213,7 +237,244 @@ pub fn generate_rules(memory: &MemoryStore, rules_dir: &Path) -> crate::MemResul
     Ok(report)
 }
 
-// --- Internal types ---
+// ===========================================================================
+// AGENTS.md writer
+// ===========================================================================
+
+/// Write or update the Cortex section in AGENTS.md.
+///
+/// If AGENTS.md exists, replaces the `<!-- cortex:start -->...<!-- cortex:end -->`
+/// section while preserving all user content. If the markers don't exist yet,
+/// appends the section at the end. If the file doesn't exist, creates it with
+/// just the Cortex section.
+fn write_agents_md(
+    project_root: &Path,
+    rules: &ClassifiedRules,
+    report: &mut RuleGenReport,
+) -> crate::MemResult<usize> {
+    let cortex_section = build_agents_md_section(rules);
+    if cortex_section.is_empty() {
+        return Ok(0);
+    }
+
+    let agents_path = project_root.join("AGENTS.md");
+    let existing = std::fs::read_to_string(&agents_path).unwrap_or_default();
+
+    let new_content = if existing.is_empty() {
+        // No existing file — create with just Cortex section
+        cortex_section.clone()
+    } else if let Some((before, after)) = split_at_markers(&existing) {
+        // Markers exist — replace the section
+        format!("{before}{cortex_section}{after}")
+    } else {
+        // File exists but no markers — append
+        format!("{}\n\n{}", existing.trim_end(), cortex_section)
+    };
+
+    std::fs::write(&agents_path, &new_content)
+        .map_err(|e| crate::MemoryError::InvalidInput(format!("Cannot write AGENTS.md: {e}")))?;
+
+    let tokens = cortex_section.split_whitespace().count();
+    let rule_count = cortex_section
+        .lines()
+        .filter(|l| l.starts_with("- "))
+        .count();
+    report.files_written += 1;
+    report.total_rules += rule_count;
+    report.formats.push("AGENTS.md".to_string());
+
+    Ok(tokens)
+}
+
+/// Build the Cortex-managed section for AGENTS.md.
+fn build_agents_md_section(rules: &ClassifiedRules) -> String {
+    let mut sections = Vec::new();
+
+    let prefs = truncate_entries(&rules.preferences, MAX_CATEGORY_TOKENS);
+    if !prefs.is_empty() {
+        sections.push(format!(
+            "### User Preferences\n\n\
+             These preferences were learned from past sessions. Apply them without asking.\n\n\
+             {prefs}"
+        ));
+    }
+
+    let corr = truncate_entries(&rules.corrections, MAX_CATEGORY_TOKENS);
+    if !corr.is_empty() {
+        sections.push(format!(
+            "### Corrections & Patterns to Avoid\n\n\
+             These mistakes were corrected in past sessions. Do not repeat them.\n\n\
+             {corr}"
+        ));
+    }
+
+    let dec = truncate_entries(&rules.decisions, MAX_CATEGORY_TOKENS);
+    if !dec.is_empty() {
+        sections.push(format!(
+            "### Project Decisions\n\n\
+             Architecture and technology choices from past sessions.\n\n\
+             {dec}"
+        ));
+    }
+
+    let wf = truncate_entries(&rules.workflows, MAX_CATEGORY_TOKENS);
+    if !wf.is_empty() {
+        sections.push(format!(
+            "### Workflow Patterns\n\n\
+             Tool usage patterns detected across sessions.\n\n\
+             {wf}"
+        ));
+    }
+
+    if sections.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "{AGENTS_MD_START}\n\
+         ## Learned Context (auto-generated by Cortex)\n\n\
+         > This section is automatically maintained by [Cortex](https://github.com/raymondj99/sift).\n\
+         > Do not edit manually — changes will be overwritten on next `sift memory generate-rules`.\n\n\
+         {}\n\
+         {AGENTS_MD_END}\n",
+        sections.join("\n\n")
+    )
+}
+
+/// Split file content at the cortex markers, returning (before, after).
+fn split_at_markers(content: &str) -> Option<(String, String)> {
+    let start = content.find(AGENTS_MD_START)?;
+    let end = content.find(AGENTS_MD_END)?;
+    if end <= start {
+        return None;
+    }
+    let before = &content[..start];
+    let after = &content[end + AGENTS_MD_END.len()..];
+    Some((before.to_string(), after.to_string()))
+}
+
+// ===========================================================================
+// .claude/rules/ writer
+// ===========================================================================
+
+/// Write classified rules to `.claude/rules/cortex-*.md` files.
+fn write_claude_rules(
+    rules_dir: &Path,
+    rules: &ClassifiedRules,
+    report: &mut RuleGenReport,
+) -> crate::MemResult<usize> {
+    std::fs::create_dir_all(rules_dir)
+        .map_err(|e| crate::MemoryError::InvalidInput(format!("Cannot create rules dir: {e}")))?;
+
+    // Clean stale cortex-* files from prior runs.
+    for name in CLAUDE_RULE_FILES {
+        let path = rules_dir.join(name);
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    let mut total_tokens = 0usize;
+
+    total_tokens += write_claude_rule_file(
+        rules_dir,
+        "cortex-preferences.md",
+        "User Preferences",
+        "These preferences were learned from past sessions. Apply them without asking.",
+        &rules.preferences,
+        report,
+    )?;
+
+    total_tokens += write_claude_rule_file(
+        rules_dir,
+        "cortex-corrections.md",
+        "Corrections & Patterns to Avoid",
+        "These mistakes were corrected in past sessions. Do not repeat them.",
+        &rules.corrections,
+        report,
+    )?;
+
+    total_tokens += write_claude_rule_file(
+        rules_dir,
+        "cortex-decisions.md",
+        "Project Decisions",
+        "Architecture and technology choices from past sessions.",
+        &rules.decisions,
+        report,
+    )?;
+
+    total_tokens += write_claude_rule_file(
+        rules_dir,
+        "cortex-workflows.md",
+        "Workflow Patterns",
+        "Tool usage patterns detected across sessions.",
+        &rules.workflows,
+        report,
+    )?;
+
+    if total_tokens > 0 {
+        report.formats.push(".claude/rules/".to_string());
+    }
+
+    Ok(total_tokens)
+}
+
+/// Write a single `.claude/rules/cortex-*.md` file.
+fn write_claude_rule_file(
+    rules_dir: &Path,
+    filename: &str,
+    title: &str,
+    description: &str,
+    entries: &[String],
+    report: &mut RuleGenReport,
+) -> crate::MemResult<usize> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+
+    let body = truncate_entries(entries, MAX_CATEGORY_TOKENS);
+    if body.is_empty() {
+        return Ok(0);
+    }
+
+    let content = format!("# {title} (auto-generated by Cortex)\n\n{description}\n\n{body}\n");
+    let tokens = content.split_whitespace().count();
+
+    std::fs::write(rules_dir.join(filename), &content)
+        .map_err(|e| crate::MemoryError::InvalidInput(format!("Cannot write rules: {e}")))?;
+
+    let rule_count = body.lines().filter(|l| l.starts_with("- ")).count();
+    report.files_written += 1;
+    report.total_rules += rule_count;
+
+    Ok(tokens)
+}
+
+// ===========================================================================
+// Shared helpers
+// ===========================================================================
+
+/// Truncate a list of entries to fit within a token budget, formatting as bullets.
+fn truncate_entries(entries: &[String], max_tokens: usize) -> String {
+    let mut result = String::new();
+    let mut tokens = 0usize;
+
+    for entry in entries {
+        let line = format!("- {entry}\n");
+        let line_tokens = line.split_whitespace().count();
+        if tokens + line_tokens > max_tokens {
+            break;
+        }
+        result.push_str(&line);
+        tokens += line_tokens;
+    }
+
+    result
+}
+
+// ===========================================================================
+// Internal types
+// ===========================================================================
 
 struct ObservationRow {
     content: String,
@@ -232,16 +493,16 @@ enum Category {
     Skip,
 }
 
-// --- Noise filtering ---
+// ===========================================================================
+// Noise filtering
+// ===========================================================================
 
 /// Returns true if this observation is noise that should never be a rule.
 fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
-    // XML/HTML tags = conversation summaries or payload dumps.
     if content.contains('<') && content.contains('>') {
         return true;
     }
 
-    // File-edit records from episode processing.
     let trimmed = content.trim();
     if trimmed.starts_with("Modified ")
         || trimmed.starts_with("Created ")
@@ -253,17 +514,14 @@ fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
         return true;
     }
 
-    // Session events (episode artifacts, not rules).
     if entity_type == "event" || entity_name.starts_with("session:") {
         return true;
     }
 
-    // File-path entities (from episode processing).
     if entity_name.contains('/') || entity_name.ends_with(".rs") || entity_name.ends_with(".toml") {
         return true;
     }
 
-    // Research notes and analysis — informational, not actionable.
     let name_lower = entity_name.to_lowercase();
     if name_lower.contains("research")
         || name_lower.contains("benchmarking")
@@ -275,14 +533,11 @@ fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
     false
 }
 
-// --- Classification ---
+// ===========================================================================
+// Classification
+// ===========================================================================
 
 /// Classify an observation into a rule category.
-///
-/// Uses a layered approach:
-/// 1. Entity type (strongest signal — preference, tool, fact, project)
-/// 2. Entity name patterns (design, config, protocol, etc.)
-/// 3. Content keyword signals (for concept entities)
 fn classify(row: &ObservationRow) -> Category {
     let name_lower = row.entity_name.to_lowercase();
     let content_lower = row.content.to_lowercase();
@@ -291,8 +546,6 @@ fn classify(row: &ObservationRow) -> Category {
     match row.entity_type.as_str() {
         "preference" | "person" => return Category::Preference,
         "tool" => return Category::Workflow,
-
-        // Facts: almost always decisions or corrections.
         "fact" => {
             if content_lower.starts_with("don't ")
                 || content_lower.starts_with("avoid ")
@@ -304,48 +557,29 @@ fn classify(row: &ObservationRow) -> Category {
             }
             return Category::Decision;
         }
-
-        // Project entities → decisions.
         "project" => return Category::Decision,
-
         _ => {}
     }
 
-    // --- Layer 2: Entity name patterns (for concept/event types) ---
-
-    // Person name heuristic — only for concept entities where the type
-    // is ambiguous. Don't apply to projects, facts, etc.
+    // --- Layer 2: Entity name patterns ---
     if row.entity_type == "concept" && is_person_entity(&name_lower) {
         return Category::Preference;
     }
 
-    // Architecture/design/protocol entities → decisions.
     if name_lower.contains("design")
         || name_lower.contains("architecture")
         || name_lower.contains("protocol")
+        || name_lower.contains("config")
+        || name_lower.contains("phase ")
+        || name_lower.contains(" plan")
+        || name_lower.contains("hook")
+        || name_lower.contains("schema")
     {
         return Category::Decision;
     }
 
-    // Config entities → decisions (infrastructure choices).
-    if name_lower.contains("config") {
-        return Category::Decision;
-    }
-
-    // Phase/plan entities → decisions (implementation choices).
-    if name_lower.contains("phase ") || name_lower.contains(" plan") {
-        return Category::Decision;
-    }
-
-    // Hook schema entities → decisions.
-    if name_lower.contains("hook") || name_lower.contains("schema") {
-        return Category::Decision;
-    }
-
-    // --- Layer 3: Content signals (for concept entities) ---
-
+    // --- Layer 3: Content signals (concept entities) ---
     if row.entity_type == "concept" {
-        // Coding patterns → corrections or decisions.
         if name_lower.contains("pattern") {
             if content_lower.starts_with("don't ")
                 || content_lower.starts_with("avoid ")
@@ -355,14 +589,7 @@ fn classify(row: &ObservationRow) -> Category {
             }
             return Category::Decision;
         }
-
-        // Named project/tool entities stored as concept.
-        if name_lower == "sift" || name_lower.starts_with("cortex") {
-            return Category::Decision;
-        }
-
-        // "MCP protocol" etc.
-        if name_lower.contains("mcp") {
+        if name_lower == "sift" || name_lower.starts_with("cortex") || name_lower.contains("mcp") {
             return Category::Decision;
         }
     }
@@ -370,71 +597,21 @@ fn classify(row: &ObservationRow) -> Category {
     Category::Skip
 }
 
-/// Heuristic: is this entity name a person?
+/// Heuristic: is this entity name likely a person?
 fn is_person_entity(name_lower: &str) -> bool {
-    // Single capitalized word or known names. We use a simple heuristic:
-    // no spaces + no special chars + not a known concept/tool name.
     let is_single_word = !name_lower.contains(' ')
         && !name_lower.contains('/')
         && !name_lower.contains(':')
         && !name_lower.contains('.');
 
-    // Known project/tool names that could be confused with person names.
     let known_non_persons = ["sift", "cortex", "rust", "sqlite", "tantivy", "mcp"];
 
     is_single_word && !known_non_persons.contains(&name_lower)
 }
 
-// --- File writing ---
-
-/// Write a single rule file if there's content. Returns token count.
-fn write_rule_file(
-    rules_dir: &Path,
-    filename: &str,
-    title: &str,
-    description: &str,
-    entries: &[String],
-    report: &mut RuleGenReport,
-) -> crate::MemResult<usize> {
-    if entries.is_empty() {
-        return Ok(0);
-    }
-
-    let body = truncate_rules(entries, MAX_CATEGORY_TOKENS);
-    if body.is_empty() {
-        return Ok(0);
-    }
-
-    let content = format!("# {title} (auto-generated by Cortex)\n\n{description}\n\n{body}\n");
-    let tokens = content.split_whitespace().count();
-
-    std::fs::write(rules_dir.join(filename), &content)
-        .map_err(|e| crate::MemoryError::InvalidInput(format!("Cannot write rules: {e}")))?;
-
-    let rule_count = body.lines().filter(|l| l.starts_with("- ")).count();
-    report.files_written += 1;
-    report.total_rules += rule_count;
-
-    Ok(tokens)
-}
-
-/// Truncate a list of rules to fit within a token budget.
-fn truncate_rules(rules: &[String], max_tokens: usize) -> String {
-    let mut result = String::new();
-    let mut tokens = 0usize;
-
-    for rule in rules {
-        let rule_tokens = rule.split_whitespace().count();
-        if tokens + rule_tokens > max_tokens {
-            break;
-        }
-        result.push_str(rule);
-        result.push('\n');
-        tokens += rule_tokens;
-    }
-
-    result
-}
+// ===========================================================================
+// Tests
+// ===========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -446,7 +623,6 @@ mod tests {
     fn populated_store() -> MemoryStore {
         let store = MemoryStore::open_in_memory().unwrap();
 
-        // Person entity — should go to preferences
         let raymond = store
             .save_entity("Raymond", crate::types::EntityType::Person, 1.0, "test")
             .unwrap();
@@ -467,7 +643,6 @@ mod tests {
             )
             .unwrap();
 
-        // Project decision entity — should go to decisions
         let project = store
             .save_entity("taskflow", EntityType::Project, 0.9, "test")
             .unwrap();
@@ -480,7 +655,6 @@ mod tests {
             )
             .unwrap();
 
-        // Fact entity (MCP config) — should go to decisions
         let config = store
             .save_entity("MCP config", EntityType::Fact, 0.9, "test")
             .unwrap();
@@ -493,7 +667,6 @@ mod tests {
             )
             .unwrap();
 
-        // Correction — should go to corrections (via fact entity + content)
         let correction = store
             .save_entity("sift MCP config", EntityType::Fact, 0.9, "test")
             .unwrap();
@@ -506,7 +679,6 @@ mod tests {
             )
             .unwrap();
 
-        // Research entity — should be filtered as noise
         let research = store
             .save_entity(
                 "Cortex research foundations",
@@ -524,7 +696,6 @@ mod tests {
             )
             .unwrap();
 
-        // Session event — should be filtered as noise
         let session = store
             .save_entity("session:abc123", EntityType::Event, 0.5, "cortex:episode")
             .unwrap();
@@ -537,7 +708,6 @@ mod tests {
             )
             .unwrap();
 
-        // File-path entity — should be filtered as noise
         let file_ent = store
             .save_entity(
                 "sift-memory/src/lib.rs",
@@ -557,6 +727,8 @@ mod tests {
 
         store
     }
+
+    // -- Claude rules tests (backward compat) --
 
     #[test]
     fn test_generate_rules_creates_correct_files() {
@@ -627,8 +799,7 @@ mod tests {
 
         assert!(report.skipped_noise > 0, "Should skip some noise");
 
-        // Read all generated files and verify noise is absent
-        let all_content: String = RULE_FILES
+        let all_content: String = CLAUDE_RULE_FILES
             .iter()
             .filter_map(|f| std::fs::read_to_string(tmp.path().join(f)).ok())
             .collect();
@@ -646,8 +817,6 @@ mod tests {
     #[test]
     fn test_stale_files_are_cleaned() {
         let tmp = tempfile::TempDir::new().unwrap();
-
-        // Create a stale rule file
         std::fs::write(
             tmp.path().join("cortex-workflows.md"),
             "# Stale\n- old rule\n",
@@ -657,10 +826,8 @@ mod tests {
         let store = populated_store();
         generate_rules(&store, tmp.path()).unwrap();
 
-        // The stale file should be removed if no workflows were generated
-        let workflows_path = tmp.path().join("cortex-workflows.md");
         assert!(
-            !workflows_path.exists(),
+            !tmp.path().join("cortex-workflows.md").exists(),
             "Stale workflow file should be cleaned up"
         );
     }
@@ -668,8 +835,6 @@ mod tests {
     #[test]
     fn test_token_budget_is_respected() {
         let store = MemoryStore::open_in_memory().unwrap();
-
-        // Create many observations to exceed the budget
         let entity = store
             .save_entity("big-project", EntityType::Project, 1.0, "test")
             .unwrap();
@@ -690,32 +855,150 @@ mod tests {
         let report = generate_rules(&store, tmp.path()).unwrap();
 
         assert!(
-            report.total_tokens_approx <= MAX_TOTAL_TOKENS + 100, // small margin for headers
+            report.total_tokens_approx <= MAX_TOTAL_TOKENS + 100,
             "Total tokens ({}) should be within budget ({})",
             report.total_tokens_approx,
             MAX_TOTAL_TOKENS
         );
     }
 
-    /// Full pipeline: episode ingestion + sift_remember + consolidation + rules.
-    ///
-    /// The rule generator primarily works on intentional memory (sift_remember)
-    /// not raw episode artifacts (which are session events, correctly filtered
-    /// as noise). This test simulates a realistic scenario with both.
+    // -- AGENTS.md tests --
+
+    #[test]
+    fn test_agents_md_created_from_scratch() {
+        let store = populated_store();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let report = generate_all_rules(&store, tmp.path()).unwrap();
+
+        assert!(
+            report.formats.contains(&"AGENTS.md".to_string()),
+            "Should write AGENTS.md"
+        );
+
+        let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains(AGENTS_MD_START));
+        assert!(agents.contains(AGENTS_MD_END));
+        assert!(agents.contains("Rust"), "Should contain preferences");
+        assert!(agents.contains("Cortex"), "Should reference Cortex");
+    }
+
+    #[test]
+    fn test_agents_md_preserves_user_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create existing AGENTS.md with user content
+        std::fs::write(
+            tmp.path().join("AGENTS.md"),
+            "# My Project\n\nThis is my project.\n\n## Build\n\n```bash\ncargo build\n```\n",
+        )
+        .unwrap();
+
+        let store = populated_store();
+        generate_all_rules(&store, tmp.path()).unwrap();
+
+        let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+        assert!(
+            agents.contains("# My Project"),
+            "Should preserve user heading"
+        );
+        assert!(
+            agents.contains("cargo build"),
+            "Should preserve user build instructions"
+        );
+        assert!(
+            agents.contains(AGENTS_MD_START),
+            "Should add Cortex section"
+        );
+        assert!(agents.contains("Rust"), "Should contain Cortex rules");
+    }
+
+    #[test]
+    fn test_agents_md_replaces_existing_cortex_section() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create AGENTS.md with an existing Cortex section
+        let content = format!(
+            "# My Project\n\n{AGENTS_MD_START}\n## Old Cortex Section\n- old rule\n{AGENTS_MD_END}\n\n## Build\ncargo build\n"
+        );
+        std::fs::write(tmp.path().join("AGENTS.md"), &content).unwrap();
+
+        let store = populated_store();
+        generate_all_rules(&store, tmp.path()).unwrap();
+
+        let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+        assert!(
+            !agents.contains("old rule"),
+            "Should replace old Cortex section"
+        );
+        assert!(agents.contains("Rust"), "Should contain new Cortex content");
+        assert!(
+            agents.contains("# My Project"),
+            "Should preserve content before markers"
+        );
+        assert!(
+            agents.contains("cargo build"),
+            "Should preserve content after markers"
+        );
+    }
+
+    #[test]
+    fn test_generate_all_writes_claude_rules_when_detected() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create .claude/ directory to simulate Claude Code project
+        std::fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+
+        let store = populated_store();
+        let report = generate_all_rules(&store, tmp.path()).unwrap();
+
+        assert!(
+            report.formats.contains(&"AGENTS.md".to_string()),
+            "Should write AGENTS.md"
+        );
+        assert!(
+            report.formats.contains(&".claude/rules/".to_string()),
+            "Should write .claude/rules/ when .claude/ exists"
+        );
+
+        // Verify Claude rules exist
+        assert!(tmp
+            .path()
+            .join(".claude/rules/cortex-preferences.md")
+            .exists());
+    }
+
+    #[test]
+    fn test_generate_all_skips_claude_rules_when_no_claude_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // No .claude/ directory
+
+        let store = populated_store();
+        let report = generate_all_rules(&store, tmp.path()).unwrap();
+
+        assert!(
+            report.formats.contains(&"AGENTS.md".to_string()),
+            "Should always write AGENTS.md"
+        );
+        assert!(
+            !report.formats.contains(&".claude/rules/".to_string()),
+            "Should NOT write .claude/rules/ without .claude/ dir"
+        );
+    }
+
+    // -- Full pipeline test --
+
     #[test]
     fn test_full_pipeline_ingest_to_rules() {
         let store = MemoryStore::open_in_memory().unwrap();
         let episodes = EpisodeStore::open_in_memory_for_bench().unwrap();
         let config = ConsolidationConfig::default();
 
-        // 1. Simulate episode ingestion (raw events)
         let compact = r#"{"compact_summary": "User prefers functional programming style in TypeScript. Always use const, arrow functions."}"#;
         episodes.ingest("sess1", "post_compact", compact).unwrap();
 
         let stop = r#"{"last_assistant_message": "I apologize for using var instead of const. The correct approach is to always use const for immutable bindings."}"#;
         episodes.ingest("sess1", "stop", stop).unwrap();
 
-        // 2. Simulate sift_remember (intentional memory storage)
         let user = store
             .save_entity("Developer", EntityType::Person, 1.0, "sift_remember")
             .unwrap();
@@ -757,44 +1040,33 @@ mod tests {
             )
             .unwrap();
 
-        // 3. Run consolidation (processes episodes)
         let report = crate::consolidation::run_consolidation(&store, &episodes, &config).unwrap();
         assert!(
             report.episodes_processed >= 2,
             "Should process both episodes"
         );
 
-        // 4. Generate rules
+        // Test generate_all_rules with .claude/ present
         let tmp = tempfile::TempDir::new().unwrap();
-        let rule_report = generate_rules(&store, tmp.path()).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+
+        let rule_report = generate_all_rules(&store, tmp.path()).unwrap();
         assert!(
-            rule_report.files_written >= 2,
-            "Should write preferences + decisions + corrections"
+            rule_report.files_written >= 3,
+            "Should write AGENTS.md + claude rules"
         );
 
-        // 5. Verify rule content
-        let prefs =
-            std::fs::read_to_string(tmp.path().join("cortex-preferences.md")).unwrap_or_default();
-        assert!(
-            prefs.contains("functional"),
-            "Preferences should mention functional style"
-        );
+        // Verify AGENTS.md
+        let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains("functional"));
+        assert!(agents.contains("Vite"));
 
-        let decisions =
-            std::fs::read_to_string(tmp.path().join("cortex-decisions.md")).unwrap_or_default();
-        assert!(
-            decisions.contains("Vite"),
-            "Decisions should mention bundler"
-        );
+        // Verify Claude rules
+        let prefs = std::fs::read_to_string(tmp.path().join(".claude/rules/cortex-preferences.md"))
+            .unwrap_or_default();
+        assert!(prefs.contains("functional"));
 
-        let corrections =
-            std::fs::read_to_string(tmp.path().join("cortex-corrections.md")).unwrap_or_default();
-        assert!(
-            corrections.contains("var"),
-            "Corrections should mention var prohibition"
-        );
-
-        // 6. Verify correction tagging from Stop event
+        // Verify correction tagging
         let conn = store.db().lock().unwrap();
         let correction_count: i64 = conn
             .query_row(
@@ -803,7 +1075,6 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        // At least 2: one from sift_remember, one from the Stop event
         assert!(
             correction_count >= 2,
             "Should have corrections from both sift_remember and Stop event"

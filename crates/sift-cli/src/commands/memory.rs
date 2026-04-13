@@ -251,27 +251,22 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
     }
 
     let memory_store = sift_memory::MemoryStore::open(&dir)?;
+    let cwd = std::env::current_dir().unwrap_or_default();
 
-    // Determine rules directory — use project .claude/rules/ if in a project,
-    // otherwise user-level ~/.claude/rules/
-    let rules_dir = if let Some(project_root) =
-        sift_core::Config::find_project_root(&std::env::current_dir().unwrap_or_default())
-    {
-        project_root.join(".claude").join("rules")
-    } else {
-        dirs_home()?.join(".claude").join("rules")
-    };
+    // Determine project root — use git root or cwd.
+    let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
 
     println!(
         "{}",
-        format!("Generating rules to {}", rules_dir.display()).bold()
+        format!("Generating rules for {}", project_root.display()).bold()
     );
 
-    let report = sift_memory::rules::generate_rules(&memory_store, &rules_dir)?;
+    let report = sift_memory::rules::generate_all_rules(&memory_store, &project_root)?;
 
     println!("  Files written:    {}", report.files_written);
     println!("  Total rules:      {}", report.total_rules);
     println!("  Approx tokens:    {}", report.total_tokens_approx);
+    println!("  Formats:          {}", report.formats.join(", "));
 
     if report.files_written == 0 {
         println!(
@@ -279,20 +274,22 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
             "No rules generated — run some sessions and consolidate first.".dimmed()
         );
     } else {
+        let targets: Vec<&str> = report
+            .formats
+            .iter()
+            .map(|f| match f.as_str() {
+                "AGENTS.md" => "AGENTS.md (20+ tools)",
+                ".claude/rules/" => ".claude/rules/ (Claude Code)",
+                other => other,
+            })
+            .collect();
         println!(
             "\n{}",
-            "Rules will be auto-loaded by Claude Code on next session.".green()
+            format!("Rules written to: {}", targets.join(", ")).green()
         );
     }
 
     Ok(())
-}
-
-fn dirs_home() -> anyhow::Result<std::path::PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))
 }
 
 /// Print recommended Claude Code hooks configuration to stdout.
