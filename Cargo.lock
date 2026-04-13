@@ -3094,7 +3094,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sift-chunker"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "proptest",
@@ -3114,7 +3114,7 @@ dependencies = [
 
 [[package]]
 name = "sift-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3152,7 +3152,7 @@ dependencies = [
 
 [[package]]
 name = "sift-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "sift-embed"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3189,7 +3189,7 @@ dependencies = [
 
 [[package]]
 name = "sift-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -3209,7 +3209,7 @@ dependencies = [
 
 [[package]]
 name = "sift-memory"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3225,7 +3225,7 @@ dependencies = [
 
 [[package]]
 name = "sift-parsers"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "calamine",
@@ -3249,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "sift-server"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -3270,7 +3270,7 @@ dependencies = [
 
 [[package]]
 name = "sift-sources"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3285,7 +3285,7 @@ dependencies = [
 
 [[package]]
 name = "sift-store"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "criterion",
