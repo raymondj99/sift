@@ -195,7 +195,9 @@ fn phase_episode_processing(
 /// Extract knowledge from a PostCompact event.
 ///
 /// The `compact_summary` is pre-distilled by the LLM — this is the highest
-/// value signal. We store it as an observation on a session entity.
+/// value signal. We store the full summary on a session entity AND extract
+/// any procedural knowledge (workflow rules, processes) as separate
+/// high-confidence observations on named entities.
 fn extract_from_post_compact(
     memory: &MemoryStore,
     ep: &Episode,
@@ -221,8 +223,25 @@ fn extract_from_post_compact(
     )?;
 
     memory.add_observation(&entity_id, content, 0.9, "cortex:compact")?;
+    let entities = 1usize;
+    let mut observations = 1usize;
 
-    Ok((1, 1))
+    // Extract procedural knowledge from the LLM-distilled summary.
+    // PostCompact is free LLM work — Claude Code already ran the model
+    // to compress context. We decompose the result into individual
+    // procedural statements and store them at higher confidence.
+    for procedure in extract_procedural_statements(content) {
+        let proc_entity_id = memory.save_entity(
+            &format!("session:{}", &ep.session_id),
+            EntityType::Event,
+            0.8,
+            "cortex:episode",
+        )?;
+        memory.add_observation(&proc_entity_id, &procedure, 0.95, "cortex:procedural")?;
+        observations += 1;
+    }
+
+    Ok((entities, observations))
 }
 
 /// Extract knowledge from a Stop event.
@@ -266,8 +285,15 @@ fn extract_from_stop(
     };
 
     memory.add_observation(&entity_id, &content, confidence, source)?;
+    let mut observations = 1usize;
 
-    Ok((1, 1))
+    // Extract procedural knowledge from the final message.
+    for procedure in extract_procedural_statements(message) {
+        memory.add_observation(&entity_id, &procedure, 0.9, "cortex:procedural")?;
+        observations += 1;
+    }
+
+    Ok((1, observations))
 }
 
 /// Extract knowledge from a PostToolUse event.
@@ -818,6 +844,127 @@ fn extract_bash_error(stdout: &str) -> Option<String> {
 /// Patterns: apology + fix indicators, explicit acknowledgement of mistakes,
 /// retries after errors. These suggest the agent learned something corrective
 /// during the session — worth boosting in memory.
+/// Extract procedural knowledge statements from free text.
+///
+/// Scans for sentences containing procedural markers — language that
+/// describes workflows, processes, rules, or conventions that should
+/// persist across sessions. Returns deduplicated, cleaned statements.
+///
+/// This is the bridge between rule-based extraction and semantic
+/// understanding: we can't parse intent, but we can detect the
+/// linguistic markers that humans and LLMs use when stating procedures.
+fn extract_procedural_statements(text: &str) -> Vec<String> {
+    // Procedural markers: phrases that signal a workflow rule or process
+    const PROCEDURAL_MARKERS: &[&str] = &[
+        // Process/flow descriptions
+        "the flow is",
+        "the process is",
+        "the steps are",
+        "the workflow is",
+        "the order is",
+        "the sequence is",
+        // Imperatives
+        "always ",
+        "never ",
+        "must ",
+        "should always",
+        "should never",
+        "make sure to ",
+        "be sure to ",
+        "don't forget to ",
+        "remember to ",
+        // Forward-looking conventions
+        "going forward",
+        "from now on",
+        "in the future",
+        "for future ",
+        // Conditional rules
+        "before releasing",
+        "before tagging",
+        "before pushing",
+        "before deploying",
+        "before merging",
+        "after releasing",
+        "after tagging",
+        "after merging",
+        // Convention establishment
+        "the convention is",
+        "the rule is",
+        "the pattern is",
+        "we agreed to",
+        "we decided to",
+        "the standard is",
+    ];
+
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Split into sentences (handle both . and \n as boundaries)
+    for sentence in split_into_sentences(text) {
+        let trimmed = sentence.trim();
+        if trimmed.len() < 20 || trimmed.len() > 300 {
+            continue;
+        }
+
+        let sentence_lower = trimmed.to_lowercase();
+        let has_marker = PROCEDURAL_MARKERS
+            .iter()
+            .any(|marker| sentence_lower.contains(marker));
+
+        if has_marker {
+            // Deduplicate by lowercase content
+            if seen.insert(sentence_lower) {
+                results.push(trimmed.to_string());
+            }
+        }
+    }
+
+    // Cap at 5 procedural statements per episode to avoid flooding
+    results.truncate(5);
+    results
+}
+
+/// Split text into sentences, handling common boundaries.
+///
+/// Uses `. ` (period + whitespace) as the primary delimiter to avoid
+/// splitting on dots inside filenames (e.g., `CHANGELOG.md`), version
+/// numbers, or URLs. Newlines always split.
+fn split_into_sentences(text: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+
+    for (i, ch) in text.char_indices() {
+        let is_boundary = match ch {
+            '\n' => true,
+            '!' | '?' => true,
+            '.' => {
+                // Only split on `.` if followed by whitespace or end-of-string.
+                // This avoids splitting "CHANGELOG.md" or "v0.1.5".
+                let next = i + 1;
+                next >= bytes.len() || bytes[next].is_ascii_whitespace()
+            }
+            _ => false,
+        };
+
+        if is_boundary {
+            let candidate = text[start..=i].trim();
+            if !candidate.is_empty() && candidate.len() > 1 {
+                sentences.push(candidate);
+            }
+            start = i + ch.len_utf8();
+        }
+    }
+
+    // Don't forget the trailing fragment
+    let tail = text[start..].trim();
+    if !tail.is_empty() && tail.len() > 1 {
+        sentences.push(tail);
+    }
+
+    sentences
+}
+
 fn contains_correction_language(text: &str) -> bool {
     let lower = text.to_lowercase();
 
@@ -1168,5 +1315,100 @@ mod tests {
             )
             .unwrap();
         assert!(count >= 1);
+    }
+
+    // ── Procedural knowledge extraction tests ─────────────────────────
+
+    #[test]
+    fn test_extract_procedural_always_never() {
+        let text = "The CI is green. Always update CHANGELOG.md before tagging a release. The tests pass on both platforms.";
+        let procs = extract_procedural_statements(text);
+        assert_eq!(procs.len(), 1);
+        assert!(procs[0].contains("CHANGELOG"));
+    }
+
+    #[test]
+    fn test_extract_procedural_flow_description() {
+        let text = "We finished the feature. The flow is: bump version, commit, tag, push. Then CI handles the rest.";
+        let procs = extract_procedural_statements(text);
+        assert_eq!(procs.len(), 1);
+        assert!(procs[0].contains("flow is"));
+    }
+
+    #[test]
+    fn test_extract_procedural_going_forward() {
+        let text = "Fixed the bug. Going forward, we should run clippy before committing. The linter caught it.";
+        let procs = extract_procedural_statements(text);
+        assert_eq!(procs.len(), 1);
+        assert!(procs[0].contains("Going forward"));
+    }
+
+    #[test]
+    fn test_extract_procedural_none_found() {
+        let text = "The search engine uses BM25 for keyword matching. It supports 30+ file formats. Performance is good.";
+        let procs = extract_procedural_statements(text);
+        assert!(procs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_procedural_capped_at_five() {
+        let text =
+            "Always do A. Never do B. Must do C. Always do D. Never do E. Always do F. Must do G.";
+        let procs = extract_procedural_statements(text);
+        assert!(procs.len() <= 5);
+    }
+
+    #[test]
+    fn test_extract_procedural_deduplicates() {
+        let text = "Always run the full test suite before merging. Some other text here. Always run the full test suite before merging.";
+        let procs = extract_procedural_statements(text);
+        assert_eq!(procs.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_procedural_skips_short_sentences() {
+        let text = "Always X. That's too short to be useful.";
+        let procs = extract_procedural_statements(text);
+        // "Always X." is < 20 chars, should be skipped
+        assert!(procs.is_empty());
+    }
+
+    #[test]
+    fn test_split_into_sentences_basic() {
+        let sentences = split_into_sentences("First sentence. Second sentence. Third.");
+        assert_eq!(sentences.len(), 3);
+    }
+
+    #[test]
+    fn test_split_into_sentences_newlines() {
+        let sentences = split_into_sentences("Line one\nLine two\nLine three");
+        assert_eq!(sentences.len(), 3);
+    }
+
+    #[test]
+    fn test_post_compact_extracts_procedural_knowledge() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let episodes = EpisodeStore::open_in_memory().unwrap();
+
+        let summary = "Built the file watcher feature. Going forward, always update CHANGELOG.md before tagging a release. The daemon now watches indexed directories.";
+        let content = serde_json::json!({ "compact_summary": summary }).to_string();
+        episodes.ingest("sess1", "post_compact", &content).unwrap();
+
+        let config = ConsolidationConfig::default();
+        let report = run_consolidation(&store, &episodes, &config).unwrap();
+
+        // Should have the full summary + the procedural statement
+        assert!(report.observations_created >= 2);
+
+        // Verify procedural observation exists
+        let conn = store.db().lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE source = 'cortex:procedural'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(count >= 1, "Should extract procedural knowledge");
     }
 }
