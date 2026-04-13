@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-13
+
+### Added
+- **Cortex automated memory system** — dual-path architecture with hot-path
+  encoding (Claude Code hooks, <100ms, zero LLM cost) and cold-path
+  consolidation (5-phase pipeline: episode processing, deduplication,
+  episodic-to-semantic promotion, skill extraction, decay & pruning).
+- **Three memory tiers**: episodic (raw session events), semantic (consolidated
+  facts promoted by access frequency or age), procedural (learned workflow
+  patterns, never auto-deleted).
+- **Conflict detection**: `sift_remember` flags contradictions when new facts
+  conflict with existing observations on the same entity.
+- **Retrieval-dependent strengthening**: frequently recalled memories gain
+  relevance via access counting and logarithmic boosting.
+- **Agent reasoning layer**: `sift memory generate-rules` produces
+  `.claude/rules/` files from consolidated memory (decisions, preferences,
+  corrections, workflows). Auto-regenerated after each consolidation cycle.
+- **Daemon file watcher**: when `watch.enabled = true`, the daemon monitors
+  all previously-indexed directories and re-indexes modified files on change.
+  Watch paths derived automatically from indexed sources; nested directories
+  collapsed. New `[watch]` config section with `enabled` and `debounce_ms`.
+- **Benchmark regression CI**: `sift bench all` (7 Cortex invariant tests) and
+  CodingMem dry-run (memory pipeline integrity) run after tests pass.
+- **Auto-generated Homebrew formula** in release CI with real SHA256 checksums.
+- MCP end-to-end test: 33 checks across full pipeline.
+- `sift init` template now includes `[watch]` and `[memory]` sections.
+- Workspace metadata (`description`, `repository`, `homepage`) for crates.io.
+- 18 new tests (839 → 857).
+
+### Changed
+- **Configurable semantic deduplication**: `semantic_dedup_threshold` config
+  value is now wired into the consolidation engine (was defined but hardcoded
+  at 0.92). `consolidate_with_threshold()` API for programmatic control.
+- **Embedding-based semantic dedup**: observations with moderate text overlap
+  (0.3–threshold) are now also checked via cosine similarity. Catches
+  semantically equivalent observations with different wording that pure
+  Jaccard text comparison missed.
+- `WatchDaemon::run_with_shutdown()` accepts `Arc<AtomicBool>` for graceful
+  shutdown with pending change flush.
+- README: added daemon mode section, updated config reference with `[watch]`
+  and `[memory]`.
+
+### Fixed
+- Homebrew formula: corrected test command (`vx` → `sift`), Linux target
+  (`musl` → `gnu`), added `v` prefix to release URLs.
+- Tantivy query parser input sanitization for unmatched parentheses.
+
 ## [0.1.4] - 2026-04-05
 
 ### Added
