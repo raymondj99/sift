@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
-  "description": "CodingMem — coding assistant memory benchmark for evaluating cross-session knowledge retention, preference learning, temporal reasoning, correction handling, workflow detection, project isolation, codebase expertise, and proactive memory surfacing in coding agents.",
+  "version": "0.4.0",
+  "description": "CodingMem — coding assistant memory benchmark for evaluating cross-session knowledge retention, preference learning, temporal reasoning, correction handling, workflow detection, project isolation, codebase expertise, proactive memory surfacing, and knowledge conflict detection in coding agents.",
   "scenarios": [
 
     {
@@ -656,6 +656,150 @@
         {"question": "Why is the refresh token rotation custom-built?", "answer": "passport-jwt doesn't support refresh tokens natively", "category": "proactive"},
         {"question": "What is critical when handling Stripe webhooks?", "answer": "Always verify webhook signatures using Stripe.webhooks.constructEvent(), never parse raw body directly", "category": "proactive"},
         {"question": "Where are Stripe idempotency keys stored?", "answer": "In the payments table", "category": "proactive"}
+      ]
+    },
+
+    {
+      "id": "conflict-framework-migration",
+      "category": "conflict",
+      "description": "Test conflict detection when a frontend framework is migrated between sessions.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Frontend architecture: using React 18 with Redux Toolkit for state management. Components follow atomic design pattern. Testing with Jest and React Testing Library."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Migrated state management from Redux Toolkit to Zustand. Zustand is simpler — no boilerplate, no providers, just hooks. Kept React 18 and atomic design pattern. Migrated tests from Jest to Vitest for faster execution."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What state management library does the project use?", "answer": "Zustand (migrated from Redux Toolkit)", "category": "conflict"},
+        {"question": "Why was Zustand chosen over Redux?", "answer": "Simpler, no boilerplate, no providers, just hooks", "category": "conflict"},
+        {"question": "What testing framework is used?", "answer": "Vitest (migrated from Jest)", "category": "conflict"},
+        {"question": "Is React still used for the frontend?", "answer": "Yes, React 18 is still used", "category": "conflict"}
+      ]
+    },
+
+    {
+      "id": "conflict-build-tool-change",
+      "category": "conflict",
+      "description": "Test conflict detection across three sessions with progressive build tool changes.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Build system: using Webpack 5 with Babel for transpilation. Bundle size is 2.4MB gzipped. Hot module replacement enabled. Config in webpack.config.js."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Migrated from Webpack to Vite for dev server. Vite uses native ESM — instant HMR, no bundling during development. Kept Webpack for production builds temporarily. Dev startup went from 12s to 400ms."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Completed full migration from Webpack to Vite. Removed webpack.config.js. Production builds now use Rollup (built into Vite). Bundle size reduced from 2.4MB to 1.8MB gzipped. Babel replaced with SWC."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What build tool does the project use?", "answer": "Vite (fully migrated from Webpack)", "category": "conflict"},
+        {"question": "What transpiler is used?", "answer": "SWC (replaced Babel)", "category": "conflict"},
+        {"question": "What is the current production bundle size?", "answer": "1.8MB gzipped (reduced from 2.4MB)", "category": "conflict"},
+        {"question": "Is webpack.config.js still used?", "answer": "No, it was removed after full migration to Vite", "category": "conflict"}
+      ]
+    },
+
+    {
+      "id": "conflict-error-handling-pattern",
+      "category": "conflict",
+      "description": "Test conflict where a coding pattern recommendation is explicitly reversed.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Error handling in the API layer: using try-catch blocks with generic Error class. All errors logged to console. HTTP responses return 500 for all unexpected errors."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "stop", "content": {"last_assistant_message": "I apologize for the previous error handling approach. Using generic Error with try-catch and 500 for everything is an anti-pattern. The correct approach: use custom error classes extending AppError with specific HTTP status codes. Use a centralized error middleware instead of try-catch in every route. Log to structured logging (winston) not console.log."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "Should generic Error class be used for API errors?", "answer": "No, use custom error classes extending AppError with specific HTTP status codes", "category": "conflict"},
+        {"question": "How should errors be handled in route handlers?", "answer": "Use centralized error middleware, not try-catch in every route", "category": "conflict"},
+        {"question": "What logging approach should be used?", "answer": "Structured logging with winston, not console.log", "category": "conflict"}
+      ]
+    },
+
+    {
+      "id": "conflict-version-upgrade",
+      "category": "conflict",
+      "description": "Test conflict when a major version upgrade changes behavior.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Using Next.js 13 with Pages Router. API routes in pages/api/. Data fetching with getServerSideProps and getStaticProps. Styling with styled-components."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Upgraded to Next.js 14 with App Router. Migrated from Pages Router to app/ directory. API routes now use Route Handlers (app/api/route.ts). Data fetching uses React Server Components with async/await instead of getServerSideProps. Replaced styled-components with Tailwind CSS for better server component support."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "What version of Next.js is the project using?", "answer": "Next.js 14 (upgraded from 13)", "category": "conflict"},
+        {"question": "Which router does the project use?", "answer": "App Router (migrated from Pages Router)", "category": "conflict"},
+        {"question": "How are API routes defined?", "answer": "Route Handlers in app/api/route.ts (not pages/api/)", "category": "conflict"},
+        {"question": "How is data fetching done?", "answer": "React Server Components with async/await (not getServerSideProps)", "category": "conflict"},
+        {"question": "What styling solution is used?", "answer": "Tailwind CSS (replaced styled-components)", "category": "conflict"}
+      ]
+    },
+
+    {
+      "id": "conflict-architecture-shift",
+      "category": "conflict",
+      "description": "Test conflict when architecture fundamentally changes with some elements preserved.",
+      "sessions": [
+        {
+          "id": "session-1",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Architecture: monolithic Express.js application. Single PostgreSQL database. Deployed as a Docker container on a single EC2 instance. Authentication via session cookies stored in Redis."}}
+          ]
+        },
+        {
+          "id": "session-2",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Split monolith into 3 microservices: auth-service, order-service, notification-service. Each service has its own PostgreSQL database (database-per-service pattern). Communication via RabbitMQ message queue. Deployed on Kubernetes."}}
+          ]
+        },
+        {
+          "id": "session-3",
+          "events": [
+            {"type": "post_compact", "content": {"compact_summary": "Replaced RabbitMQ with Apache Kafka for event streaming. RabbitMQ was dropping messages under high load. Kafka provides persistent event log and replay capability. Services still use PostgreSQL individually. Added API Gateway (Kong) in front of microservices."}}
+          ]
+        }
+      ],
+      "questions": [
+        {"question": "Is the application a monolith or microservices?", "answer": "Microservices (3 services: auth, order, notification)", "category": "conflict"},
+        {"question": "What message broker is used for inter-service communication?", "answer": "Apache Kafka (replaced RabbitMQ)", "category": "conflict"},
+        {"question": "Why was RabbitMQ replaced?", "answer": "RabbitMQ was dropping messages under high load; Kafka provides persistent event log and replay", "category": "conflict"},
+        {"question": "What database pattern is used?", "answer": "Database-per-service, each microservice has its own PostgreSQL", "category": "conflict"},
+        {"question": "How is the system deployed?", "answer": "Kubernetes (not single EC2 instance)", "category": "conflict"},
+        {"question": "Is there an API gateway?", "answer": "Yes, Kong API Gateway in front of microservices", "category": "conflict"}
       ]
     }
   ]

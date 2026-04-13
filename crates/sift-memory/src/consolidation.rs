@@ -631,10 +631,13 @@ fn phase_decay_and_pruning(
     let mut decay_stmt = conn.prepare("UPDATE observations SET confidence = ?1 WHERE id = ?2")?;
 
     for obs in &observations {
-        // Compute utility score
+        // Compute utility score.
+        // Base confidence alone provides non-zero utility — an observation
+        // doesn't need to be recalled to be valuable. Retrieval boosts it.
         let access_freq = (1.0 + obs.access_count as f64).ln();
         let tokens = obs.token_count.unwrap_or(50).max(1) as f64;
-        let utility = (access_freq * f64::from(obs.confidence)) / (tokens / 50.0).max(1.0);
+        let confidence = f64::from(obs.confidence);
+        let utility = ((1.0 + access_freq) * confidence) / (tokens / 50.0).max(1.0);
 
         // Also factor in recency
         let last_active = obs.last_accessed.unwrap_or(obs.observed_at);

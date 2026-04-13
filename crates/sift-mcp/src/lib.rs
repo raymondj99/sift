@@ -900,10 +900,25 @@ impl SiftMcpServer {
             .map_err(|e| internal_err(format!("Failed to save entity: {e}")))?;
 
         let mut obs_ids = Vec::new();
+        let mut all_conflicts = Vec::new();
         for obs_text in &req.observations {
             if obs_text.is_empty() {
                 continue;
             }
+
+            // Detect conflicts BEFORE adding the observation
+            if let Ok(conflicts) = memory.detect_conflicts(&entity_id, obs_text, 0.15) {
+                for c in conflicts {
+                    all_conflicts.push(serde_json::json!({
+                        "observation_id": c.observation_id,
+                        "existing_fact": c.existing_content,
+                        "new_fact": obs_text,
+                        "conflict_score": (c.conflict_score * 100.0).round() / 100.0,
+                        "hint": "Consider using sift_forget to invalidate the old observation if it is outdated"
+                    }));
+                }
+            }
+
             let obs_id = memory
                 .add_observation(&entity_id, obs_text, 1.0, source)
                 .map_err(|e| internal_err(format!("Failed to add observation: {e}")))?;
@@ -927,13 +942,17 @@ impl SiftMcpServer {
         // Persist to disk
         let _ = memory.save();
 
-        let response = serde_json::json!({
+        let mut response = serde_json::json!({
             "status": "remembered",
             "entity_id": entity_id,
             "entity": req.entity,
             "observations_added": obs_ids.len(),
             "relations_added": rel_ids.len(),
         });
+
+        if !all_conflicts.is_empty() {
+            response["potential_conflicts"] = serde_json::json!(all_conflicts);
+        }
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&response).map_err(|e| internal_err(e.to_string()))?,

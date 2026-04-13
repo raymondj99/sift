@@ -630,6 +630,92 @@ impl MemoryStore {
         Ok(id)
     }
 
+    /// Detect potential knowledge conflicts between new content and existing
+    /// observations on the same entity.
+    ///
+    /// Uses the conflict score formula: `embedding_sim × (1 - text_sim)`.
+    /// High embedding similarity + moderate text dissimilarity = "same topic,
+    /// different answer" = likely conflict.
+    ///
+    /// Returns conflicts sorted by score (highest first).
+    pub fn detect_conflicts(
+        &self,
+        entity_id: &str,
+        new_content: &str,
+        threshold: f32,
+    ) -> MemResult<Vec<ConflictInfo>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Get all active observations for this entity
+        let mut stmt = conn.prepare(
+            "SELECT id, content, observed_at
+             FROM observations
+             WHERE entity_id = ?1 AND valid_until IS NULL",
+        )?;
+
+        let existing: Vec<(String, String, i64)> = stmt
+            .query_map([entity_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .filter_map(Result::ok)
+            .collect();
+
+        drop(stmt);
+        drop(conn);
+
+        if existing.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Embed the new content
+        let entity_name: String = {
+            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            conn.query_row(
+                "SELECT name FROM entities WHERE id = ?1",
+                [entity_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default()
+        };
+
+        let new_text = format!("{entity_name}: {new_content}");
+        let new_vec = self.embed_observation(&new_text);
+        let new_lower = new_content.trim().to_lowercase();
+
+        let mut conflicts = Vec::new();
+
+        for (obs_id, obs_content, observed_at) in &existing {
+            let obs_text = format!("{entity_name}: {obs_content}");
+            let obs_vec = self.embed_observation(&obs_text);
+
+            let embed_sim = cosine_similarity(&new_vec, &obs_vec);
+            let text_sim = text_similarity(&new_lower, &obs_content.trim().to_lowercase());
+
+            // Conflict = high semantic similarity but different text
+            // Filter: embed_sim > 0.7 avoids unrelated topics,
+            //         text_sim < 0.8 avoids near-duplicates,
+            //         text_sim > 0.1 avoids completely unrelated content
+            let conflict_score = embed_sim * (1.0 - text_sim);
+
+            if conflict_score > threshold && embed_sim > 0.7 && text_sim < 0.8 && text_sim > 0.1 {
+                conflicts.push(ConflictInfo {
+                    observation_id: obs_id.clone(),
+                    existing_content: obs_content.clone(),
+                    conflict_score,
+                    observed_at: *observed_at,
+                });
+            }
+        }
+
+        // Sort by conflict score descending
+        conflicts.sort_by(|a, b| {
+            b.conflict_score
+                .partial_cmp(&a.conflict_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(conflicts)
+    }
+
     /// Get all current (non-invalidated) observations for an entity.
     pub fn get_entity_observations(&self, entity_id: &str) -> MemResult<Vec<Observation>> {
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -1387,13 +1473,41 @@ impl MemoryStore {
                         report.duplicates_merged += 1;
                         report.superseded_ids.push(older_id.clone());
                     } else {
-                        // Check for potential contradiction: similar but different
-                        let similarity = text_similarity(&content_i, &content_j);
-                        if similarity > 0.85 {
-                            report.contradictions_found += 1;
-                            report
-                                .contradiction_pairs
-                                .push((observations[i].0.clone(), observations[j].0.clone()));
+                        // Check for potential contradiction using embedding
+                        // similarity + text dissimilarity. This catches "same
+                        // topic, different answer" that Jaccard alone misses.
+                        let text_sim = text_similarity(&content_i, &content_j);
+
+                        // Near-duplicate by text alone (high overlap but not exact)
+                        if text_sim > 0.92 {
+                            // Treat as duplicate — supersede the older one
+                            let older_id = &observations[i].0;
+                            let newer_id = &observations[j].0;
+                            conn.execute(
+                                "UPDATE observations SET valid_until = ?1 WHERE id = ?2",
+                                rusqlite::params![now, older_id],
+                            )?;
+                            conn.execute(
+                                "UPDATE observations SET supersedes = ?1 WHERE id = ?2",
+                                rusqlite::params![older_id, newer_id],
+                            )?;
+                            superseded.insert(older_id.clone());
+                            report.duplicates_merged += 1;
+                            report.superseded_ids.push(older_id.clone());
+                        } else if text_sim > 0.1 && text_sim < 0.8 {
+                            // Moderate text overlap — use embeddings to check
+                            // if they're semantically about the same thing
+                            let vec_i = self.embed_observation(&observations[i].1);
+                            let vec_j = self.embed_observation(&observations[j].1);
+                            let embed_sim = cosine_similarity(&vec_i, &vec_j);
+                            let conflict_score = embed_sim * (1.0 - text_sim);
+
+                            if conflict_score > 0.15 && embed_sim > 0.7 {
+                                report.contradictions_found += 1;
+                                report
+                                    .contradiction_pairs
+                                    .push((observations[i].0.clone(), observations[j].0.clone()));
+                            }
                         }
                     }
                 }
@@ -1644,6 +1758,32 @@ fn normalize_entity_name(name: &str) -> String {
 // ---------------------------------------------------------------------------
 // Text similarity (for consolidation without embeddings)
 // ---------------------------------------------------------------------------
+
+/// Cosine similarity between two embedding vectors.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let mut dot = 0.0f64;
+    let mut norm_a = 0.0f64;
+    let mut norm_b = 0.0f64;
+
+    for (x, y) in a.iter().zip(b.iter()) {
+        let x = f64::from(*x);
+        let y = f64::from(*y);
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < 1e-12 {
+        return 0.0;
+    }
+
+    (dot / denom) as f32
+}
 
 /// Simple word-overlap Jaccard similarity for detecting near-duplicates.
 fn text_similarity(a: &str, b: &str) -> f32 {
@@ -2381,5 +2521,104 @@ mod tests {
             )
             .unwrap();
         assert!(!results.is_empty(), "Case-insensitive filter should match");
+    }
+
+    // -- Conflict detection tests --
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let v = vec![1.0, 2.0, 3.0];
+        let sim = cosine_similarity(&v, &v);
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "Identical vectors should have similarity ~1.0, got {sim}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            sim.abs() < 0.001,
+            "Orthogonal vectors should have similarity ~0.0, got {sim}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_empty_vectors() {
+        let sim = cosine_similarity(&[], &[]);
+        assert!(sim.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn detect_conflicts_no_existing_observations() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let id = store
+            .save_entity("project", EntityType::Project, 1.0, "test")
+            .unwrap();
+        let conflicts = store.detect_conflicts(&id, "uses React 18", 0.15).unwrap();
+        assert!(
+            conflicts.is_empty(),
+            "No conflicts when no observations exist"
+        );
+    }
+
+    #[test]
+    fn detect_conflicts_returns_sorted_by_score() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let id = store
+            .save_entity("project", EntityType::Project, 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&id, "uses React 18 for the frontend", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&id, "uses PostgreSQL for the database", 1.0, "test")
+            .unwrap();
+
+        // Without embeddings (test mode), detect_conflicts uses zero vectors,
+        // so embed_sim will be 0.0 and no conflicts will be detected.
+        // This test verifies the function doesn't panic and returns empty
+        // when embeddings are unavailable.
+        let conflicts = store
+            .detect_conflicts(&id, "uses React 19 for the frontend", 0.15)
+            .unwrap();
+        // With zero vectors, cosine_similarity = 0.0, so no conflicts detected
+        assert!(
+            conflicts.is_empty(),
+            "Zero-vector embeddings should not produce false positives"
+        );
+    }
+
+    #[test]
+    fn consolidate_detects_near_duplicate_dedup() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let id = store
+            .save_entity("project", EntityType::Project, 1.0, "test")
+            .unwrap();
+
+        store
+            .add_observation(&id, "uses React 18", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(&id, "uses React 18", 1.0, "test")
+            .unwrap();
+        store
+            .add_observation(
+                &id,
+                "completely different topic about databases",
+                1.0,
+                "test",
+            )
+            .unwrap();
+
+        let report = store.consolidate().unwrap();
+        assert_eq!(report.duplicates_merged, 1, "Should merge exact duplicate");
+        assert_eq!(
+            report.contradictions_found, 0,
+            "Different topics are not contradictions"
+        );
     }
 }

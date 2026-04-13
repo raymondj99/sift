@@ -113,7 +113,9 @@ fn classify_from_store(memory: &MemoryStore) -> crate::MemResult<ClassifiedRules
         .collect();
 
     for row in &rows {
-        if row.confidence < 0.5 {
+        // Use a small epsilon below 0.5 to handle f32 precision drift
+        // (e.g., 0.7 - 0.1 - 0.1 can yield 0.49999... in IEEE 754).
+        if row.confidence < 0.49 {
             continue;
         }
         if is_noise(&row.content, &row.entity_name, &row.entity_type) {
@@ -530,6 +532,98 @@ fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
         return true;
     }
 
+    // Code-derivable content: file paths, struct/table definitions, module layouts.
+    // An agent can read the code — no need to burn token budget on these.
+    let content_lower = content.to_lowercase();
+    if is_code_derivable(&content_lower) {
+        return true;
+    }
+
+    // Stale planning language: completed phases, shipped priorities, done TODOs.
+    if is_stale_plan(&content_lower, &name_lower) {
+        return true;
+    }
+
+    false
+}
+
+/// Content that restates what's already in the code (file manifests, schema
+/// field listings, struct descriptions). The agent can discover these by
+/// reading the source.
+fn is_code_derivable(content_lower: &str) -> bool {
+    // File manifests: "New CLI subcommand at crates/sift-cli/..."
+    if (content_lower.contains("crates/") || content_lower.contains("src/"))
+        && (content_lower.starts_with("new ")
+            || content_lower.starts_with("config extension")
+            || content_lower.starts_with("enhanced recall in "))
+    {
+        return true;
+    }
+
+    // Schema/DDL descriptions: "ALTER TABLE ... ADD ...", "add episodes table"
+    if content_lower.contains("alter table")
+        || content_lower.contains("add access_count")
+        || content_lower.contains("bump schema_version")
+    {
+        return true;
+    }
+
+    // API/protocol field listings: "stdin adds: tool_name (string), tool_input (object)..."
+    if content_lower.contains("stdin adds:")
+        || content_lower.contains("stdin adds ")
+        || content_lower.contains("common fields:")
+    {
+        return true;
+    }
+
+    // Hook config format descriptions
+    if content_lower.contains("hook config in settings.json:")
+        || content_lower.contains("exit code 0 = success")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Detect observations that describe completed work still phrased as plans.
+fn is_stale_plan(content_lower: &str, entity_name_lower: &str) -> bool {
+    // "Implementation in 3 phases: Phase 1..." — describes future work
+    if content_lower.starts_with("implementation in") && content_lower.contains("phase") {
+        return true;
+    }
+
+    // "Phase 1 files" entity — implementation manifests for completed phases
+    if entity_name_lower.contains("phase") && entity_name_lower.contains("files") {
+        return true;
+    }
+
+    // "PLAN.md written at /Users/..." — absolute paths and completed TODOs
+    if content_lower.contains("plan.md written at") {
+        return true;
+    }
+
+    // "Housekeeping: clean up..." — completed housekeeping tasks
+    if content_lower.starts_with("housekeeping:") {
+        return true;
+    }
+
+    // "v0.1.x priority N:" — shipped version priorities
+    if content_lower.contains("priority 1:")
+        || content_lower.contains("priority 2:")
+        || content_lower.contains("priority 3:")
+    {
+        // Check if it references a specific version that's likely shipped
+        if content_lower.contains("v0.1.") {
+            return true;
+        }
+    }
+
+    // Roadmap items described as "already completed"
+    if content_lower.contains("already completed") {
+        return true;
+    }
+
     false
 }
 
@@ -812,6 +906,75 @@ mod tests {
             !all_content.contains("Modified sift-memory"),
             "File-edit records should be filtered"
         );
+    }
+
+    #[test]
+    fn test_code_derivable_noise_filtered() {
+        // Schema DDL descriptions
+        assert!(is_noise(
+            "Schema v2 migration: bump SCHEMA_VERSION to 2, add episodes table, ALTER TABLE observations ADD access_count",
+            "Cortex Phase 1 files",
+            "fact"
+        ));
+
+        // File manifest descriptions
+        assert!(is_noise(
+            "New episode ingest module at crates/sift-memory/src/episodes.rs: EpisodeStore thin SQLite wrapper",
+            "Cortex Phase 1 files",
+            "fact"
+        ));
+
+        // Hook stdin schema listings
+        assert!(is_noise(
+            "PostToolUse stdin adds: tool_name (string), tool_input (object), tool_response (object)",
+            "Cortex hook stdin schemas",
+            "fact"
+        ));
+
+        // But actionable facts should NOT be filtered
+        assert!(!is_noise(
+            "MCP servers must be configured at user scope in ~/.claude.json",
+            "MCP config",
+            "fact"
+        ));
+    }
+
+    #[test]
+    fn test_stale_plans_filtered() {
+        // Completed phase implementations
+        assert!(is_noise(
+            "Implementation in 3 phases: Phase 1 (MVP) = schema v2 + episodes.rs",
+            "Cortex automated memory system",
+            "concept"
+        ));
+
+        // Shipped version priorities
+        assert!(is_noise(
+            "v0.1.4 priority 1: Shell completions — use clap_complete for bash/zsh/fish",
+            "sift",
+            "concept"
+        ));
+
+        // Already completed items
+        assert!(is_noise(
+            "Roadmap items already completed as of v0.1.3: parallel startup, input validation",
+            "sift",
+            "concept"
+        ));
+
+        // Housekeeping TODOs
+        assert!(is_noise(
+            "Housekeeping: clean up untracked sift-v0.1.2-aarch64-apple-darwin.tar.gz from repo root",
+            "sift",
+            "concept"
+        ));
+
+        // But current design decisions should NOT be filtered
+        assert!(!is_noise(
+            "Bi-temporal modeling separates when the agent learned it from when the fact was true",
+            "sift memory design",
+            "concept"
+        ));
     }
 
     #[test]

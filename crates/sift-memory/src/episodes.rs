@@ -389,10 +389,12 @@ fn is_trivial_git(command: &str) -> bool {
     )
 }
 
-/// Parse a session ID from the hook environment.
+/// Parse a session ID from environment variables (fallback).
 ///
-/// Claude Code sets `CLAUDE_CODE_SESSION_ID` in the hook environment.
-/// Falls back to a generated ID if not present.
+/// The primary session ID source is `$.session_id` in the JSON stdin
+/// payload. This function is the fallback when the payload doesn't
+/// contain a session ID. Checks `CLAUDE_CODE_SESSION_ID` and
+/// `CLAUDE_SESSION_ID` env vars, then generates a UUID as last resort.
 pub fn session_id_from_env() -> String {
     std::env::var("CLAUDE_CODE_SESSION_ID")
         .or_else(|_| std::env::var("CLAUDE_SESSION_ID"))

@@ -37,7 +37,12 @@ pub fn ingest(config: &Config, event_type: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let session_id = episodes::session_id_from_env();
+    // Extract session_id from the JSON stdin payload (where Claude Code
+    // actually puts it), falling back to env var then generated ID.
+    let session_id = serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|v| v.get("session_id")?.as_str().map(String::from))
+        .unwrap_or_else(episodes::session_id_from_env);
 
     match store.ingest(&session_id, event_type, &content)? {
         Some(id) => {

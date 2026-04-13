@@ -42,13 +42,22 @@ def score_batch(results: list[dict], use_judge: bool = True) -> dict[str, Any]:
 
     # Run LLM judge in parallel if requested
     if use_judge:
+        import time
         from concurrent.futures import ThreadPoolExecutor
         from tqdm import tqdm as tqdm_bar
 
         def _judge(r):
+            for attempt in range(5):
+                try:
+                    return llm_judge(r["question"], r["prediction"], r["reference"])
+                except Exception as e:
+                    if "rate_limit" in str(e).lower() or "429" in str(e):
+                        time.sleep(2 ** attempt)
+                    else:
+                        raise
             return llm_judge(r["question"], r["prediction"], r["reference"])
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             judge_results = list(tqdm_bar(
                 pool.map(_judge, results),
                 total=len(results),

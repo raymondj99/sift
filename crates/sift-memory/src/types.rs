@@ -290,6 +290,21 @@ pub struct ConsolidationReport {
     pub contradiction_pairs: Vec<(String, String)>,
 }
 
+/// Information about a potential knowledge conflict detected when adding
+/// or consolidating observations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictInfo {
+    /// ID of the existing observation that conflicts with the new one.
+    pub observation_id: String,
+    /// Content of the existing (potentially outdated) observation.
+    pub existing_content: String,
+    /// Conflict score: high embedding similarity × low text similarity.
+    /// Higher = more likely a genuine contradiction (same topic, different answer).
+    pub conflict_score: f32,
+    /// When the existing observation was recorded.
+    pub observed_at: i64,
+}
+
 /// Filters for recall queries.
 #[derive(Debug, Clone, Default)]
 pub struct RecallFilters {
