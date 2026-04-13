@@ -341,6 +341,26 @@ Key features:
 
 Memory is stored at `~/.sift/indexes/{index}/memory/` and persists across sessions.
 
+### Daemon mode
+
+The daemon keeps the search engine and embedding model loaded in memory, eliminating cold-start latency. It can also automatically re-index files when they change on disk.
+
+```bash
+sift daemon start    # start background daemon
+sift daemon status   # check if running
+sift daemon stop     # stop daemon
+```
+
+To enable automatic re-indexing, add to `~/.sift/config.toml`:
+
+```toml
+[watch]
+enabled = true
+debounce_ms = 1000
+```
+
+The watcher automatically monitors all directories you've previously indexed. When files change, it debounces events and re-indexes only the modified files using the same pipeline as `sift scan`.
+
 ## Search modes
 
 - **Hybrid** (default) — Combines vector similarity and BM25 keyword search using Reciprocal Rank Fusion.
@@ -446,6 +466,15 @@ patterns = ["*.lock", "node_modules"]
 [server]
 host = "127.0.0.1"
 port = 7820
+
+[watch]
+enabled = true       # auto-re-index on file changes (daemon mode)
+debounce_ms = 1000   # batch changes within this window (ms)
+
+[memory]
+enabled = true                   # Cortex automated memory
+consolidation_interval = 1800   # seconds between runs
+decay_rate = 0.01               # Ebbinghaus forgetting curve
 ```
 
 ```bash

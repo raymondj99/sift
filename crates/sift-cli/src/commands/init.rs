@@ -23,6 +23,14 @@ const TEMPLATE: &str = r#"# Sift project configuration
 
 [ignore]
 # patterns = ["node_modules", ".git", "__pycache__", "*.pyc", "target/", ".sift/"]
+
+[watch]
+# enabled = false                  # auto-re-index on file changes (daemon mode)
+# debounce_ms = 1000               # batch changes within this window
+
+[memory]
+# enabled = true                   # Cortex automated memory system
+# consolidation_interval = 1800    # seconds between consolidation runs
 "#;
 
 pub fn run(force: bool) -> SiftResult<()> {
