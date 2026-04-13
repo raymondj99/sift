@@ -163,7 +163,11 @@ sift search --vector-only "retry logic patterns"
 | `sift config [KEY] [VALUE]` | View or set configuration |
 | `sift export` | Export index data as JSONL |
 | `sift models [list\|download]` | Manage embedding models |
+| `sift init` | Initialize a `.sift.toml` project config in the current directory |
 | `sift mcp` | Start MCP server for AI agent integration (requires `mcp` feature) |
+| `sift memory <CMD>` | Manage the Cortex automated memory system (`status`, `consolidate`, `generate-rules`, `init-hooks`) |
+| `sift daemon` | Manage the sift background daemon (requires `serve` feature) |
+| `sift bench` | Run Cortex memory system benchmarks |
 | `sift watch [PATH]` | Watch for changes and re-index (requires `serve` feature) |
 | `sift serve` | Start HTTP API server (requires `serve` feature) |
 | `sift completions <SHELL>` | Generate shell completions (requires `completions` feature) |
@@ -216,13 +220,18 @@ Sift includes an MCP (Model Context Protocol) server that exposes search, indexi
 | `sift_search` | Read | Hybrid semantic + keyword search across indexed files |
 | `sift_status` | Read | Index statistics (file counts, types, storage size) |
 | `sift_search_skills` | Read | Discover agent skills (SKILL.md files) |
+| `sift_list_sources` | Read | Browse indexed files with path filtering |
 | `sift_index_text` | Write | Store arbitrary text with custom `memory://` URIs |
 | `sift_delete` | Write | Remove content from the index by URI |
-| `sift_list_sources` | Read | Browse indexed files with path filtering |
 | `sift_remember` | Write | Persist entities, observations, and relations to memory |
-| `sift_recall` | Read | Semantic search over stored memories |
-| `sift_forget` | Write | Soft-delete memory observations |
-| `sift_memory_status` | Read | Memory store statistics |
+| `sift_recall` | Read | Semantic search over stored memories with conflict detection |
+| `sift_list_entities` | Read | Browse all entities in memory with optional type filter |
+| `sift_get_entity` | Read | Get all facts and relationships for a named entity |
+| `sift_forget` | Write | Soft-delete a specific observation by ID |
+| `sift_forget_entity` | Write | Hard-delete an entity and all its observations |
+| `sift_prune` | Write | Remove ghost entities with zero observations |
+| `sift_consolidate` | Write | Run the 5-phase memory consolidation pipeline |
+| `sift_memory_status` | Read | Memory store statistics (entities, observations, tiers) |
 
 ### Setup
 
@@ -310,15 +319,25 @@ mcp_servers:
     args: ["mcp"]
 ```
 
-### Memory persistence
+### Memory persistence (Cortex)
 
-Sift's memory tools (`sift_remember`, `sift_recall`, `sift_forget`) provide persistent knowledge across agent sessions. The memory store uses a temporal knowledge graph — facts have validity windows, old memories decay in relevance but are never deleted, and contradictions are detected automatically.
+Sift includes **Cortex**, an automated memory system that gives AI agents persistent memory across sessions. It uses a temporal knowledge graph with three tiers:
+
+- **Episodic** — raw session events captured via Claude Code hooks (<100ms, zero LLM cost)
+- **Semantic** — consolidated facts promoted from episodic tier by access frequency or age
+- **Procedural** — learned workflow patterns (never auto-deleted)
 
 ```
 Agent → sift_remember("Raymond prefers Rust") → SQLite + search index
 Agent → sift_recall("language preferences")   → ranked results with scores
 Agent → sift_forget(observation_id)            → soft-delete, audit trail preserved
 ```
+
+Key features:
+- **Conflict detection** — `sift_remember` flags when new facts contradict existing ones
+- **5-phase consolidation** — dedup, promotion, skill extraction, decay, and pruning
+- **Retrieval-dependent strengthening** — frequently recalled memories gain relevance
+- **Rules generation** — `sift memory generate-rules` produces `.claude/rules/` files from consolidated memory
 
 Memory is stored at `~/.sift/indexes/{index}/memory/` and persists across sessions.
 
@@ -376,7 +395,8 @@ sift uses Cargo feature flags to control binary size. Only compile what you need
 | `ast` | Tree-sitter AST-aware code chunking (all languages) |
 | `ast-rust`, `ast-python`, ... | Per-language AST chunking |
 | `fancy` | Progress bars and colored output |
-| `serve` | HTTP API server + filesystem watcher |
+| `serve` | HTTP API server + filesystem watcher + daemon |
+| `mcp` | MCP server for AI agent integration |
 | `hnsw` | HNSW approximate nearest-neighbor index |
 | `fulltext` | Tantivy full-text search (alternative to FTS5) |
 | `completions` | Shell completion generation |
