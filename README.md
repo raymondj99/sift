@@ -40,11 +40,16 @@ $ sift search --type rs "error handling retry"
 
 ## Install
 
-Pre-compiled binaries for macOS and Linux are available on the
-[releases page](https://github.com/raymondj99/sift/releases).
+### Homebrew (macOS / Linux)
 
-Download the tarball for your platform, extract it, and move the binary
-into your `PATH`. Replace `VERSION` below with the release tag (e.g. `v0.1.2`):
+```bash
+brew install raymondj99/tap/sift
+```
+
+### Pre-built binaries
+
+Download from the [releases page](https://github.com/raymondj99/sift/releases).
+Replace `VERSION` below with the release tag (e.g. `v0.1.6`):
 
 ```bash
 # macOS (Apple Silicon)
@@ -334,10 +339,22 @@ Agent → sift_forget(observation_id)            → soft-delete, audit trail pr
 ```
 
 Key features:
+- **LLM-powered extraction** — session summaries are decomposed into individually categorized observations (decisions, corrections, workflows, preferences) on named entities via an LLM. Supports Anthropic, OpenAI-compatible, and Ollama providers.
 - **Conflict detection** — `sift_remember` flags when new facts contradict existing ones
 - **5-phase consolidation** — dedup, promotion, skill extraction, decay, and pruning
 - **Retrieval-dependent strengthening** — frequently recalled memories gain relevance
 - **Rules generation** — `sift memory generate-rules` produces `.claude/rules/` files from consolidated memory
+
+To enable LLM extraction (recommended), add to `~/.sift/config.toml`:
+
+```toml
+[memory]
+llm_extraction = true
+llm_extraction_provider = "anthropic"           # or "openai", "ollama"
+llm_extraction_model = "claude-haiku-4-5-20251001"
+```
+
+Set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `OLLAMA_HOST`) in your environment. Cost: ~$0.003 per session with Haiku.
 
 Memory is stored at `~/.sift/indexes/{index}/memory/` and persists across sessions.
 
@@ -475,6 +492,9 @@ debounce_ms = 1000   # batch changes within this window (ms)
 enabled = true                   # Cortex automated memory
 consolidation_interval = 1800   # seconds between runs
 decay_rate = 0.01               # Ebbinghaus forgetting curve
+llm_extraction = true            # LLM-powered observation extraction
+llm_extraction_provider = "anthropic"  # or "openai", "ollama"
+llm_extraction_model = "claude-haiku-4-5-20251001"
 ```
 
 ```bash
@@ -490,6 +510,9 @@ sift config search.hybrid_alpha 0.5
 | `SIFT_FORMAT` | Output format: `human`, `json`, `csv` |
 | `SIFT_MODEL` | Override embedding model |
 | `SIFT_JOBS` | Parallel worker count (0 = auto) |
+| `ANTHROPIC_API_KEY` | API key for LLM extraction (Anthropic provider) |
+| `OPENAI_API_KEY` | API key for LLM extraction (OpenAI provider) |
+| `OLLAMA_HOST` | Ollama endpoint (default: `http://localhost:11434`) |
 | `RUST_LOG` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
 | `NO_COLOR` | Disable colored output (any value) |
 

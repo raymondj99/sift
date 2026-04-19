@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-04-19
+
+### Added
+- **LLM-powered observation extraction** — opt-in decomposition of
+  `compact_summary` and stop messages into individually categorized
+  observations on named entities via Claude Haiku, GPT, or Ollama.
+  Replaces monolithic session-entity blobs with precise, recall-friendly
+  facts. PoC validated at 100% classification accuracy vs 26% for
+  embedding-based approach. Cost: ~$0.003/session.
+  ```toml
+  [memory]
+  llm_extraction = true
+  llm_extraction_provider = "anthropic"   # or "openai", "ollama"
+  llm_extraction_model = "claude-haiku-4-5-20251001"
+  ```
+- **Per-run LLM circuit breaker** — first API failure disables LLM for
+  the rest of the consolidation run, preventing 500 × timeout stalls.
+- **HTTP timeouts** on LLM calls (5s connect, 30s read) to bound
+  worst-case consolidation latency.
+- **Balanced JSON array parser** — handles markdown code fences, prose
+  wrapping, and nested brackets in LLM responses.
+- **Category allowlist** — only `decision`, `correction`, `workflow`,
+  `preference` are accepted; unknown categories are dropped.
+- **RwLock barrier** on `rebuild_if_stale` prevents concurrent recall
+  from observing a half-populated vector index during startup rebuild.
+- **Shell completions in release tarball** — bash, zsh, and fish
+  completions are now generated and included in release archives.
+- **Homebrew tap auto-update** — release CI pushes the updated formula
+  to `raymondj99/homebrew-tap` via `HOMEBREW_TAP_TOKEN`.
+- Install via Homebrew: `brew install raymondj99/tap/sift`.
+
+### Changed
+- **Heuristic extraction removed** — PostCompact and Stop episode
+  processing now uses LLM decomposition exclusively. The substring-based
+  heuristic extractor (procedural markers, correction language detection,
+  500-char truncation) has been deleted. Without `llm_extraction = true`
+  and an API key, these episodes are skipped gracefully. PostToolUse
+  extraction (file paths, bash errors) is unchanged.
+- Homebrew formula class renamed `SiftBin` → `Sift` for cleaner
+  `brew install sift`.
+- Release notes now show Homebrew as the primary install method.
+
+### Fixed
+- clippy 1.95 lints: `map_unwrap_or`, `collapsible_match`,
+  `duration_suboptimal_units`.
+- `rustls-webpki` 0.103.10 → 0.103.12 (RUSTSEC-2026-0098, 0099).
+- `lru` 0.12 → 0.17 (RUSTSEC-2026-0002 — `IterMut` soundness).
+- Removed stale advisory ignores from `deny.toml`.
+
 ## [0.1.5] - 2026-04-13
 
 ### Added
