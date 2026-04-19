@@ -14,6 +14,7 @@ fts5 = ["sqlite", "sift-store/fts5"]
 fulltext = ["sift-store/fulltext"]
 hnsw = ["sift-store/hnsw"]
 embeddings = ["dep:sift-embed"]
+llm = ["dep:ureq"]
 
 [dependencies]
 sift-core = { workspace = true }
@@ -26,6 +27,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -48,9 +48,7 @@ impl OnnxEmbedder {
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
-        let num_cores = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(4);
+        let num_cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
         let session = Session::builder()
             .map_err(|e| {

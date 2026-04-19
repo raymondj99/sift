@@ -99,7 +99,7 @@ impl ExitCode {
 /// Check whether colored output should be used, respecting `NO_COLOR` and TERM=dumb.
 #[cfg(feature = "fancy")]
 fn use_color() -> bool {
-    std::env::var("NO_COLOR").is_err() && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
+    std::env::var("NO_COLOR").is_err() && std::env::var("TERM").map_or(true, |t| t != "dumb")
 }
 
 #[derive(Parser)]

@@ -51,7 +51,8 @@ hnsw = ["sift-store/hnsw", "sift-mcp?/hnsw", "sift-memory/hnsw"]
 simd = ["sift-store/simd"]
 # Server & UI
 serve = ["dep:sift-server", "dep:tokio"]
-mcp = ["dep:sift-mcp", "dep:tokio", "embeddings"]
+mcp = ["dep:sift-mcp", "dep:tokio", "embeddings", "llm"]
+llm = ["sift-memory/llm"]
 completions = ["dep:clap_complete"]
 fancy = ["dep:indicatif", "dep:colored"]
 # Profiles

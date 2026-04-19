@@ -13,10 +13,11 @@
 //! Quality over quantity: token budget is 5K total — exceeding that
 //! degrades agent performance (PlugMem, Microsoft 2026).
 
+use crate::types::RecallFilters;
 use crate::MemoryStore;
 use std::collections::HashSet;
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Result of rule generation.
 #[derive(Debug, Default)]
@@ -70,8 +71,6 @@ struct ClassifiedRules {
 
 /// Classify observations from the memory store into rule categories.
 fn classify_from_store(memory: &MemoryStore) -> crate::MemResult<ClassifiedRules> {
-    let conn = memory.db().lock().unwrap_or_else(|e| e.into_inner());
-
     let mut preferences = Vec::new();
     let mut corrections = Vec::new();
     let mut decisions = Vec::new();
@@ -80,86 +79,102 @@ fn classify_from_store(memory: &MemoryStore) -> crate::MemResult<ClassifiedRules
     let mut skipped_long = 0usize;
     let mut seen: HashSet<String> = HashSet::new();
 
-    let mut stmt = conn.prepare(
-        "SELECT o.content, o.confidence, o.source, o.memory_tier,
-                e.name, e.entity_type
-         FROM observations o
-         JOIN entities e ON o.entity_id = e.id
-         WHERE o.valid_until IS NULL
-         ORDER BY
-           CASE o.memory_tier
-             WHEN 'procedural' THEN 0
-             WHEN 'semantic' THEN 1
-             WHEN 'episodic' THEN 2
-             ELSE 3
-           END,
-           o.confidence DESC,
-           o.access_count DESC,
-           o.observed_at DESC",
-    )?;
+    // --- Pass 1: SQL-based classification of all observations ---
+    // Scoped block so `conn` is dropped before Pass 2 (which needs the lock).
+    {
+        let conn = memory.db().lock().unwrap_or_else(|e| e.into_inner());
 
-    let rows: Vec<ObservationRow> = stmt
-        .query_map([], |row| {
-            Ok(ObservationRow {
-                content: row.get(0)?,
-                confidence: row.get(1)?,
-                source: row.get(2)?,
-                _tier: row.get(3)?,
-                entity_name: row.get(4)?,
-                entity_type: row.get(5)?,
-            })
-        })?
-        .filter_map(Result::ok)
-        .collect();
+        let mut stmt = conn.prepare(
+            "SELECT o.content, o.confidence, o.source, o.memory_tier,
+                    e.name, e.entity_type
+             FROM observations o
+             JOIN entities e ON o.entity_id = e.id
+             WHERE o.valid_until IS NULL
+             ORDER BY
+               CASE o.memory_tier
+                 WHEN 'procedural' THEN 0
+                 WHEN 'semantic' THEN 1
+                 WHEN 'episodic' THEN 2
+                 ELSE 3
+               END,
+               o.confidence DESC,
+               o.access_count DESC,
+               o.observed_at DESC",
+        )?;
 
-    for row in &rows {
-        // Use a small epsilon below 0.5 to handle f32 precision drift
-        // (e.g., 0.7 - 0.1 - 0.1 can yield 0.49999... in IEEE 754).
-        if row.confidence < 0.49 {
-            continue;
-        }
-        if is_noise(&row.content, &row.entity_name, &row.entity_type) {
-            skipped_noise += 1;
-            continue;
-        }
-        let word_count = row.content.split_whitespace().count();
-        if word_count > MAX_ENTRY_WORDS {
-            skipped_long += 1;
-            continue;
-        }
-        if word_count < 5 {
-            skipped_noise += 1;
-            continue;
-        }
-        let norm = row.content.to_lowercase().trim().to_string();
-        if seen.contains(&norm) {
-            continue;
-        }
-        seen.insert(norm);
+        let rows: Vec<ObservationRow> = stmt
+            .query_map([], |row| {
+                Ok(ObservationRow {
+                    content: row.get(0)?,
+                    confidence: row.get(1)?,
+                    source: row.get(2)?,
+                    _tier: row.get(3)?,
+                    entity_name: row.get(4)?,
+                    entity_type: row.get(5)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
 
-        match classify(row) {
-            Category::Preference => preferences.push(row.content.clone()),
-            Category::Correction => corrections.push(row.content.clone()),
-            Category::Decision => {
-                decisions.push(format!("[{}] {}", row.entity_name, row.content));
+        for row in &rows {
+            // Use a small epsilon below 0.5 to handle f32 precision drift
+            // (e.g., 0.7 - 0.1 - 0.1 can yield 0.49999... in IEEE 754).
+            if row.confidence < 0.49 {
+                continue;
             }
-            Category::Workflow => workflows.push(row.content.clone()),
-            Category::Skip => {}
-        }
-    }
+            if is_noise(&row.content, &row.entity_name, &row.entity_type) {
+                skipped_noise += 1;
+                continue;
+            }
+            let word_count = row.content.split_whitespace().count();
+            if word_count > MAX_ENTRY_WORDS {
+                skipped_long += 1;
+                continue;
+            }
+            if word_count < 5 {
+                skipped_noise += 1;
+                continue;
+            }
+            let norm = normalize_for_dedup(&row.content);
+            if seen.contains(&norm) {
+                continue;
+            }
 
-    // Collect skills as workflow rules.
-    let skill_rows: Vec<(String, String, i64)> = conn
-        .prepare("SELECT name, pattern, frequency FROM skills ORDER BY frequency DESC LIMIT 10")?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-        .filter_map(Result::ok)
-        .collect();
+            // Strip leading bullet markers to prevent "- - text" in output.
+            // Observations may have been stored with markdown bullets via
+            // the PostToolUse hook capturing rule file writes.
+            let clean = strip_bullet_prefix(&row.content);
 
-    for (_name, pattern, frequency) in &skill_rows {
-        if *frequency >= 3 {
-            workflows.push(format!("{pattern} (detected {frequency} times)"));
+            match classify(row) {
+                Category::Preference => {
+                    seen.insert(norm);
+                    preferences.push(clean);
+                }
+                Category::Correction => {
+                    seen.insert(norm);
+                    corrections.push(clean);
+                }
+                Category::Decision => {
+                    seen.insert(norm);
+                    decisions.push(format!("[{}] {}", row.entity_name, clean));
+                }
+                Category::Workflow => {
+                    seen.insert(norm);
+                    workflows.push(clean);
+                }
+                // Don't add Skip to `seen` — pass 2 (semantic search)
+                // can rescue these as workflow observations.
+                Category::Skip => {}
+            }
         }
-    }
+    } // conn dropped — safe to call recall()
+
+    // --- Pass 2: Semantic search for workflow observations ---
+    // Use sift's search engine to find procedural knowledge that the
+    // heuristic classifier routed to Skip or missed entirely.
+    let found = search_for_workflows(memory, &mut seen);
+    debug!(count = found.len(), "Pass 2: semantic workflow search");
+    workflows.extend(found);
 
     Ok(ClassifiedRules {
         preferences,
@@ -456,6 +471,13 @@ fn write_claude_rule_file(
 // Shared helpers
 // ===========================================================================
 
+/// Normalize content for dedup: strip bullets, lowercase, trim.
+/// Both pass 1 and pass 2 must use this so cross-pass dedup works.
+fn normalize_for_dedup(s: &str) -> String {
+    let stripped = strip_bullet_prefix(s);
+    stripped.to_lowercase().trim().to_string()
+}
+
 /// Truncate a list of entries to fit within a token budget, formatting as bullets.
 fn truncate_entries(entries: &[String], max_tokens: usize) -> String {
     let mut result = String::new();
@@ -472,6 +494,128 @@ fn truncate_entries(entries: &[String], max_tokens: usize) -> String {
     }
 
     result
+}
+
+// ===========================================================================
+// Semantic workflow search
+// ===========================================================================
+
+/// Queries targeting different facets of procedural knowledge.
+/// Hybrid search (vector + BM25) will match both semantically similar
+/// observations and keyword hits.
+const WORKFLOW_QUERIES: &[&str] = &[
+    "always before after remember to verify check process steps workflow",
+    "deploy release build test run first then make sure never avoid",
+];
+
+/// Minimum recall score to consider a search result as a workflow candidate.
+const WORKFLOW_MIN_SCORE: f32 = 0.45;
+
+/// Search memory for workflow observations using semantic search.
+///
+/// Finds procedural knowledge that the heuristic classifier missed —
+/// observations like "always run X before Y" stored under entities
+/// that don't match any classification pattern.
+fn search_for_workflows(memory: &MemoryStore, seen: &mut HashSet<String>) -> Vec<String> {
+    let filters = RecallFilters::default();
+    let mut results = Vec::new();
+
+    for query in WORKFLOW_QUERIES {
+        let recalls = match memory.recall(query, 10, &filters) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        for r in recalls {
+            if r.score < WORKFLOW_MIN_SCORE {
+                continue;
+            }
+
+            // Strip leading markdown bullets — observations may have been
+            // captured from rule files via the PostToolUse hook, creating
+            // a feedback loop ("- Always..." → stored → re-emitted as
+            // "- - Always..."). Normalize to plain text.
+            let content = strip_bullet_prefix(&r.observation.content);
+            let entity_type_str = r.entity_type.as_str();
+
+            if is_noise(&content, &r.entity_name, entity_type_str) {
+                continue;
+            }
+
+            let word_count = content.split_whitespace().count();
+            if !(5..=MAX_ENTRY_WORDS).contains(&word_count) {
+                continue;
+            }
+
+            let norm = normalize_for_dedup(&content);
+            if seen.contains(&norm) {
+                continue;
+            }
+
+            // Only add if the content actually reads like a workflow instruction.
+            if !has_workflow_language(&content) {
+                continue;
+            }
+
+            seen.insert(norm);
+            results.push(content);
+        }
+    }
+
+    results
+}
+
+/// Strip leading markdown bullet markers (`- `, `* `, `• `).
+/// Handles nested bullets like `- - text` from feedback loops.
+fn strip_bullet_prefix(s: &str) -> String {
+    let mut text = s.trim_start();
+    loop {
+        if let Some(rest) = text.strip_prefix("- ") {
+            text = rest.trim_start();
+        } else if let Some(rest) = text.strip_prefix("* ") {
+            text = rest.trim_start();
+        } else if let Some(rest) = text.strip_prefix("• ") {
+            text = rest.trim_start();
+        } else {
+            break;
+        }
+    }
+    text.to_string()
+}
+
+/// Check if content contains imperative/procedural language patterns
+/// that indicate a workflow instruction rather than a factual statement.
+fn has_workflow_language(content: &str) -> bool {
+    let lower = content.to_lowercase();
+
+    // Imperative starts
+    lower.starts_with("always ")
+        || lower.starts_with("never ")
+        || lower.starts_with("before ")
+        || lower.starts_with("after ")
+        || lower.starts_with("remember ")
+        || lower.starts_with("make sure ")
+        || lower.starts_with("run ")
+        || lower.starts_with("check ")
+        || lower.starts_with("verify ")
+        || lower.starts_with("first ")
+        // Procedural descriptions
+        || lower.starts_with("the process ")
+        || lower.starts_with("the flow ")
+        || lower.starts_with("the order ")
+        // Embedded workflow signals
+        || lower.contains("remember to ")
+        || lower.contains("don't forget ")
+        || lower.contains("make sure to ")
+        || lower.contains("always verify")
+        || lower.contains("always check")
+        || lower.contains("always run")
+        || lower.contains("before releasing")
+        || lower.contains("before deploying")
+        || lower.contains("before committing")
+        || lower.contains("before pushing")
+        || lower.contains("before merging")
+        || lower.contains("after every ")
 }
 
 // ===========================================================================
@@ -637,11 +781,11 @@ fn classify(row: &ObservationRow) -> Category {
     let content_lower = row.content.to_lowercase();
 
     // --- Layer 0: Source-based classification (highest priority) ---
-    // Procedural observations extracted by Cortex from PostCompact/Stop hooks
-    // are workflow rules by definition — they contain "always", "never",
-    // "the flow is", etc.
+    // Procedural observations are learned procedures ("always do X",
+    // "the process is Y", "remember to Z") — these are workflow rules,
+    // not architecture decisions.
     if row.source == "cortex:procedural" {
-        return Category::Decision;
+        return Category::Workflow;
     }
 
     // --- Layer 1: Entity type (strongest signal) ---
@@ -666,6 +810,10 @@ fn classify(row: &ObservationRow) -> Category {
     // --- Layer 2: Entity name patterns ---
     if row.entity_type == "concept" && is_person_entity(&name_lower) {
         return Category::Preference;
+    }
+
+    if name_lower.contains("workflow") {
+        return Category::Workflow;
     }
 
     if name_lower.contains("design")
@@ -1004,6 +1152,97 @@ mod tests {
     }
 
     #[test]
+    fn test_semantic_search_finds_workflow_observations() {
+        let store = MemoryStore::open_in_memory().unwrap();
+
+        // BM25 needs a corpus large enough for IDF to be meaningful.
+        // With only 2 docs, IDF = log((N-n+0.5)/(n+0.5)) ≈ 0 and
+        // all scores collapse to zero. Add filler observations.
+        let filler = store
+            .save_entity("general notes", EntityType::Concept, 0.9, "test")
+            .unwrap();
+        let filler_texts = [
+            "The database uses PostgreSQL with connection pooling via pgbouncer",
+            "Frontend is built with React and TypeScript strict mode enabled",
+            "CI pipeline runs on GitHub Actions with parallel matrix builds",
+            "Authentication uses OAuth2 with PKCE flow for single page apps",
+            "Monitoring stack includes Prometheus and Grafana dashboards",
+            "The caching layer uses Redis with a sixty second default TTL",
+            "Logging follows structured JSON format with correlation identifiers",
+            "Infrastructure is managed with Terraform and stored in the infra repo",
+        ];
+        for text in &filler_texts {
+            store.add_observation(&filler, text, 0.9, "test").unwrap();
+        }
+
+        // Store a workflow rule under a concept entity with a multi-word
+        // name that doesn't match any heuristic pattern. The SQL-based
+        // classifier will route this to Skip, so only semantic search
+        // (pass 2) can capture it as a workflow.
+        let entity = store
+            .save_entity("team practices", EntityType::Concept, 0.9, "test")
+            .unwrap();
+        store
+            .add_observation(
+                &entity,
+                "Always run the integration tests before deploying to production",
+                0.9,
+                "sift_remember",
+            )
+            .unwrap();
+
+        // Also store a non-workflow fact — should not leak into workflows
+        let arch = store
+            .save_entity("system layout", EntityType::Concept, 0.9, "test")
+            .unwrap();
+        store
+            .add_observation(
+                &arch,
+                "The API gateway routes traffic to three backend services",
+                0.9,
+                "sift_remember",
+            )
+            .unwrap();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        generate_rules(&store, tmp.path()).unwrap();
+
+        let workflows =
+            std::fs::read_to_string(tmp.path().join("cortex-workflows.md")).unwrap_or_default();
+        assert!(
+            workflows.contains("integration tests"),
+            "Semantic search should find workflow observation: {workflows}"
+        );
+        assert!(
+            !workflows.contains("API gateway"),
+            "Non-workflow facts should not leak into workflows"
+        );
+    }
+
+    #[test]
+    fn test_has_workflow_language() {
+        // Positive: imperative starts
+        assert!(has_workflow_language("Always run tests before pushing"));
+        assert!(has_workflow_language("Never force-push to main"));
+        assert!(has_workflow_language("Before releasing, update CHANGELOG"));
+        assert!(has_workflow_language("Remember to bump the version number"));
+        assert!(has_workflow_language("The process is: build, test, deploy"));
+        assert!(has_workflow_language("Make sure the CI passes first"));
+        assert!(has_workflow_language(
+            "Run cargo clippy before committing code"
+        ));
+
+        // Negative: factual statements
+        assert!(!has_workflow_language(
+            "The system uses PostgreSQL for persistence"
+        ));
+        assert!(!has_workflow_language(
+            "Sift is a local semantic search engine"
+        ));
+        assert!(!has_workflow_language("Written in Rust with async runtime"));
+    }
+
+    #[test]
     fn test_token_budget_is_respected() {
         let store = MemoryStore::open_in_memory().unwrap();
         let entity = store
@@ -1247,8 +1486,8 @@ mod tests {
             )
             .unwrap();
         assert!(
-            correction_count >= 2,
-            "Should have corrections from both sift_remember and Stop event"
+            correction_count >= 1,
+            "Should have corrections from sift_remember (Stop extraction requires LLM)"
         );
     }
 }

@@ -48,7 +48,8 @@ pub fn run_consolidation(
     let mut report = FullConsolidationReport::default();
 
     // Phase 1: Process pending episodes into entities + observations
-    let (processed, skipped, entities, observations) = phase_episode_processing(memory, episodes)?;
+    let (processed, skipped, entities, observations) =
+        phase_episode_processing(memory, episodes, config)?;
     report.episodes_processed = processed;
     report.episodes_skipped = skipped;
     report.entities_created = entities;
@@ -111,6 +112,7 @@ pub fn run_consolidation(
 fn phase_episode_processing(
     memory: &MemoryStore,
     episodes: &EpisodeStore,
+    config: &ConsolidationConfig,
 ) -> crate::MemResult<(usize, usize, usize, usize)> {
     let pending = episodes
         .fetch_pending(500)
@@ -125,6 +127,11 @@ fn phase_episode_processing(
     let mut skipped_ids = Vec::new();
     let mut entities_created = 0usize;
     let mut observations_created = 0usize;
+
+    // Per-run LLM circuit breaker: one failure disables LLM for the rest
+    // of this consolidation so a bad key or dead endpoint can't burn 500
+    // serial requests × request-timeout seconds.
+    let llm = LlmRuntime::new(config);
 
     // Group episodes by session for context
     let mut by_session: HashMap<String, Vec<&Episode>> = HashMap::new();
@@ -143,8 +150,8 @@ fn phase_episode_processing(
             };
 
             let result = match ep.event_type.as_str() {
-                "post_compact" => extract_from_post_compact(memory, ep, &parsed),
-                "stop" => extract_from_stop(memory, ep, &parsed),
+                "post_compact" => extract_from_post_compact(memory, ep, &parsed, &llm),
+                "stop" => extract_from_stop(memory, ep, &parsed, &llm),
                 "post_tool_use" => extract_from_post_tool_use(memory, ep, &parsed),
                 _ => {
                     skipped_ids.push(ep.id.clone());
@@ -194,73 +201,35 @@ fn phase_episode_processing(
 
 /// Extract knowledge from a PostCompact event.
 ///
-/// The `compact_summary` is pre-distilled by the LLM — this is the highest
-/// value signal. We store the full summary on a session entity AND extract
-/// any procedural knowledge (workflow rules, processes) as separate
-/// high-confidence observations on named entities.
+/// The `compact_summary` is pre-distilled by the LLM — the highest value
+/// signal. LLM decomposition breaks it into individually categorized
+/// observations on named entities. If the LLM is unavailable, the episode
+/// is skipped — heuristic extraction was removed because it produced
+/// monolithic blobs on session entities that ranked poorly in recall.
 fn extract_from_post_compact(
     memory: &MemoryStore,
-    ep: &Episode,
+    _ep: &Episode,
     parsed: &serde_json::Value,
+    llm: &LlmRuntime<'_>,
 ) -> crate::MemResult<(usize, usize)> {
     let summary = match parsed.get("compact_summary").and_then(|v| v.as_str()) {
         Some(s) if !s.trim().is_empty() => s.trim(),
         _ => return Ok((0, 0)),
     };
 
-    // Truncate very long summaries to avoid bloating the observation store
-    let content = if summary.len() > 2000 {
-        &summary[..2000]
-    } else {
-        summary
-    };
-
-    let entity_id = memory.save_entity(
-        &format!("session:{}", &ep.session_id),
-        EntityType::Event,
-        0.8,
-        "cortex:episode",
-    )?;
-
-    memory.add_observation(&entity_id, content, 0.9, "cortex:compact")?;
-    let mut entities = 1usize;
-    let mut observations = 1usize;
-
-    // Extract procedural knowledge from the LLM-distilled summary.
-    // PostCompact is free LLM work — Claude Code already ran the model
-    // to compress context. We decompose the result into individual
-    // procedural statements and store them on a dedicated entity so
-    // they surface in recall (session entities rank poorly because
-    // their names don't match semantic queries).
-    let procedures = extract_procedural_statements(content);
-    if !procedures.is_empty() {
-        let proc_entity_id = memory.save_entity(
-            "workflow rules",
-            EntityType::Concept,
-            0.9,
-            "cortex:procedural",
-        )?;
-        entities += 1;
-        for procedure in &procedures {
-            memory.add_observation(&proc_entity_id, procedure, 0.95, "cortex:procedural")?;
-            observations += 1;
-        }
-    }
-
-    Ok((entities, observations))
+    llm.try_extract(memory, summary).unwrap_or(Ok((0, 0)))
 }
 
 /// Extract knowledge from a Stop event.
 ///
-/// The `last_assistant_message` contains the agent's final output for the
-/// session. We extract the first meaningful paragraph as a session summary.
-///
-/// If self-correction language is detected, the observation is tagged with
-/// `cortex:correction` source and gets boosted confidence (0.9 vs 0.7).
+/// The `last_assistant_message` contains the agent's final output. LLM
+/// decomposition extracts categorized observations from the full message.
+/// If the LLM is unavailable, the episode is skipped.
 fn extract_from_stop(
     memory: &MemoryStore,
-    ep: &Episode,
+    _ep: &Episode,
     parsed: &serde_json::Value,
+    llm: &LlmRuntime<'_>,
 ) -> crate::MemResult<(usize, usize)> {
     let message = match parsed
         .get("last_assistant_message")
@@ -270,45 +239,7 @@ fn extract_from_stop(
         _ => return Ok((0, 0)),
     };
 
-    let content = truncate_to_sentence(message, 500);
-    if content.is_empty() {
-        return Ok((0, 0));
-    }
-
-    let entity_id = memory.save_entity(
-        &format!("session:{}", &ep.session_id),
-        EntityType::Event,
-        0.7,
-        "cortex:episode",
-    )?;
-
-    // Check for self-correction signals in the assistant's final message.
-    let is_correction = contains_correction_language(message);
-    let (confidence, source) = if is_correction {
-        (0.9, "cortex:correction")
-    } else {
-        (0.7, "cortex:stop")
-    };
-
-    memory.add_observation(&entity_id, &content, confidence, source)?;
-    let mut observations = 1usize;
-
-    // Extract procedural knowledge from the final message.
-    let procedures = extract_procedural_statements(message);
-    if !procedures.is_empty() {
-        let proc_entity_id = memory.save_entity(
-            "workflow rules",
-            EntityType::Concept,
-            0.9,
-            "cortex:procedural",
-        )?;
-        for procedure in &procedures {
-            memory.add_observation(&proc_entity_id, procedure, 0.9, "cortex:procedural")?;
-            observations += 1;
-        }
-    }
-
-    Ok((1, observations))
+    llm.try_extract(memory, message).unwrap_or(Ok((0, 0)))
 }
 
 /// Extract knowledge from a PostToolUse event.
@@ -693,27 +624,24 @@ fn phase_decay_and_pruning(
 
         // Apply pruning rules based on tier
         match obs.memory_tier.as_str() {
-            "episodic" => {
+            "episodic"
                 if final_utility < f64::from(config.prune_utility_threshold)
                     && obs.observed_at < min_age
-                    && obs.access_count == 0
-                {
+                    && obs.access_count == 0 =>
+            {
+                invalidate_stmt.execute(rusqlite::params![now, final_utility, obs.id])?;
+                pruned_obs += 1;
+            }
+            "semantic" if final_utility < f64::from(config.prune_utility_threshold) => {
+                let new_confidence = (obs.confidence - 0.1).max(0.0);
+                if new_confidence < 0.1 {
                     invalidate_stmt.execute(rusqlite::params![now, final_utility, obs.id])?;
                     pruned_obs += 1;
+                } else {
+                    decay_stmt.execute(rusqlite::params![new_confidence, obs.id])?;
                 }
             }
-            "semantic" => {
-                if final_utility < f64::from(config.prune_utility_threshold) {
-                    let new_confidence = (obs.confidence - 0.1).max(0.0);
-                    if new_confidence < 0.1 {
-                        invalidate_stmt.execute(rusqlite::params![now, final_utility, obs.id])?;
-                        pruned_obs += 1;
-                    } else {
-                        decay_stmt.execute(rusqlite::params![new_confidence, obs.id])?;
-                    }
-                }
-            }
-            // Procedural — never auto-delete
+            // Procedural — never auto-delete; non-matching episodic/semantic cases fall through
             _ => {}
         }
     }
@@ -737,6 +665,102 @@ fn phase_decay_and_pruning(
     );
 
     Ok((pruned_obs, ent_count))
+}
+
+// ===========================================================================
+// LLM Extraction
+// ===========================================================================
+
+/// Per-consolidation-run LLM state.
+///
+/// Carries the config plus a circuit breaker that trips after the first
+/// call failure. With up to 500 pending episodes per run, a single bad
+/// API key or dead endpoint would otherwise cause 500 × request-timeout
+/// seconds of wasted work.
+struct LlmRuntime<'a> {
+    config: &'a ConsolidationConfig,
+    disabled: std::cell::Cell<bool>,
+}
+
+impl<'a> LlmRuntime<'a> {
+    fn new(config: &'a ConsolidationConfig) -> Self {
+        Self {
+            config,
+            disabled: std::cell::Cell::new(!config.llm_extraction),
+        }
+    }
+
+    /// Attempt LLM decomposition for `text`.
+    ///
+    /// Returns `Some((entities, observations))` if the LLM produced at least
+    /// one stored observation, `None` if the caller should fall back to
+    /// heuristic extraction. The first failure trips the circuit breaker.
+    fn try_extract(
+        &self,
+        memory: &MemoryStore,
+        text: &str,
+    ) -> Option<crate::MemResult<(usize, usize)>> {
+        if self.disabled.get() {
+            return None;
+        }
+        match crate::llm::llm_decompose(
+            text,
+            &self.config.llm_extraction_model,
+            &self.config.llm_extraction_provider,
+        ) {
+            Ok(extracted) if !extracted.is_empty() => {
+                Some(store_llm_observations(memory, &extracted))
+            }
+            Ok(_) => {
+                debug!("LLM extraction returned no observations, falling back to heuristics");
+                None
+            }
+            Err(e) => {
+                warn!("LLM extraction failed; disabling for remainder of this run: {e}");
+                self.disabled.set(true);
+                None
+            }
+        }
+    }
+}
+
+/// Store observations from LLM decomposition into the memory graph.
+///
+/// Dedupes entity upserts within the batch so the returned `entities`
+/// counter reflects distinct entity names (not per-observation upsert
+/// calls) and so the same entity can't have its type flipped by
+/// conflicting categories within a single run.
+fn store_llm_observations(
+    memory: &MemoryStore,
+    extracted: &[crate::llm::ExtractedObservation],
+) -> crate::MemResult<(usize, usize)> {
+    let mut entity_ids: HashMap<String, String> = HashMap::new();
+    let mut observations_created = 0usize;
+
+    for obs in extracted {
+        let confidence = crate::llm::category_confidence(&obs.category);
+        let source = crate::llm::category_source(&obs.category);
+
+        let entity_id = if let Some(id) = entity_ids.get(&obs.entity) {
+            id.clone()
+        } else {
+            let entity_type = crate::llm::category_entity_type(&obs.category);
+            let id = memory.save_entity(&obs.entity, entity_type, confidence, source)?;
+            entity_ids.insert(obs.entity.clone(), id.clone());
+            id
+        };
+
+        memory.add_observation(&entity_id, &obs.observation, confidence, source)?;
+        observations_created += 1;
+    }
+
+    info!(
+        entities = entity_ids.len(),
+        observations = observations_created,
+        "LLM extraction stored"
+    );
+
+    Ok((entity_ids.len(), observations_created))
 }
 
 // ===========================================================================
@@ -854,199 +878,6 @@ fn extract_bash_error(stdout: &str) -> Option<String> {
     None
 }
 
-/// Detect self-correction language in the agent's final message.
-///
-/// Patterns: apology + fix indicators, explicit acknowledgement of mistakes,
-/// retries after errors. These suggest the agent learned something corrective
-/// during the session — worth boosting in memory.
-/// Extract procedural knowledge statements from free text.
-///
-/// Scans for sentences containing procedural markers — language that
-/// describes workflows, processes, rules, or conventions that should
-/// persist across sessions. Returns deduplicated, cleaned statements.
-///
-/// This is the bridge between rule-based extraction and semantic
-/// understanding: we can't parse intent, but we can detect the
-/// linguistic markers that humans and LLMs use when stating procedures.
-fn extract_procedural_statements(text: &str) -> Vec<String> {
-    // Procedural markers: phrases that signal a workflow rule or process
-    const PROCEDURAL_MARKERS: &[&str] = &[
-        // Process/flow descriptions
-        "the flow is",
-        "the process is",
-        "the steps are",
-        "the workflow is",
-        "the order is",
-        "the sequence is",
-        // Imperatives
-        "always ",
-        "never ",
-        "must ",
-        "should always",
-        "should never",
-        "make sure to ",
-        "be sure to ",
-        "don't forget to ",
-        "remember to ",
-        // Forward-looking conventions
-        "going forward",
-        "from now on",
-        "in the future",
-        "for future ",
-        // Conditional rules
-        "before releasing",
-        "before tagging",
-        "before pushing",
-        "before deploying",
-        "before merging",
-        "after releasing",
-        "after tagging",
-        "after merging",
-        // Convention establishment
-        "the convention is",
-        "the rule is",
-        "the pattern is",
-        "we agreed to",
-        "we decided to",
-        "the standard is",
-    ];
-
-    let mut results = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    // Split into sentences (handle both . and \n as boundaries)
-    for sentence in split_into_sentences(text) {
-        let trimmed = sentence.trim();
-        if trimmed.len() < 20 || trimmed.len() > 300 {
-            continue;
-        }
-
-        let sentence_lower = trimmed.to_lowercase();
-        let has_marker = PROCEDURAL_MARKERS
-            .iter()
-            .any(|marker| sentence_lower.contains(marker));
-
-        if has_marker {
-            // Deduplicate by lowercase content
-            if seen.insert(sentence_lower) {
-                results.push(trimmed.to_string());
-            }
-        }
-    }
-
-    // Cap at 5 procedural statements per episode to avoid flooding
-    results.truncate(5);
-    results
-}
-
-/// Split text into sentences, handling common boundaries.
-///
-/// Uses `. ` (period + whitespace) as the primary delimiter to avoid
-/// splitting on dots inside filenames (e.g., `CHANGELOG.md`), version
-/// numbers, or URLs. Newlines always split.
-fn split_into_sentences(text: &str) -> Vec<&str> {
-    let mut sentences = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-
-    for (i, ch) in text.char_indices() {
-        let is_boundary = match ch {
-            '\n' => true,
-            '!' | '?' => true,
-            '.' => {
-                // Only split on `.` if followed by whitespace or end-of-string.
-                // This avoids splitting "CHANGELOG.md" or "v0.1.5".
-                let next = i + 1;
-                next >= bytes.len() || bytes[next].is_ascii_whitespace()
-            }
-            _ => false,
-        };
-
-        if is_boundary {
-            let candidate = text[start..=i].trim();
-            if !candidate.is_empty() && candidate.len() > 1 {
-                sentences.push(candidate);
-            }
-            start = i + ch.len_utf8();
-        }
-    }
-
-    // Don't forget the trailing fragment
-    let tail = text[start..].trim();
-    if !tail.is_empty() && tail.len() > 1 {
-        sentences.push(tail);
-    }
-
-    sentences
-}
-
-fn contains_correction_language(text: &str) -> bool {
-    let lower = text.to_lowercase();
-
-    // Apology + fix patterns (agent acknowledging a mistake)
-    let apology_patterns = [
-        "i apologize",
-        "sorry about that",
-        "my mistake",
-        "that was incorrect",
-        "i was wrong",
-        "let me fix",
-        "let me correct",
-        "actually, i should",
-        "actually, that",
-    ];
-
-    // Correction action patterns (agent describing what they fixed)
-    let correction_patterns = [
-        "the issue was",
-        "the problem was",
-        "the fix is",
-        "the correct approach",
-        "instead of",
-        "should have used",
-        "the error occurred because",
-    ];
-
-    // Require at least one pattern match. We check both categories
-    // because an apology without a fix description isn't useful, and
-    // a fix description without correction context might be normal.
-    for pattern in &apology_patterns {
-        if lower.contains(pattern) {
-            return true;
-        }
-    }
-    for pattern in &correction_patterns {
-        if lower.contains(pattern) {
-            // Only count correction patterns if the message is short enough
-            // to be about the fix itself, not a general discussion.
-            if text.len() < 1000 {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-/// Truncate text to a maximum length, trying to break at a sentence boundary.
-fn truncate_to_sentence(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
-        return text.trim().to_string();
-    }
-
-    let slice = &text[..max_len];
-    // Find the last sentence-ending punctuation
-    if let Some(pos) = slice.rfind(['.', '!', '?']) {
-        return slice[..=pos].trim().to_string();
-    }
-    // Fall back to last newline
-    if let Some(pos) = slice.rfind('\n') {
-        return slice[..pos].trim().to_string();
-    }
-    // Last resort: truncate at max_len
-    slice.trim().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1059,19 +890,6 @@ mod tests {
             "sift-memory/src/lib.rs"
         );
         assert_eq!(shorten_path("src/main.rs"), "src/main.rs");
-    }
-
-    #[test]
-    fn test_truncate_to_sentence() {
-        assert_eq!(truncate_to_sentence("Hello.", 100), "Hello.");
-        assert_eq!(
-            truncate_to_sentence("First sentence. Second sentence. Third sentence.", 30),
-            "First sentence."
-        );
-        assert_eq!(
-            truncate_to_sentence("No punctuation here", 10),
-            "No punctua"
-        );
     }
 
     #[test]
@@ -1118,40 +936,36 @@ mod tests {
     }
 
     #[test]
-    fn test_episode_processing_post_compact() {
+    fn test_episode_processing_post_compact_without_llm() {
         let store = MemoryStore::open_in_memory().unwrap();
         let episodes = EpisodeStore::open_in_memory().unwrap();
 
-        // Ingest a PostCompact event
         let content =
             r#"{"compact_summary": "User is building a Rust memory system called Cortex."}"#;
         episodes.ingest("sess1", "post_compact", content).unwrap();
 
+        // LLM disabled (default) — PostCompact episodes are skipped
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();
 
         assert_eq!(report.episodes_processed, 1);
-        assert_eq!(report.observations_created, 1);
-        assert_eq!(report.entities_created, 1);
-
-        // Verify the entity was created
-        let entity = store.get_entity("session:sess1").unwrap();
-        assert!(entity.is_some());
+        assert_eq!(report.observations_created, 0);
     }
 
     #[test]
-    fn test_episode_processing_stop() {
+    fn test_episode_processing_stop_without_llm() {
         let store = MemoryStore::open_in_memory().unwrap();
         let episodes = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"last_assistant_message": "I've finished implementing the consolidation engine. All tests pass."}"#;
         episodes.ingest("sess1", "stop", content).unwrap();
 
+        // LLM disabled (default) — Stop episodes are skipped
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();
 
         assert_eq!(report.episodes_processed, 1);
-        assert_eq!(report.observations_created, 1);
+        assert_eq!(report.observations_created, 0);
     }
 
     #[test]
@@ -1232,27 +1046,6 @@ mod tests {
         assert_eq!(report.duplicates_merged, 1);
     }
 
-    // -- Correction detection tests --
-
-    #[test]
-    fn test_correction_language_detection() {
-        assert!(contains_correction_language(
-            "I apologize for the confusion. Let me fix that."
-        ));
-        assert!(contains_correction_language(
-            "Sorry about that — the issue was a missing import."
-        ));
-        assert!(contains_correction_language(
-            "My mistake, I should have used the other function."
-        ));
-        assert!(!contains_correction_language(
-            "I've finished implementing the feature. All tests pass."
-        ));
-        assert!(!contains_correction_language(
-            "The build completed successfully."
-        ));
-    }
-
     #[test]
     fn test_bash_error_extraction() {
         // Rust compilation error
@@ -1273,34 +1066,6 @@ mod tests {
 
         // Too short
         assert!(extract_bash_error("ok").is_none());
-    }
-
-    #[test]
-    fn test_stop_correction_gets_tagged() {
-        let store = MemoryStore::open_in_memory().unwrap();
-        let episodes = EpisodeStore::open_in_memory().unwrap();
-
-        // Stop event with correction language
-        let content = r#"{"last_assistant_message": "I apologize for the confusion. The issue was a missing import statement. I've fixed it now and the build passes."}"#;
-        episodes.ingest("sess1", "stop", content).unwrap();
-
-        let config = ConsolidationConfig::default();
-        let report = run_consolidation(&store, &episodes, &config).unwrap();
-
-        assert_eq!(report.episodes_processed, 1);
-
-        // Verify the observation has the correction source
-        let conn = store.db().lock().unwrap();
-        let source: String = conn
-            .query_row(
-                "SELECT source FROM observations WHERE entity_id IN
-                 (SELECT id FROM entities WHERE name = 'session:sess1')
-                 AND valid_until IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(source, "cortex:correction");
     }
 
     #[test]
@@ -1330,100 +1095,5 @@ mod tests {
             )
             .unwrap();
         assert!(count >= 1);
-    }
-
-    // ── Procedural knowledge extraction tests ─────────────────────────
-
-    #[test]
-    fn test_extract_procedural_always_never() {
-        let text = "The CI is green. Always update CHANGELOG.md before tagging a release. The tests pass on both platforms.";
-        let procs = extract_procedural_statements(text);
-        assert_eq!(procs.len(), 1);
-        assert!(procs[0].contains("CHANGELOG"));
-    }
-
-    #[test]
-    fn test_extract_procedural_flow_description() {
-        let text = "We finished the feature. The flow is: bump version, commit, tag, push. Then CI handles the rest.";
-        let procs = extract_procedural_statements(text);
-        assert_eq!(procs.len(), 1);
-        assert!(procs[0].contains("flow is"));
-    }
-
-    #[test]
-    fn test_extract_procedural_going_forward() {
-        let text = "Fixed the bug. Going forward, we should run clippy before committing. The linter caught it.";
-        let procs = extract_procedural_statements(text);
-        assert_eq!(procs.len(), 1);
-        assert!(procs[0].contains("Going forward"));
-    }
-
-    #[test]
-    fn test_extract_procedural_none_found() {
-        let text = "The search engine uses BM25 for keyword matching. It supports 30+ file formats. Performance is good.";
-        let procs = extract_procedural_statements(text);
-        assert!(procs.is_empty());
-    }
-
-    #[test]
-    fn test_extract_procedural_capped_at_five() {
-        let text =
-            "Always do A. Never do B. Must do C. Always do D. Never do E. Always do F. Must do G.";
-        let procs = extract_procedural_statements(text);
-        assert!(procs.len() <= 5);
-    }
-
-    #[test]
-    fn test_extract_procedural_deduplicates() {
-        let text = "Always run the full test suite before merging. Some other text here. Always run the full test suite before merging.";
-        let procs = extract_procedural_statements(text);
-        assert_eq!(procs.len(), 1);
-    }
-
-    #[test]
-    fn test_extract_procedural_skips_short_sentences() {
-        let text = "Always X. That's too short to be useful.";
-        let procs = extract_procedural_statements(text);
-        // "Always X." is < 20 chars, should be skipped
-        assert!(procs.is_empty());
-    }
-
-    #[test]
-    fn test_split_into_sentences_basic() {
-        let sentences = split_into_sentences("First sentence. Second sentence. Third.");
-        assert_eq!(sentences.len(), 3);
-    }
-
-    #[test]
-    fn test_split_into_sentences_newlines() {
-        let sentences = split_into_sentences("Line one\nLine two\nLine three");
-        assert_eq!(sentences.len(), 3);
-    }
-
-    #[test]
-    fn test_post_compact_extracts_procedural_knowledge() {
-        let store = MemoryStore::open_in_memory().unwrap();
-        let episodes = EpisodeStore::open_in_memory().unwrap();
-
-        let summary = "Built the file watcher feature. Going forward, always update CHANGELOG.md before tagging a release. The daemon now watches indexed directories.";
-        let content = serde_json::json!({ "compact_summary": summary }).to_string();
-        episodes.ingest("sess1", "post_compact", &content).unwrap();
-
-        let config = ConsolidationConfig::default();
-        let report = run_consolidation(&store, &episodes, &config).unwrap();
-
-        // Should have the full summary + the procedural statement
-        assert!(report.observations_created >= 2);
-
-        // Verify procedural observation exists
-        let conn = store.db().lock().unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM observations WHERE source = 'cortex:procedural'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(count >= 1, "Should extract procedural knowledge");
     }
 }

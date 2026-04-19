@@ -95,6 +95,17 @@ pub struct MemoryConfig {
     /// Minimum pattern frequency to extract a skill.
     #[serde(default = "MemoryConfig::default_skill_min_frequency")]
     pub skill_min_frequency: u32,
+    /// Use an LLM to decompose compact_summary and stop messages into
+    /// individually categorized observations. Falls back to rule-based
+    /// heuristic extraction when disabled or on any failure.
+    #[serde(default)]
+    pub llm_extraction: bool,
+    /// LLM provider: "anthropic", "openai", or "ollama".
+    #[serde(default = "MemoryConfig::default_llm_extraction_provider")]
+    pub llm_extraction_provider: String,
+    /// Model ID for LLM extraction. Provider-specific defaults apply.
+    #[serde(default = "MemoryConfig::default_llm_extraction_model")]
+    pub llm_extraction_model: String,
 }
 
 /// Configuration for the filesystem watcher.
@@ -280,6 +291,21 @@ impl Config {
             if memory_table.contains_key("skill_min_frequency") {
                 merged.memory.skill_min_frequency = other.memory.skill_min_frequency;
             }
+            if memory_table.contains_key("llm_extraction") {
+                merged.memory.llm_extraction = other.memory.llm_extraction;
+            }
+            if memory_table.contains_key("llm_extraction_provider") {
+                merged
+                    .memory
+                    .llm_extraction_provider
+                    .clone_from(&other.memory.llm_extraction_provider);
+            }
+            if memory_table.contains_key("llm_extraction_model") {
+                merged
+                    .memory
+                    .llm_extraction_model
+                    .clone_from(&other.memory.llm_extraction_model);
+            }
         }
 
         if let Some(watch_table) = specified.get("watch").and_then(|v| v.as_table()) {
@@ -379,9 +405,7 @@ impl Config {
 
     pub fn num_jobs(&self) -> usize {
         if self.default.jobs == 0 {
-            std::thread::available_parallelism()
-                .map(std::num::NonZero::get)
-                .unwrap_or(4)
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
         } else {
             self.default.jobs
         }
@@ -564,6 +588,12 @@ impl MemoryConfig {
     fn default_skill_min_frequency() -> u32 {
         3
     }
+    fn default_llm_extraction_provider() -> String {
+        "anthropic".into()
+    }
+    fn default_llm_extraction_model() -> String {
+        "claude-haiku-4-5-20251001".into()
+    }
 }
 
 impl Default for MemoryConfig {
@@ -579,6 +609,9 @@ impl Default for MemoryConfig {
             semantic_dedup_threshold: Self::default_semantic_dedup_threshold(),
             skill_extraction: Self::default_skill_extraction(),
             skill_min_frequency: Self::default_skill_min_frequency(),
+            llm_extraction: false,
+            llm_extraction_provider: Self::default_llm_extraction_provider(),
+            llm_extraction_model: Self::default_llm_extraction_model(),
         }
     }
 }

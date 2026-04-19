@@ -70,7 +70,7 @@ tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 
 # Network
-ureq = "2"
+ureq = { version = "2", features = ["json"] }
 
 # Web server
 axum = "0.8"
@@ -116,7 +116,7 @@ rmcp = { version = "1", features = ["server", "transport-io"] }
 schemars = "1"
 
 # Caching
-lru = "0.12"
+lru = "0.17"
 
 # Random (for retry jitter)
 rand = "0.8"
@@ -153,6 +153,9 @@ sift-memory = { path = "crates/sift-memory", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
+# Tolerate clippy lint names not yet known to older toolchains
+# (e.g. MSRV builds won't recognize clippy 1.95's duration_suboptimal_units).
+unknown_lints = "allow"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -184,6 +187,8 @@ needless_raw_string_hashes = "allow"
 option_if_let_else = "allow"
 str_split_at_newline = "allow"
 ref_option = "allow"
+# Duration::from_mins / from_hours stabilized in Rust 1.82; MSRV is 1.75.
+duration_suboptimal_units = "allow"
 
 [profile.dev]
 # Line tables only — saves ~20-30% compile time vs full DWARF (debug = 2).

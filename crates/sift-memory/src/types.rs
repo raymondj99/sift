@@ -372,20 +372,18 @@ pub struct ConsolidationConfig {
     pub skill_min_frequency: u32,
     /// Whether skill extraction is enabled.
     pub skill_extraction: bool,
+    /// Use LLM to decompose summaries into categorized observations.
+    pub llm_extraction: bool,
+    /// LLM provider: "anthropic", "openai", or "ollama".
+    pub llm_extraction_provider: String,
+    /// Model ID for LLM extraction.
+    pub llm_extraction_model: String,
 }
 
 impl Default for ConsolidationConfig {
     fn default() -> Self {
-        Self {
-            decay_rate: 0.01,
-            promotion_age_days: 3,
-            promotion_min_access: 2,
-            semantic_dedup_threshold: 0.92,
-            prune_utility_threshold: 0.05,
-            prune_min_age_days: 30,
-            skill_min_frequency: 3,
-            skill_extraction: true,
-        }
+        // Derive from MemoryConfig defaults to avoid duplicating literal values.
+        Self::from(&sift_core::config::MemoryConfig::default())
     }
 }
 
@@ -400,6 +398,9 @@ impl From<&sift_core::config::MemoryConfig> for ConsolidationConfig {
             prune_min_age_days: mc.prune_min_age_days,
             skill_min_frequency: mc.skill_min_frequency,
             skill_extraction: mc.skill_extraction,
+            llm_extraction: mc.llm_extraction,
+            llm_extraction_provider: mc.llm_extraction_provider.clone(),
+            llm_extraction_model: mc.llm_extraction_model.clone(),
         }
     }
 }

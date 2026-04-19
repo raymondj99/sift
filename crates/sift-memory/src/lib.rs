@@ -14,6 +14,7 @@
 
 pub mod consolidation;
 pub mod episodes;
+pub mod llm;
 pub mod rules;
 pub mod schema;
 pub mod types;
@@ -78,6 +79,11 @@ pub struct MemoryStore {
     db: Mutex<Connection>,
     /// Hybrid search engine for semantic + keyword recall over observation text.
     search: HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
+    /// Barrier between the two-phase rebuild (delete-all + reinsert-all) and
+    /// concurrent recall. Rebuild holds the write guard; recall takes a
+    /// read guard. Uncontended in steady state — we pay a single atomic
+    /// per recall, and rebuilds only fire on startup after schema drift.
+    rebuild_lock: std::sync::RwLock<()>,
     /// Optional embedder for vectorizing observations.
     #[cfg(feature = "embeddings")]
     embedder: Option<std::sync::Arc<dyn sift_core::Embedder>>,
@@ -149,6 +155,7 @@ impl MemoryStore {
         Ok(Self {
             db: Mutex::new(conn),
             search,
+            rebuild_lock: std::sync::RwLock::new(()),
             #[cfg(feature = "embeddings")]
             embedder: None,
             index_dir: dir.to_path_buf(),
@@ -204,6 +211,7 @@ impl MemoryStore {
         Ok(Self {
             db: Mutex::new(conn),
             search,
+            rebuild_lock: std::sync::RwLock::new(()),
             #[cfg(feature = "embeddings")]
             embedder: None,
             index_dir: std::path::PathBuf::new(),
@@ -213,14 +221,30 @@ impl MemoryStore {
 
     /// Set the embedder for vectorizing observations.
     ///
-    /// On first call (or when the vector index is stale), rebuilds the search
-    /// index so existing observations get real embeddings. Skips the rebuild
-    /// if the vector store already has the right number of entries.
+    /// This only attaches the embedder — call [`rebuild_if_stale`] afterwards
+    /// to rebuild the search index if needed. This split lets callers (e.g.
+    /// the MCP server) defer the potentially slow rebuild to a background
+    /// thread so startup isn't blocked.
     #[cfg(feature = "embeddings")]
     pub fn with_embedder(mut self, embedder: std::sync::Arc<dyn sift_core::Embedder>) -> Self {
         self.embedder = Some(embedder);
+        self
+    }
 
-        // Only rebuild if the vector index is out of sync with SQLite.
+    /// Rebuild the vector index if it's out of sync with SQLite.
+    ///
+    /// Returns `true` if a rebuild was performed, `false` if already up to date.
+    ///
+    /// Holds the rebuild write-lock for the entire delete-all + reinsert-all
+    /// sequence so concurrent `recall` callers never observe a half-populated
+    /// index. The common case (index already up to date) releases the lock
+    /// immediately after a cheap count comparison.
+    #[cfg(feature = "embeddings")]
+    pub fn rebuild_if_stale(&self) -> bool {
+        // Poisoning here is benign — we're the only writer, and any prior
+        // panic happened mid-rebuild on state we're about to overwrite.
+        let _guard = self.rebuild_lock.write().unwrap_or_else(|e| e.into_inner());
+
         let obs_count = {
             let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
             conn.query_row(
@@ -238,17 +262,18 @@ impl MemoryStore {
             );
             if let Err(e) = self.rebuild_search_index() {
                 warn!("Failed to rebuild search index with embedder: {e}");
+                return false;
             }
             if let Err(e) = self.save() {
                 warn!("Failed to persist rebuilt search index: {e}");
             }
+            true
         } else {
             tracing::debug!(
                 "Memory vector index up to date ({vec_count} vectors), skipping rebuild"
             );
+            false
         }
-
-        self
     }
 
     /// Rebuild the search index from all active observations in SQLite.
@@ -947,7 +972,14 @@ impl MemoryStore {
         } else {
             top_k * 3
         };
-        let results = self.search.search(&vector, query, fetch_k, mode)?;
+
+        // Block if a background rebuild is mid-flight — otherwise we'd read
+        // the index during its delete-then-reinsert phase and return
+        // spuriously empty results. Uncontended in the steady state.
+        let results = {
+            let _guard = self.rebuild_lock.read().unwrap_or_else(|e| e.into_inner());
+            self.search.search(&vector, query, fetch_k, mode)?
+        };
 
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let valid_at = filters.valid_at.unwrap_or_else(now_secs);
@@ -1719,6 +1751,10 @@ impl MemoryStore {
 
     /// Persist the search stores to disk.
     pub fn save(&self) -> MemResult<()> {
+        // `flush` is a FullTextStore trait method. `save` on the vector
+        // store resolves to an inherent method on FlatVectorIndex but to
+        // the VectorIndex trait method on HnswIndex — we always need the
+        // trait in scope to cover the hnsw build.
         use sift_store::{FullTextStore as _, VectorIndex as _};
 
         if !self.index_dir.as_os_str().is_empty() {

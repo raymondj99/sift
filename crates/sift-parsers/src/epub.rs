@@ -134,12 +134,10 @@ fn extract_title_from_opf(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Optio
                     in_title = true;
                 }
             }
-            Ok(quick_xml::events::Event::Text(e)) => {
-                if in_title {
-                    let title = e.unescape().unwrap_or_default().trim().to_string();
-                    if !title.is_empty() {
-                        return Some(title);
-                    }
+            Ok(quick_xml::events::Event::Text(e)) if in_title => {
+                let title = e.unescape().unwrap_or_default().trim().to_string();
+                if !title.is_empty() {
+                    return Some(title);
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {

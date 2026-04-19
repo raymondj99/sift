@@ -93,9 +93,14 @@ jobs:
           fi
 
           staging="sift-${{ github.ref_name }}-${{ matrix.target }}"
-          mkdir -p "$staging"
+          mkdir -p "$staging/complete"
           cp "$binary" "$staging/"
           cp LICENSE* README.md "$staging/" 2>/dev/null || true
+
+          # Generate shell completions into the tarball
+          "$binary" completions bash > "$staging/complete/sift.bash"
+          "$binary" completions zsh  > "$staging/complete/_sift"
+          "$binary" completions fish > "$staging/complete/sift.fish"
 
           tar czf "$staging.tar.gz" "$staging"
           echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
@@ -150,6 +155,14 @@ jobs:
 
           {
             echo "## Installation"
+            echo ""
+            echo "### Homebrew (macOS / Linux)"
+            echo ""
+            echo '```bash'
+            echo "brew install raymondj99/tap/sift"
+            echo '```'
+            echo ""
+            echo "### Manual download"
             echo ""
             echo "Download the archive for your platform and extract it:"
             echo ""
@@ -206,8 +219,8 @@ jobs:
           sha_x64_mac=$(grep "x86_64-apple-darwin" SHA256SUMS.txt | awk '{print $1}')
           sha_x64_linux=$(grep "x86_64-unknown-linux-gnu" SHA256SUMS.txt | awk '{print $1}')
 
-          cat > sift-bin.rb << FORMULA
-          class SiftBin < Formula
+          cat > sift.rb << FORMULA
+          class Sift < Formula
             version "${version}"
             desc "Local semantic search engine — index 30+ formats, hybrid search, AI agent memory"
             homepage "https://github.com/${{ github.repository }}"
@@ -241,10 +254,10 @@ jobs:
           FORMULA
 
           # Remove leading whitespace from heredoc indentation
-          sed -i 's/^          //' sift-bin.rb
+          sed -i 's/^          //' sift.rb
 
           echo "Generated Homebrew formula for v${version}:"
-          cat sift-bin.rb
+          cat sift.rb
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -252,3 +265,26 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: release/*
           fail_on_unmatched_files: true
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          # Skip if the PAT for the tap repo isn't configured yet
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping tap update. Formula is available as a release asset."
+            exit 0
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          tap_repo="raymondj99/homebrew-tap"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${tap_repo}.git" homebrew-tap
+          cp release/sift.rb homebrew-tap/Formula/sift.rb
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/sift.rb
+          git commit -m "sift ${version}" || { echo "Formula unchanged"; exit 0; }
+          git push origin main

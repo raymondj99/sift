@@ -343,6 +343,16 @@ impl SiftMcpServer {
             })
         };
 
+        // Rebuild stale memory vector index in background so MCP startup
+        // isn't blocked — the server can respond to initialize immediately.
+        #[cfg(feature = "embeddings")]
+        if let Some(ref mem) = memory {
+            let mem = Arc::clone(mem);
+            std::thread::spawn(move || {
+                mem.rebuild_if_stale();
+            });
+        }
+
         Ok(Self {
             tool_router: Self::tool_router(),
             config,

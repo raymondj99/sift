@@ -110,12 +110,10 @@ fn extract_docx_text(xml: &str) -> String {
                     output.push('\n');
                 }
             }
-            Ok(quick_xml::events::Event::Text(e)) => {
-                if in_text {
-                    let text = e.unescape().unwrap_or_default();
-                    output.push_str(&text);
-                    paragraph_has_text = true;
-                }
+            Ok(quick_xml::events::Event::Text(e)) if in_text => {
+                let text = e.unescape().unwrap_or_default();
+                output.push_str(&text);
+                paragraph_has_text = true;
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
                 let qname = e.name();
@@ -217,12 +215,10 @@ fn extract_pptx_text(xml: &str) -> String {
                     last_was_paragraph = true;
                 }
             }
-            Ok(quick_xml::events::Event::Text(e)) => {
-                if in_text {
-                    let text = e.unescape().unwrap_or_default();
-                    output.push_str(&text);
-                    last_was_paragraph = false;
-                }
+            Ok(quick_xml::events::Event::Text(e)) if in_text => {
+                let text = e.unescape().unwrap_or_default();
+                output.push_str(&text);
+                last_was_paragraph = false;
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
                 let qname = e.name();
