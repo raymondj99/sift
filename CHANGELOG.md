@@ -35,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   completions are now generated and included in release archives.
 - **Homebrew tap auto-update** — release CI pushes the updated formula
   to `raymondj99/homebrew-tap` via `HOMEBREW_TAP_TOKEN`.
-- Install via Homebrew: `brew install raymondj99/tap/sift`.
+- Install via Homebrew: `brew install raymondj99/tap/sift-search`.
 
 ### Changed
 - **Heuristic extraction removed** — PostCompact and Stop episode

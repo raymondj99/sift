@@ -159,7 +159,7 @@ jobs:
             echo "### Homebrew (macOS / Linux)"
             echo ""
             echo '```bash'
-            echo "brew install raymondj99/tap/sift"
+            echo "brew install raymondj99/tap/sift-search"
             echo '```'
             echo ""
             echo "### Manual download"
@@ -219,8 +219,8 @@ jobs:
           sha_x64_mac=$(grep "x86_64-apple-darwin" SHA256SUMS.txt | awk '{print $1}')
           sha_x64_linux=$(grep "x86_64-unknown-linux-gnu" SHA256SUMS.txt | awk '{print $1}')
 
-          cat > sift.rb << FORMULA
-          class Sift < Formula
+          cat > sift-search.rb << FORMULA
+          class SiftSearch < Formula
             version "${version}"
             desc "Local semantic search engine — index 30+ formats, hybrid search, AI agent memory"
             homepage "https://github.com/${{ github.repository }}"
@@ -239,6 +239,8 @@ jobs:
               sha256 "${sha_x64_linux}"
             end
 
+            conflicts_with "sift", because: "both install a `sift` binary"
+
             def install
               bin.install "sift"
 
@@ -254,10 +256,10 @@ jobs:
           FORMULA
 
           # Remove leading whitespace from heredoc indentation
-          sed -i 's/^          //' sift.rb
+          sed -i 's/^          //' sift-search.rb
 
           echo "Generated Homebrew formula for v${version}:"
-          cat sift.rb
+          cat sift-search.rb
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -280,11 +282,11 @@ jobs:
           tap_repo="raymondj99/homebrew-tap"
 
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${tap_repo}.git" homebrew-tap
-          cp release/sift.rb homebrew-tap/Formula/sift.rb
+          cp release/sift-search.rb homebrew-tap/Formula/sift-search.rb
 
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/sift.rb
-          git commit -m "sift ${version}" || { echo "Formula unchanged"; exit 0; }
+          git add Formula/sift-search.rb
+          git commit -m "sift-search ${version}" || { echo "Formula unchanged"; exit 0; }
           git push origin main

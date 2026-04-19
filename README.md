@@ -43,7 +43,7 @@ $ sift search --type rs "error handling retry"
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew install raymondj99/tap/sift
+brew install raymondj99/tap/sift-search
 ```
 
 ### Pre-built binaries
