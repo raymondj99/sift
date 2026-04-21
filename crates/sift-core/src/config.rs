@@ -31,6 +31,10 @@ pub struct DefaultConfig {
     pub max_file_size: u64,
     #[serde(default)]
     pub jobs: usize, // 0 = auto
+    /// Optional override for the ONNX Runtime shared library path.
+    /// Leave unset to use the auto-detected `~/.sift/models/ort/` location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ort_dylib_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +235,12 @@ impl Config {
             if default_table.contains_key("jobs") {
                 merged.default.jobs = other.default.jobs;
             }
+            if default_table.contains_key("ort_dylib_path") {
+                merged
+                    .default
+                    .ort_dylib_path
+                    .clone_from(&other.default.ort_dylib_path);
+            }
         }
 
         if let Some(search_table) = specified.get("search").and_then(|v| v.as_table()) {
@@ -421,6 +431,11 @@ impl Config {
             "default.chunk_overlap" => Some(self.default.chunk_overlap.to_string()),
             "default.max_file_size" => Some(self.default.max_file_size.to_string()),
             "default.jobs" => Some(self.default.jobs.to_string()),
+            "default.ort_dylib_path" => self
+                .default
+                .ort_dylib_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
             "search.max_results" => Some(self.search.max_results.to_string()),
             "search.hybrid_alpha" => Some(self.search.hybrid_alpha.to_string()),
             "search.rerank" => Some(self.search.rerank.to_string()),
@@ -492,6 +507,7 @@ impl Default for DefaultConfig {
             chunk_overlap: Self::default_chunk_overlap(),
             max_file_size: Self::default_max_file_size(),
             jobs: 0,
+            ort_dylib_path: None,
         }
     }
 }

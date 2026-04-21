@@ -490,11 +490,11 @@ fn test_hybrid_search_rrf_fusion() {
 fn test_config_defaults_and_roundtrip() {
     let config = Config::default();
 
-    // Verify all defaults match PLAN.md spec
     assert_eq!(config.default.model, "nomic-embed-text-v2");
     assert_eq!(config.default.chunk_size, 512);
     assert_eq!(config.default.chunk_overlap, 64);
     assert_eq!(config.default.max_file_size, 100 * 1024 * 1024);
+    assert_eq!(config.default.ort_dylib_path, None);
     assert_eq!(config.search.max_results, 10);
     assert!((config.search.hybrid_alpha - 0.7).abs() < f32::EPSILON);
     assert_eq!(config.server.host, "127.0.0.1");
@@ -504,6 +504,7 @@ fn test_config_defaults_and_roundtrip() {
     let toml_str = toml::to_string_pretty(&config).unwrap();
     let loaded: Config = toml::from_str(&toml_str).unwrap();
     assert_eq!(loaded.default.chunk_size, config.default.chunk_size);
+    assert_eq!(loaded.default.ort_dylib_path, config.default.ort_dylib_path);
     assert_eq!(loaded.server.port, config.server.port);
 }
 

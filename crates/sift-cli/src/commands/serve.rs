@@ -11,7 +11,8 @@ pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
 
     #[cfg(feature = "embeddings")]
     let embedder: Option<Box<dyn sift_core::Embedder>> =
-        crate::pipeline::load_embedder(None).map(|e| Box::new(e) as Box<dyn sift_core::Embedder>);
+        crate::pipeline::load_embedder(config, None)
+            .map(|e| Box::new(e) as Box<dyn sift_core::Embedder>);
     #[cfg(not(feature = "embeddings"))]
     let embedder: Option<Box<dyn sift_core::Embedder>> = None;
 

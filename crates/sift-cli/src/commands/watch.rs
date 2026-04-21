@@ -35,13 +35,13 @@ pub fn run(config: &Config, path: Option<PathBuf>, debounce: u64) -> SiftResult<
             match crate::pipeline::open_engine(&config) {
                 Ok((engine, metadata)) => {
                     #[cfg(feature = "embeddings")]
-                    let embedder = crate::pipeline::load_embedder(None);
+                    let embedder = crate::pipeline::load_embedder(&config, None);
                     #[cfg(feature = "embeddings")]
                     let embedder_ref = embedder.as_ref().map(|e| e as &dyn sift_core::Embedder);
                     #[cfg(not(feature = "embeddings"))]
                     let embedder_ref: Option<&dyn sift_core::Embedder> = None;
                     #[cfg(feature = "vision")]
-                    let vision_embedder = crate::pipeline::load_vision_embedder();
+                    let vision_embedder = crate::pipeline::load_vision_embedder(&config);
                     let token = CancellationToken::new();
                     match crate::pipeline::run_scan_pipeline(
                         &config,

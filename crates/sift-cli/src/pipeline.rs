@@ -72,10 +72,14 @@ pub fn open_engine(
 
 /// Try to load the ONNX embedder. Returns `None` when the `embeddings` feature
 /// is disabled or when the model is not available.
+///
+/// Honors `config.default.ort_dylib_path` as a user override for the ONNX
+/// Runtime shared library location. Otherwise auto-detects the managed
+/// `~/.sift/models/ort/` directory.
 #[cfg(feature = "embeddings")]
-pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
+pub fn load_embedder(config: &Config, model_override: Option<&str>) -> Option<OnnxEmbedder> {
     let manager = ModelManager::new().ok()?;
-    manager.init_ort_env();
+    manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
 
     // Determine which model to load
     let (model_dir, model_name, dimensions) = if let Some(name) = model_override {
@@ -131,10 +135,13 @@ pub fn load_embedder(model_override: Option<&str>) -> Option<OnnxEmbedder> {
 }
 
 /// Try to load the vision embedder for image embedding.
+///
+/// Honors `config.default.ort_dylib_path` for ONNX Runtime path resolution,
+/// matching [`load_embedder`].
 #[cfg(all(feature = "embeddings", feature = "vision"))]
-pub fn load_vision_embedder() -> Option<VisionEmbedder> {
+pub fn load_vision_embedder(config: &Config) -> Option<VisionEmbedder> {
     let manager = ModelManager::new().ok()?;
-    manager.init_ort_env();
+    manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
     let model_def = &NOMIC_EMBED_VISION_V1_5;
 
     if !manager.is_model_file_downloaded(model_def.name) {

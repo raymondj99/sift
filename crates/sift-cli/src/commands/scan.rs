@@ -63,7 +63,7 @@ fn run_inner(
     let (engine, metadata) = pipeline::open_engine(config)?;
 
     #[cfg(feature = "embeddings")]
-    let embedder = pipeline::load_embedder(model);
+    let embedder = pipeline::load_embedder(config, model);
     #[cfg(feature = "embeddings")]
     let embedder_ref = embedder.as_ref().map(|e| e as &dyn sift_core::Embedder);
     #[cfg(not(feature = "embeddings"))]
@@ -73,7 +73,7 @@ fn run_inner(
     };
 
     #[cfg(feature = "vision")]
-    let vision_embedder = pipeline::load_vision_embedder();
+    let vision_embedder = pipeline::load_vision_embedder(config);
 
     // Create a cancellation token and wire it to Ctrl-C.
     let token = CancellationToken::new();

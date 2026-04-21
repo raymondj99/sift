@@ -39,6 +39,13 @@ pub fn run(config: &Config, key: Option<String>, value: Option<String>) -> SiftR
                         .parse()
                         .map_err(|_| sift_core::SiftError::Config("Invalid number".into()))?;
                 }
+                "default.ort_dylib_path" => {
+                    config.default.ort_dylib_path = if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.clone().into())
+                    };
+                }
                 "search.max_results" => {
                     config.search.max_results = value
                         .parse()

@@ -313,7 +313,23 @@ impl SiftMcpServer {
         let (engine, metadata) = open_engine(&config)?;
 
         #[cfg(feature = "embeddings")]
-        let embedder = load_embedder();
+        let embedder = load_embedder(&config);
+
+        // Single-line startup banner on stderr (stdout is reserved for JSON-RPC).
+        // Gives users a quick signal of whether semantic search is active without
+        // having to parse RUST_LOG output.
+        #[cfg(feature = "embeddings")]
+        {
+            use sift_core::Embedder as _;
+            match embedder.as_ref() {
+                Some(e) => eprintln!("sift mcp: embeddings active (model: {})", e.model_name()),
+                None => eprintln!(
+                    "sift mcp: keyword-only mode — run `sift models download` for semantic search"
+                ),
+            }
+        }
+        #[cfg(not(feature = "embeddings"))]
+        eprintln!("sift mcp: keyword-only mode (build without `embeddings` feature)");
 
         // Wrap in a caching layer so repeated MCP queries hit an LRU cache.
         // 50-entry LRU with 60s TTL balances memory usage with agentic hit rates.
@@ -1550,11 +1566,11 @@ fn open_engine(
 
 /// Load the ONNX embedding model for query embedding.
 #[cfg(feature = "embeddings")]
-fn load_embedder() -> Option<sift_embed::OnnxEmbedder> {
+fn load_embedder(config: &Config) -> Option<sift_embed::OnnxEmbedder> {
     use sift_embed::{models::NOMIC_EMBED_TEXT_V2, ModelManager};
 
     let manager = ModelManager::new().ok()?;
-    manager.init_ort_env();
+    manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
 
     let model_def = &NOMIC_EMBED_TEXT_V2;
     if !manager.is_downloaded(model_def.name) {

@@ -186,7 +186,8 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
 
     #[cfg(feature = "embeddings")]
     let embedder: Option<Box<dyn sift_core::Embedder>> =
-        crate::pipeline::load_embedder(None).map(|e| Box::new(e) as Box<dyn sift_core::Embedder>);
+        crate::pipeline::load_embedder(config, None)
+            .map(|e| Box::new(e) as Box<dyn sift_core::Embedder>);
     #[cfg(not(feature = "embeddings"))]
     let embedder: Option<Box<dyn sift_core::Embedder>> = None;
 
@@ -511,7 +512,7 @@ fn reindex_changed_files(config: &sift_core::Config, paths: &[std::path::PathBuf
     match crate::pipeline::open_engine(config) {
         Ok((engine, metadata)) => {
             #[cfg(feature = "embeddings")]
-            let embedder = crate::pipeline::load_embedder(None);
+            let embedder = crate::pipeline::load_embedder(config, None);
             #[cfg(feature = "embeddings")]
             let embedder_ref = embedder.as_ref().map(|e| e as &dyn sift_core::Embedder);
             #[cfg(not(feature = "embeddings"))]

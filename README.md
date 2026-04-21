@@ -40,15 +40,33 @@ $ sift search --type rs "error handling retry"
 
 ## Install
 
+### Quick install (one-liner)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raymondj99/sift/main/install.sh | sh
+```
+
+Detects your OS/arch, downloads the latest release, verifies the SHA-256
+checksum, and installs to `/usr/local/bin` (or `~/.local/bin` when sudo
+isn't available). All optional:
+
+```bash
+SIFT_VERSION=v0.1.6         # pin to a specific version
+SIFT_INSTALL_DIR=/custom    # custom install directory
+SIFT_NO_COMPLETIONS=1       # skip shell completion install
+SIFT_NO_MODIFY_PATH=1       # silence the PATH-guidance note
+```
+
 ### Homebrew (macOS / Linux)
 
 ```bash
 brew install raymondj99/tap/sift-search
 ```
 
-### Pre-built binaries
+### Manual download (audit-friendly)
 
-Download from the [releases page](https://github.com/raymondj99/sift/releases).
+For users who prefer to inspect the tarball before running anything,
+download from the [releases page](https://github.com/raymondj99/sift/releases).
 Replace `VERSION` below with the release tag (e.g. `v0.1.6`):
 
 ```bash

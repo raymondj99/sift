@@ -1,6 +1,7 @@
 use sift_core::{Config, SiftResult};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 use tracing::{debug, info, warn};
 
 /// ONNX Runtime version compatible with ort 2.0.0-rc.9.
@@ -334,24 +335,67 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Set `ORT_DYLIB_PATH` if the runtime library exists in our managed directory
-    /// and the env var is not already set.
+    /// Set `ORT_DYLIB_PATH` if the runtime library exists in our managed
+    /// directory and the env var is not already set.
+    ///
+    /// Equivalent to [`Self::init_ort_env_with_override`] with no override path.
     pub fn init_ort_env(&self) {
+        self.init_ort_env_with_override(None);
+    }
+
+    /// Same as [`Self::init_ort_env`] but with a user-provided override path
+    /// taking precedence over the default `~/.sift/models/ort/` location.
+    ///
+    /// Precedence (highest first):
+    ///   1. `ORT_DYLIB_PATH` environment variable (respected if already set).
+    ///   2. `override_path` (typically `config.default.ort_dylib_path`).
+    ///   3. Auto-detected `~/.sift/models/ort/<platform-lib>` if it exists.
+    ///
+    /// If none of the above resolve to an existing file, a single warning is
+    /// emitted (guarded by `Once` for the process lifetime) pointing the user
+    /// at `sift models download` or the config override.
+    pub fn init_ort_env_with_override(&self, override_path: Option<&Path>) {
         if std::env::var("ORT_DYLIB_PATH").is_ok() {
             debug!("ORT_DYLIB_PATH already set, skipping auto-config");
             return;
         }
+
+        if let Some(custom) = override_path {
+            if custom.exists() {
+                debug!(
+                    "Setting ORT_DYLIB_PATH to {} (from config)",
+                    custom.display()
+                );
+                std::env::set_var("ORT_DYLIB_PATH", custom);
+                return;
+            }
+            // Fall through to auto-detect, but log why the override was skipped.
+            debug!(
+                "Configured ort_dylib_path does not exist: {}",
+                custom.display()
+            );
+        }
+
         let lib_path = self.ort_lib_path();
         if lib_path.exists() {
             debug!("Setting ORT_DYLIB_PATH to {}", lib_path.display());
             std::env::set_var("ORT_DYLIB_PATH", &lib_path);
         } else {
-            warn!(
-                "ONNX Runtime not found at {}. Run `sift models download` or set ORT_DYLIB_PATH.",
-                lib_path.display()
-            );
+            warn_ort_missing_once(&lib_path);
         }
     }
+}
+
+/// Emit the "ORT not found" warning at most once per process.
+fn warn_ort_missing_once(lib_path: &Path) {
+    static WARNED: Once = Once::new();
+    WARNED.call_once(|| {
+        warn!(
+            "ONNX Runtime not found at {}. Run `sift models download` to install it, \
+             or set `default.ort_dylib_path` in ~/.sift/config.toml (or the ORT_DYLIB_PATH env var).",
+            lib_path.display()
+        );
+    });
 }
 
 impl Default for ModelManager {
@@ -447,7 +491,13 @@ pub fn validate_model_dir(dir: &Path) -> SiftResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    /// Serialises every test that mutates the process-global `ORT_DYLIB_PATH`.
+    /// Cargo runs tests in parallel by default; without this lock, reads and
+    /// writes across tests interleave and break hard assertions.
+    static ORT_ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     // -----------------------------------------------------------------------
     // ModelSpec::onnx_file_for_quant
@@ -793,10 +843,68 @@ mod tests {
 
     #[test]
     fn init_ort_env_does_not_panic() {
+        let _guard = ORT_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempdir().unwrap();
         let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
         // Should not panic even if the ORT lib does not exist
         mgr.init_ort_env();
+    }
+
+    #[test]
+    fn init_ort_env_override_honored_when_exists() {
+        // Precedence check: when the override path exists, it must win over
+        // the managed directory, regardless of what's in there.
+        let _guard = ORT_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempdir().unwrap();
+        let override_dir = tempdir().unwrap();
+        let override_path = override_dir.path().join("my-custom-ort.dylib");
+        std::fs::write(&override_path, b"fake").unwrap();
+
+        // ORT_DYLIB_PATH is process-global; start from a known-unset state.
+        let prev = std::env::var("ORT_DYLIB_PATH").ok();
+        std::env::remove_var("ORT_DYLIB_PATH");
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        mgr.init_ort_env_with_override(Some(&override_path));
+
+        let got = std::env::var("ORT_DYLIB_PATH").expect("ORT_DYLIB_PATH should be set");
+        assert_eq!(got, override_path.display().to_string());
+
+        // Restore prior state so unrelated test runs see the environment as
+        // they found it.
+        match prev {
+            Some(v) => std::env::set_var("ORT_DYLIB_PATH", v),
+            None => std::env::remove_var("ORT_DYLIB_PATH"),
+        }
+    }
+
+    #[test]
+    fn init_ort_env_override_missing_falls_through_to_managed() {
+        // When the configured override does not exist, the managed directory
+        // lib should be used. Proves the fallthrough branch in
+        // `init_ort_env_with_override`.
+        let _guard = ORT_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempdir().unwrap();
+        let ort_dir = tmp.path().join("ort");
+        std::fs::create_dir_all(&ort_dir).unwrap();
+        let managed_lib = ort_dir.join(ORT_LIB_FILENAME);
+        std::fs::write(&managed_lib, b"fake-lib").unwrap();
+
+        let bogus_override = tmp.path().join("does-not-exist.dylib");
+
+        let prev = std::env::var("ORT_DYLIB_PATH").ok();
+        std::env::remove_var("ORT_DYLIB_PATH");
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        mgr.init_ort_env_with_override(Some(&bogus_override));
+
+        let got = std::env::var("ORT_DYLIB_PATH").expect("ORT_DYLIB_PATH should be set");
+        assert_eq!(got, managed_lib.display().to_string());
+
+        match prev {
+            Some(v) => std::env::set_var("ORT_DYLIB_PATH", v),
+            None => std::env::remove_var("ORT_DYLIB_PATH"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -944,6 +1052,7 @@ mod tests {
 
     #[test]
     fn init_ort_env_with_lib_present() {
+        let _guard = ORT_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempdir().unwrap();
         let ort_dir = tmp.path().join("ort");
         std::fs::create_dir_all(&ort_dir).unwrap();

@@ -26,7 +26,7 @@ pub fn run(
     #[cfg(feature = "embeddings")]
     let (engine_result, embedder) = std::thread::scope(|s| {
         let engine_handle = s.spawn(|| pipeline::open_engine(config));
-        let embedder = pipeline::load_embedder(None);
+        let embedder = pipeline::load_embedder(config, None);
         (
             engine_handle.join().expect("engine thread panicked"),
             embedder,
