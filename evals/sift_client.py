@@ -102,7 +102,7 @@ class SiftClient:
         self._send_request("initialize", {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "sift-bench", "version": "0.1.0"},
+            "clientInfo": {"name": "sift-evals", "version": "0.1.0"},
         })
         self._send_notification("notifications/initialized", {})
 

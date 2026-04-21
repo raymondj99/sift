@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Generate a synthetic test corpus for sift benchmarks.
-# Usage: bash benchsuite/create_corpus.sh [TARGET_DIR]
+# Usage: bash perf/create_corpus.sh [TARGET_DIR]
 
 CORPUS="${1:-/tmp/sift-bench-corpus}"
 mkdir -p "$CORPUS"

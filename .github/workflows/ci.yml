@@ -171,9 +171,9 @@ jobs:
           python-version: "3.11"
       - name: Install uv
         run: pip install uv
-      - name: Install bench dependencies
-        working-directory: bench
+      - name: Install eval dependencies
+        working-directory: evals
         run: uv sync
       - name: Run CodingMem benchmark (dry-run)
-        working-directory: bench
+        working-directory: evals
         run: SIFT_BIN=../target/debug/sift uv run python eval_codingmem.py --dry-run

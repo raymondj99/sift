@@ -31,7 +31,7 @@ Thumbs.db
 .claude/rules/cortex-*.md
 
 # Benchmark results
-/benchsuite/results/
+/perf/results/
 fuzz/target/
 fuzz/Cargo.lock
 SUMMARY.md

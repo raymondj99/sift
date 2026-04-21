@@ -1,11 +1,13 @@
-# Cortex Benchmark Suite
+# Cortex Memory Evaluations
 
-Evaluates the Cortex memory system against published baselines and a novel coding-assistant benchmark.
+Evaluates the Cortex memory system against published baselines and a novel
+coding-assistant benchmark. See [`perf/`](../perf/) for CLI-level
+performance benchmarks (speed, not accuracy).
 
 ## Setup
 
 ```bash
-cd bench
+cd evals
 uv sync
 ```
 

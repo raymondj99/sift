@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# sift Benchmark Suite
+# sift Performance Benchmarks
 #
 # End-to-end CLI benchmarks using hyperfine.
 # Requires: hyperfine (https://github.com/sharkdp/hyperfine)
 #
 # Usage:
 #   cargo build --release
-#   bash benchsuite/run.sh
+#   bash perf/run.sh
 #
 # Environment variables:
 #   SIFT_BENCH_CORPUS  Path to test corpus (default: /tmp/sift-bench-corpus)
 #   SIFT_BIN           Path to sift binary (default: ./target/release/sift)
 
 CORPUS="${SIFT_BENCH_CORPUS:-/tmp/sift-bench-corpus}"
-RESULTS_DIR="benchsuite/results"
+RESULTS_DIR="perf/results"
 SIFT="${SIFT_BIN:-./target/release/sift}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$RESULTS_DIR"
 
-echo "=== sift Benchmark Suite ==="
+echo "=== sift Performance Benchmarks ==="
 echo "Corpus: $CORPUS"
 echo "Binary: $SIFT"
 echo ""

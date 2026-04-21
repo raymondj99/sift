@@ -122,7 +122,7 @@ def _query_openai(
         body["max_tokens"] = max_tokens
 
     payload = json.dumps(body).encode()
-    headers = {"Content-Type": "application/json", "User-Agent": "sift-bench/0.1.0"}
+    headers = {"Content-Type": "application/json", "User-Agent": "sift-evals/0.1.0"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 

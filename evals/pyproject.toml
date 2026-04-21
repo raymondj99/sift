@@ -1,7 +1,7 @@
 [project]
-name = "sift-bench"
+name = "sift-evals"
 version = "0.1.0"
-description = "External benchmark suite for the Cortex memory system"
+description = "Memory-system evaluation harness for Cortex (LoCoMo, CodingMem)"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.42",

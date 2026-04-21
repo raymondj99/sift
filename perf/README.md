@@ -1,12 +1,15 @@
-# sift Benchmark Suite
+# sift Performance Benchmarks
 
-Benchmarks for measuring sift performance, inspired by
+CLI-level and store-level performance benchmarks, inspired by
 [ripgrep's benchsuite](https://github.com/BurntSushi/ripgrep/tree/master/benchsuite).
+
+See [`evals/`](../evals/) for memory-system *quality* benchmarks (LoCoMo,
+CodingMem). This directory is about speed.
 
 ## Structure
 
 ```
-benchsuite/
+perf/
   run.sh              End-to-end CLI benchmarks (hyperfine)
   create_corpus.sh    Generate synthetic test corpus (~3500 files)
   results/            Benchmark output (gitignored)
@@ -34,13 +37,13 @@ cargo bench -p sift-store -- --baseline before
 
 ```bash
 cargo build --release
-bash benchsuite/run.sh
+bash perf/run.sh
 ```
 
 Override defaults with environment variables:
 
 ```bash
-SIFT_BENCH_CORPUS=/path/to/corpus SIFT_BIN=./target/release/sift bash benchsuite/run.sh
+SIFT_BENCH_CORPUS=/path/to/corpus SIFT_BIN=./target/release/sift bash perf/run.sh
 ```
 
 ## What's Measured
