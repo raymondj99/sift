@@ -685,6 +685,7 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
                 }
                 #[cfg(not(feature = "mcp-http"))]
                 {
+                    let _ = (&host, port, &bearer, stateless);
                     anyhow::bail!(
                         "`sift mcp --http` requires the `mcp-http` feature.\n  Rebuild with: cargo install sift --features mcp-http"
                     );
