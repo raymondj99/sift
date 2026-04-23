@@ -90,6 +90,8 @@ impl std::fmt::Display for EntityType {
 pub struct Observation {
     /// Unique identifier (UUIDv7).
     pub id: String,
+    /// Stable logical observation lineage identifier across supersession.
+    pub logical_id: String,
     /// FK to the entity this fact is about.
     pub entity_id: String,
     /// The fact content (e.g., "prefers Rust over Python").

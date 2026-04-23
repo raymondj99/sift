@@ -189,6 +189,7 @@ sift search --vector-only "retry logic patterns"
 | `sift init` | Initialize a `.sift.toml` project config in the current directory |
 | `sift mcp` | Start MCP server for AI agent integration (requires `mcp` feature) |
 | `sift memory <CMD>` | Manage the Cortex automated memory system (`status`, `consolidate`, `generate-rules`, `init-hooks`) |
+| `sift memory-tool <CMD>` | Anthropic `memory_20250818` adapter backed by sift memory (`exec`, `path`, `migrate`) |
 | `sift daemon` | Manage the sift background daemon (requires `serve` feature) |
 | `sift bench` | Run Cortex memory system benchmarks |
 | `sift watch [PATH]` | Watch for changes and re-index (requires `serve` feature) |
@@ -361,7 +362,7 @@ Key features:
 - **Conflict detection** — `sift_remember` flags when new facts contradict existing ones
 - **5-phase consolidation** — dedup, promotion, skill extraction, decay, and pruning
 - **Retrieval-dependent strengthening** — frequently recalled memories gain relevance
-- **Rules generation** — `sift memory generate-rules` produces `.claude/rules/` files from consolidated memory
+- **Rules generation** — `sift memory generate-rules` always updates `AGENTS.md`, and also writes `.claude/rules/` when `.claude/` exists
 
 To enable LLM extraction (recommended), add to `~/.sift/config.toml`:
 
@@ -375,6 +376,86 @@ llm_extraction_model = "claude-haiku-4-5-20251001"
 Set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `OLLAMA_HOST`) in your environment. Cost: ~$0.003 per session with Haiku.
 
 Memory is stored at `~/.sift/indexes/{index}/memory/` and persists across sessions.
+
+### First-class AI memory surfaces
+
+Sift now has one memory backend with two user-facing surfaces:
+
+- **Universal MCP memory** — every client supported by `sift integrate` reaches the same sift memory through MCP tools like `sift_remember`, `sift_recall`, and `sift_get_entity`
+- **Anthropic native memory-tool** — `sift memory-tool` exposes Anthropic's `memory_20250818` file API as a projection over sift memory, not a separate directory store
+
+Supported memory matrix in this wave:
+
+| Surface | Clients |
+|---------|---------|
+| **MCP memory support** | Claude Code, Cursor, Windsurf, Codex, Gemini CLI, opencode, Zed, VS Code, LM Studio |
+| **Native file-shaped memory support** | Anthropic memory-tool only |
+| **Generated rules** | `AGENTS.md` always; `.claude/rules/` only when `.claude/` exists |
+
+### Anthropic memory-tool adapter
+
+`sift memory-tool` implements a virtual writable namespace at
+`/memories/entities/<slug>--<entity_id>.md` for existing entities. New pages are
+created via `/memories/entities/<slug>.md`, then re-viewed at their canonical
+ID-qualified path. Pages render directly from sift memory and
+preserve stable inline IDs for observations and relations:
+
+```md
+---
+entity: Raymond
+entity_id: ent_...
+entity_type: person
+page_revision: rev_...
+---
+
+# Raymond
+
+## Observations
+- [obs_...] prefers Rust over Python
+
+## Relations
+- [rel_...] maintains -> sift
+```
+
+Edits are validated against a freshly rendered page and mapped back into sift's
+knowledge graph. In v1, `str_replace` is the supported mutating edit path for
+existing pages; `insert` is intentionally rejected because line-number inserts
+cannot be made safe with the current Anthropic API shape. Unsupported freeform
+edits, heading changes, or anchorless rewrites are rejected instead of silently
+drifting the underlying memory.
+
+`str_replace` is line-targeted CAS: a concurrent edit to the anchored line
+you targeted rejects with `page changed, re-view and retry`; concurrent edits
+elsewhere on the page are accepted as long as the targeted bytes still match.
+
+Edit contract:
+
+| Edit | Backend action |
+|------|----------------|
+| Remove observation bullet | Invalidate the anchored observation |
+| Rewrite observation bullet | Supersede the anchored observation (lineage preserved via `logical_id`) |
+| Remove relation bullet | Invalidate the anchored relation |
+| Rewrite relation bullet | Invalidate old relation, create a new outgoing relation |
+| Change `entity_type` | Update the existing entity in place |
+| Delete entity page | `forget_entity` on the backing entity |
+| Add observation or relation bullet via `str_replace` | Rejected in v1 |
+| Change `entity`, `entity_id`, title, or section headings | Rejected |
+| Freeform prose outside the schema | Rejected |
+| `rename` command | Rejected in v1 |
+
+Known limitations: observation content containing literal newlines does not
+round-trip cleanly; mixed remove+add edits are rejected unless they map to a
+single rewrite; `create` accepts a bare-slug path but subsequent `view`,
+`str_replace`, and `delete` use the `<slug>--<entity_id>` form.
+
+If you used the earlier file-backed adapter, import old notes once with:
+
+```bash
+sift memory-tool migrate
+```
+
+Legacy notes are imported onto the synthetic entity `legacy-memory-tool notes`
+and become discoverable via `sift_recall`.
 
 ### Daemon mode
 

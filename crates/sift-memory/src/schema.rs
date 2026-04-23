@@ -14,7 +14,7 @@
 use rusqlite::Connection;
 
 /// Current schema version. Bump when adding migrations.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Initialize the memory database schema.
 ///
@@ -50,6 +50,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
 
         CREATE TABLE IF NOT EXISTS observations (
             id          TEXT PRIMARY KEY,
+            logical_id  TEXT NOT NULL,
             entity_id   TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
             content     TEXT NOT NULL,
             observed_at INTEGER NOT NULL,
@@ -101,6 +102,16 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if current < 3 {
         migrate_v2_to_v3(conn)?;
+    }
+    if current < 4 {
+        migrate_v3_to_v4(conn)?;
+    }
+
+    if has_column(conn, "observations", "logical_id")? {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_observations_logical_id
+                ON observations(logical_id);",
+        )?;
     }
 
     // Store schema version
@@ -283,6 +294,35 @@ fn migrate_v2_to_v3(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Migrate from schema v3 to v4: add logical observation lineage IDs.
+fn migrate_v3_to_v4(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch("BEGIN")?;
+
+    let result = migrate_v3_to_v4_inner(conn);
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT")?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+
+fn migrate_v3_to_v4_inner(conn: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(conn, "observations", "logical_id", "TEXT")?;
+    conn.execute(
+        "UPDATE observations SET logical_id = id WHERE logical_id IS NULL OR logical_id = ''",
+        [],
+    )?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_observations_logical_id
+            ON observations(logical_id);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_stored_as_v3() {
+    fn schema_version_stored_as_v4() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
@@ -329,7 +369,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION.to_string());
-        assert_eq!(version, "3");
+        assert_eq!(version, "4");
     }
 
     #[test]
@@ -359,8 +399,8 @@ mod tests {
 
         // Inserting an observation with a non-existent entity_id should fail
         let result = conn.execute(
-            "INSERT INTO observations (id, entity_id, content, observed_at)
-             VALUES ('obs1', 'nonexistent', 'test', 1000)",
+            "INSERT INTO observations (id, logical_id, entity_id, content, observed_at)
+             VALUES ('obs1', 'obs1', 'nonexistent', 'test', 1000)",
             [],
         );
         assert!(result.is_err());
@@ -376,6 +416,7 @@ mod tests {
         assert!(has_column(&conn, "observations", "utility_score").unwrap());
         assert!(has_column(&conn, "observations", "memory_tier").unwrap());
         assert!(has_column(&conn, "observations", "token_count").unwrap());
+        assert!(has_column(&conn, "observations", "logical_id").unwrap());
     }
 
     #[test]
@@ -424,8 +465,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO observations (id, entity_id, content, observed_at)
-             VALUES ('obs1', 'e1', 'test fact', 1000)",
+            "INSERT INTO observations (id, logical_id, entity_id, content, observed_at)
+             VALUES ('obs1', 'obs1', 'e1', 'test fact', 1000)",
             [],
         )
         .unwrap();
@@ -484,17 +525,18 @@ mod tests {
         assert_eq!(current_schema_version(&conn), 1);
         assert!(!has_column(&conn, "observations", "access_count").unwrap());
 
-        // Run init_schema — should upgrade to v3 (v1→v2→v3)
+        // Run init_schema — should upgrade to v4 (v1→v2→v3→v4)
         init_schema(&conn).unwrap();
 
-        assert_eq!(current_schema_version(&conn), 3);
+        assert_eq!(current_schema_version(&conn), 4);
         assert!(has_column(&conn, "observations", "access_count").unwrap());
         assert!(has_column(&conn, "observations", "memory_tier").unwrap());
+        assert!(has_column(&conn, "observations", "logical_id").unwrap());
         assert!(has_column(&conn, "entities", "access_count").unwrap());
 
         // Running again should be safe
         init_schema(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 3);
+        assert_eq!(current_schema_version(&conn), 4);
     }
 
     #[test]
@@ -532,6 +574,7 @@ mod tests {
         // All v2 artifacts must exist
         assert!(has_column(&conn, "observations", "access_count").unwrap());
         assert!(has_column(&conn, "observations", "memory_tier").unwrap());
+        assert!(has_column(&conn, "observations", "logical_id").unwrap());
         assert!(has_column(&conn, "entities", "access_count").unwrap());
 
         // Existing data should have correct defaults
@@ -552,6 +595,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(access, 0);
+
+        let logical_id: String = conn
+            .query_row(
+                "SELECT logical_id FROM observations WHERE id = 'o1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(logical_id, "o1");
     }
 
     #[test]
@@ -566,8 +618,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO observations (id, entity_id, content, observed_at)
-             VALUES ('obs1', 'e1', 'test fact', 1000)",
+            "INSERT INTO observations (id, logical_id, entity_id, content, observed_at)
+             VALUES ('obs1', 'obs1', 'e1', 'test fact', 1000)",
             [],
         )
         .unwrap();

@@ -4,10 +4,12 @@ pub mod config;
 pub mod daemon;
 pub mod export;
 pub mod init;
+pub mod integrate;
 pub mod list;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod memory;
+pub mod memory_tool;
 #[cfg(feature = "embeddings")]
 pub mod models;
 pub mod remove;

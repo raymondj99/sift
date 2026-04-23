@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **First-class Anthropic memory-tool adapter** — `sift memory-tool` now
+  projects entity pages directly from sift memory instead of using a separate
+  filesystem-backed store. Existing entities live at
+  `/memories/entities/<slug>--<entity_id>.md`; `create` accepts a bare-slug
+  path and returns the canonical ID-qualified form. Observation and relation
+  bullets render with stable IDs, edits map back into the knowledge graph
+  under a line-targeted CAS contract (the full edit contract is documented
+  in the README), and legacy file-backed notes can be imported with
+  `sift memory-tool migrate`.
+- **Observation lineage IDs** — observations now store indexed `logical_id`
+  values so superseded edits can preserve a stable logical chain across rewrites.
+
+### Changed
+- **Rules generation output** — `sift memory generate-rules` now documents the
+  real support matrix: `AGENTS.md` is always generated, while `.claude/rules/`
+  is written only when a `.claude/` directory is present.
+
+### Fixed
+- **Atomic memory-tool create** — creating a new entity page now writes the
+  root entity, initial observations, and outgoing relations in one
+  transaction so failed creates do not leave partially-written memory behind.
+
 ## [0.1.6] - 2026-04-19
 
 ### Added

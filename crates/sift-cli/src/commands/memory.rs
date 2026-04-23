@@ -265,7 +265,7 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Generate .claude/rules/ files from consolidated memory.
+/// Generate AGENTS.md and optional .claude/rules/ files from consolidated memory.
 pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
     let dir = memory_dir(config)?;
 

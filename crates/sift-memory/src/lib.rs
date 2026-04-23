@@ -19,7 +19,7 @@ pub mod rules;
 pub mod schema;
 pub mod types;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use sift_store::{DefaultFullTextStore, HybridSearchEngine, SimpleVectorStore};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,6 +56,48 @@ pub enum MemoryError {
 }
 
 pub type MemResult<T> = std::result::Result<T, MemoryError>;
+
+/// A transactional mutation plan for an entity page rendered by `sift memory-tool`.
+#[derive(Debug, Clone, Default)]
+pub struct PageMutationPlan {
+    pub entity_id: String,
+    pub entity_type_update: Option<EntityType>,
+    pub observation_invalidations: Vec<String>,
+    pub observation_rewrites: Vec<ObservationRewrite>,
+    pub observation_additions: Vec<String>,
+    pub relation_invalidations: Vec<String>,
+    pub relation_rewrites: Vec<RelationRewrite>,
+    pub relation_additions: Vec<RelationAddition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservationRewrite {
+    pub observation_id: String,
+    pub new_content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelationRewrite {
+    pub relation_id: String,
+    pub relation_type: String,
+    pub target_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelationAddition {
+    pub relation_type: String,
+    pub target_name: String,
+}
+
+#[derive(Debug, Clone)]
+enum SearchSyncOp {
+    DeleteObservation(String),
+    UpsertObservation {
+        observation_id: String,
+        entity_name: String,
+        content: String,
+    },
+}
 
 /// Current Unix timestamp in seconds.
 pub fn now_secs() -> i64 {
@@ -281,7 +323,6 @@ impl MemoryStore {
     /// Clears both vector and fulltext stores, then re-indexes every active
     /// observation with the current embedder. Only effective when the
     /// `embeddings` feature is enabled and an embedder is attached.
-    #[cfg(feature = "embeddings")]
     fn rebuild_search_index(&self) -> MemResult<()> {
         let start = std::time::Instant::now();
 
@@ -348,6 +389,40 @@ impl MemoryStore {
         Ok(())
     }
 
+    fn apply_search_sync_ops(&self, ops: &[SearchSyncOp]) -> MemResult<()> {
+        for op in ops {
+            match op {
+                SearchSyncOp::DeleteObservation(observation_id) => {
+                    let uri = format!("memory://observation/{observation_id}");
+                    self.search.delete_by_uri(&uri)?;
+                }
+                SearchSyncOp::UpsertObservation {
+                    observation_id,
+                    entity_name,
+                    content,
+                } => {
+                    self.index_observation(observation_id, entity_name, content)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_search_sync_ops_with_recovery(&self, ops: &[SearchSyncOp]) -> MemResult<()> {
+        if let Err(err) = self.apply_search_sync_ops(ops) {
+            warn!("Memory search sync failed after committed transaction: {err}");
+            if let Err(rebuild_err) = self.rebuild_search_index() {
+                warn!("Failed to rebuild memory search index after sync error: {rebuild_err}");
+                return Err(rebuild_err);
+            }
+            if let Err(save_err) = self.save() {
+                warn!("Failed to persist rebuilt memory search index: {save_err}");
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Entity operations
     // -----------------------------------------------------------------------
@@ -382,6 +457,45 @@ impl MemoryStore {
         if let Some(id) = existing {
             conn.execute(
                 "UPDATE entities SET entity_type = ?1, updated_at = ?2, confidence = ?3, source = ?4
+                 WHERE id = ?5",
+                rusqlite::params![entity_type.as_str(), now, confidence, source, id],
+            )?;
+            Ok(id)
+        } else {
+            let id = new_id();
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at, confidence, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, name, entity_type.as_str(), now, now, confidence, source],
+            )?;
+            Ok(id)
+        }
+    }
+
+    fn save_entity_tx(
+        conn: &Connection,
+        name: &str,
+        entity_type: EntityType,
+        confidence: f32,
+        source: &str,
+        now: i64,
+    ) -> MemResult<String> {
+        if name.is_empty() {
+            return Err(MemoryError::InvalidInput(
+                "Entity name must not be empty".to_string(),
+            ));
+        }
+
+        let existing: Option<String> = conn
+            .query_row("SELECT id FROM entities WHERE name = ?1", [name], |row| {
+                row.get(0)
+            })
+            .optional()?;
+
+        if let Some(id) = existing {
+            conn.execute(
+                "UPDATE entities
+                 SET entity_type = ?1, updated_at = ?2, confidence = ?3, source = ?4
                  WHERE id = ?5",
                 rusqlite::params![entity_type.as_str(), now, confidence, source, id],
             )?;
@@ -518,6 +632,24 @@ impl MemoryStore {
         }
     }
 
+    /// Update an entity's type in place.
+    pub fn update_entity_type(
+        &self,
+        entity_id: &str,
+        entity_type: EntityType,
+        source: &str,
+    ) -> MemResult<bool> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+        let updated = conn.execute(
+            "UPDATE entities
+             SET entity_type = ?1, updated_at = ?2, source = ?3
+             WHERE id = ?4",
+            rusqlite::params![entity_type.as_str(), now, source, entity_id],
+        )?;
+        Ok(updated > 0)
+    }
+
     /// List entities with optional type filter and pagination.
     ///
     /// Returns entities sorted by `updated_at` descending (most recently
@@ -580,6 +712,448 @@ impl MemoryStore {
         Ok(rows)
     }
 
+    /// Return all entities without pagination.
+    pub fn all_entities(&self) -> MemResult<Vec<Entity>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, name, entity_type, created_at, updated_at, confidence, source
+             FROM entities
+             ORDER BY updated_at DESC, name ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(Entity {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    entity_type: EntityType::parse(&row.get::<_, String>(2)?)
+                        .unwrap_or(EntityType::Concept),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    confidence: row.get(5)?,
+                    source: row.get(6)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(rows)
+    }
+
+    /// Create a new entity page atomically for `sift memory-tool`.
+    pub fn create_entity_page(
+        &self,
+        name: &str,
+        entity_type: EntityType,
+        observations: &[String],
+        relations: &[RelationAddition],
+        source: &str,
+    ) -> MemResult<String> {
+        if name.is_empty() {
+            return Err(MemoryError::InvalidInput(
+                "Entity name must not be empty".to_string(),
+            ));
+        }
+
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+
+        conn.execute_batch("BEGIN")?;
+
+        let result: MemResult<(String, Vec<SearchSyncOp>)> = (|| {
+            let existing: Option<String> = conn
+                .query_row("SELECT id FROM entities WHERE name = ?1", [name], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if existing.is_some() {
+                return Err(MemoryError::InvalidInput(format!(
+                    "entity already exists: {name}"
+                )));
+            }
+
+            let entity_id = new_id();
+            conn.execute(
+                "INSERT INTO entities (id, name, entity_type, created_at, updated_at, confidence, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![entity_id, name, entity_type.as_str(), now, now, 1.0f32, source],
+            )?;
+
+            let mut sync_ops = Vec::new();
+            for content in observations {
+                if content.is_empty() {
+                    return Err(MemoryError::InvalidInput(
+                        "Observation content must not be empty".to_string(),
+                    ));
+                }
+
+                let observation_id = new_id();
+                conn.execute(
+                    "INSERT INTO observations (
+                         id, logical_id, entity_id, content, observed_at, valid_from, confidence, source
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        observation_id,
+                        observation_id,
+                        entity_id,
+                        content,
+                        now,
+                        now,
+                        1.0f32,
+                        source
+                    ],
+                )?;
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, entity_id],
+                )?;
+                sync_ops.push(SearchSyncOp::UpsertObservation {
+                    observation_id,
+                    entity_name: name.to_string(),
+                    content: content.clone(),
+                });
+            }
+
+            for relation in relations {
+                let target_id = Self::save_entity_tx(
+                    &conn,
+                    &relation.target_name,
+                    EntityType::Concept,
+                    1.0,
+                    source,
+                    now,
+                )?;
+                Self::insert_relation_tx(
+                    &conn,
+                    &entity_id,
+                    &target_id,
+                    &relation.relation_type,
+                    1.0,
+                    source,
+                    now,
+                )?;
+            }
+
+            Ok((entity_id, sync_ops))
+        })();
+
+        let (entity_id, sync_ops) = match result {
+            Ok(result) => {
+                conn.execute_batch("COMMIT")?;
+                result
+            }
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(err);
+            }
+        };
+        drop(conn);
+
+        self.apply_search_sync_ops_with_recovery(&sync_ops)?;
+        Ok(entity_id)
+    }
+
+    /// Apply a memory-tool entity-page mutation atomically.
+    ///
+    /// All SQLite writes happen inside one transaction. Search index updates
+    /// are applied only after commit; if they fail, the database remains the
+    /// source of truth and a rebuild is attempted before returning the error.
+    pub fn apply_page_mutation_plan(&self, plan: &PageMutationPlan, source: &str) -> MemResult<()> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+
+        conn.execute_batch("BEGIN")?;
+
+        let result: MemResult<Vec<SearchSyncOp>> = (|| {
+            let entity_name: String = conn
+                .query_row(
+                    "SELECT name FROM entities WHERE id = ?1",
+                    [&plan.entity_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    MemoryError::InvalidInput("page changed, re-view and retry".to_string())
+                })?;
+
+            let mut validated_observation_rewrites = Vec::new();
+            for rewrite in &plan.observation_rewrites {
+                let row: Option<(String, String)> = conn
+                    .query_row(
+                        "SELECT entity_id, logical_id
+                         FROM observations
+                         WHERE id = ?1 AND valid_until IS NULL",
+                        [&rewrite.observation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((entity_id, logical_id)) = row else {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                };
+                if entity_id != plan.entity_id {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+                validated_observation_rewrites.push((
+                    rewrite.observation_id.clone(),
+                    rewrite.new_content.clone(),
+                    logical_id,
+                ));
+            }
+
+            let mut validated_relation_rewrites = Vec::new();
+            for rewrite in &plan.relation_rewrites {
+                let row: Option<(String, f32)> = conn
+                    .query_row(
+                        "SELECT from_entity, weight
+                         FROM relations
+                         WHERE id = ?1 AND valid_until IS NULL",
+                        [&rewrite.relation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((from_entity, weight)) = row else {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                };
+                if from_entity != plan.entity_id {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+                validated_relation_rewrites.push((
+                    rewrite.relation_id.clone(),
+                    rewrite.relation_type.clone(),
+                    rewrite.target_name.clone(),
+                    weight,
+                ));
+            }
+
+            if let Some(entity_type) = plan.entity_type_update {
+                let updated = conn.execute(
+                    "UPDATE entities
+                     SET entity_type = ?1, updated_at = ?2, source = ?3
+                     WHERE id = ?4",
+                    rusqlite::params![entity_type.as_str(), now, source, plan.entity_id],
+                )?;
+                if updated == 0 {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+            }
+
+            let mut sync_ops = Vec::new();
+
+            for observation_id in &plan.observation_invalidations {
+                let updated = conn.execute(
+                    "UPDATE observations
+                     SET valid_until = ?1
+                     WHERE id = ?2 AND entity_id = ?3 AND valid_until IS NULL",
+                    rusqlite::params![now, observation_id, plan.entity_id],
+                )?;
+                if updated == 0 {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, plan.entity_id],
+                )?;
+                sync_ops.push(SearchSyncOp::DeleteObservation(observation_id.clone()));
+            }
+
+            for (observation_id, new_content, logical_id) in validated_observation_rewrites {
+                let updated = conn.execute(
+                    "UPDATE observations
+                     SET valid_until = ?1
+                     WHERE id = ?2 AND entity_id = ?3 AND valid_until IS NULL",
+                    rusqlite::params![now, observation_id, plan.entity_id],
+                )?;
+                if updated == 0 {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+
+                let new_id = new_id();
+                conn.execute(
+                    "INSERT INTO observations (
+                         id, logical_id, entity_id, content, observed_at, valid_from,
+                         confidence, source, supersedes
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        new_id,
+                        logical_id,
+                        plan.entity_id,
+                        new_content,
+                        now,
+                        now,
+                        1.0f32,
+                        source,
+                        observation_id
+                    ],
+                )?;
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, plan.entity_id],
+                )?;
+                sync_ops.push(SearchSyncOp::DeleteObservation(observation_id));
+                sync_ops.push(SearchSyncOp::UpsertObservation {
+                    observation_id: new_id,
+                    entity_name: entity_name.clone(),
+                    content: new_content,
+                });
+            }
+
+            for content in &plan.observation_additions {
+                let observation_id = new_id();
+                conn.execute(
+                    "INSERT INTO observations (
+                         id, logical_id, entity_id, content, observed_at, valid_from, confidence, source
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        observation_id,
+                        observation_id,
+                        plan.entity_id,
+                        content,
+                        now,
+                        now,
+                        1.0f32,
+                        source
+                    ],
+                )?;
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, plan.entity_id],
+                )?;
+                sync_ops.push(SearchSyncOp::UpsertObservation {
+                    observation_id,
+                    entity_name: entity_name.clone(),
+                    content: content.clone(),
+                });
+            }
+
+            for relation_id in &plan.relation_invalidations {
+                let relation: Option<(String, String)> = conn
+                    .query_row(
+                        "SELECT from_entity, to_entity
+                         FROM relations
+                         WHERE id = ?1 AND valid_until IS NULL",
+                        [relation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((from_entity, to_entity)) = relation else {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                };
+                if from_entity != plan.entity_id {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+                conn.execute(
+                    "UPDATE relations SET valid_until = ?1 WHERE id = ?2 AND valid_until IS NULL",
+                    rusqlite::params![now, relation_id],
+                )?;
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id IN (?2, ?3)",
+                    rusqlite::params![now, from_entity, to_entity],
+                )?;
+            }
+
+            for (relation_id, relation_type, target_name, weight) in validated_relation_rewrites {
+                let relation: Option<(String, String)> = conn
+                    .query_row(
+                        "SELECT from_entity, to_entity
+                         FROM relations
+                         WHERE id = ?1 AND valid_until IS NULL",
+                        [&relation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((from_entity, old_to_entity)) = relation else {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                };
+                if from_entity != plan.entity_id {
+                    return Err(MemoryError::InvalidInput(
+                        "page changed, re-view and retry".to_string(),
+                    ));
+                }
+                conn.execute(
+                    "UPDATE relations SET valid_until = ?1 WHERE id = ?2 AND valid_until IS NULL",
+                    rusqlite::params![now, relation_id],
+                )?;
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id IN (?2, ?3)",
+                    rusqlite::params![now, from_entity, old_to_entity],
+                )?;
+
+                let target_id = Self::save_entity_tx(
+                    &conn,
+                    &target_name,
+                    EntityType::Concept,
+                    1.0,
+                    source,
+                    now,
+                )?;
+                Self::insert_relation_tx(
+                    &conn,
+                    &plan.entity_id,
+                    &target_id,
+                    &relation_type,
+                    weight,
+                    source,
+                    now,
+                )?;
+            }
+
+            for addition in &plan.relation_additions {
+                let target_id = Self::save_entity_tx(
+                    &conn,
+                    &addition.target_name,
+                    EntityType::Concept,
+                    1.0,
+                    source,
+                    now,
+                )?;
+                Self::insert_relation_tx(
+                    &conn,
+                    &plan.entity_id,
+                    &target_id,
+                    &addition.relation_type,
+                    1.0,
+                    source,
+                    now,
+                )?;
+            }
+
+            Ok(sync_ops)
+        })();
+
+        let sync_ops = match result {
+            Ok(sync_ops) => {
+                conn.execute_batch("COMMIT")?;
+                sync_ops
+            }
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(err);
+            }
+        };
+        drop(conn);
+
+        self.apply_search_sync_ops_with_recovery(&sync_ops)?;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Observation operations
     // -----------------------------------------------------------------------
@@ -595,6 +1169,17 @@ impl MemoryStore {
         confidence: f32,
         source: &str,
     ) -> MemResult<String> {
+        self.add_observation_with_lineage(entity_id, content, confidence, source, None)
+    }
+
+    fn add_observation_with_lineage(
+        &self,
+        entity_id: &str,
+        content: &str,
+        confidence: f32,
+        source: &str,
+        logical_id: Option<&str>,
+    ) -> MemResult<String> {
         if content.is_empty() {
             return Err(MemoryError::InvalidInput(
                 "Observation content must not be empty".to_string(),
@@ -605,10 +1190,11 @@ impl MemoryStore {
         let now = now_secs();
         let id = new_id();
 
+        let logical_id = logical_id.unwrap_or(&id).to_string();
         conn.execute(
-            "INSERT INTO observations (id, entity_id, content, observed_at, valid_from, confidence, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![id, entity_id, content, now, now, confidence, source],
+            "INSERT INTO observations (id, logical_id, entity_id, content, observed_at, valid_from, confidence, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![id, logical_id, entity_id, content, now, now, confidence, source],
         )?;
 
         // Update entity's updated_at
@@ -629,12 +1215,22 @@ impl MemoryStore {
 
         // Drop the lock before inserting into search (which takes its own locks)
         drop(conn);
+        self.index_observation(&id, &entity_name, content)?;
 
+        Ok(id)
+    }
+
+    fn index_observation(
+        &self,
+        observation_id: &str,
+        entity_name: &str,
+        content: &str,
+    ) -> MemResult<()> {
         // Index into hybrid search for recall. The indexed text is
         // "entity_name: observation" so keyword search matches on entity names.
         let search_text = format!("{entity_name}: {content}");
         let vector = self.embed_observation(&search_text);
-        let uri = format!("memory://observation/{id}");
+        let uri = format!("memory://observation/{observation_id}");
 
         let chunk = sift_core::EmbeddedChunk {
             chunk: sift_core::Chunk {
@@ -651,8 +1247,7 @@ impl MemoryStore {
         };
 
         self.search.insert(&[chunk])?;
-
-        Ok(id)
+        Ok(())
     }
 
     /// Detect potential knowledge conflicts between new content and existing
@@ -745,7 +1340,7 @@ impl MemoryStore {
     pub fn get_entity_observations(&self, entity_id: &str) -> MemResult<Vec<Observation>> {
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, entity_id, content, observed_at, valid_from, valid_until,
+            "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
                     confidence, source, supersedes
              FROM observations
              WHERE entity_id = ?1 AND valid_until IS NULL
@@ -756,14 +1351,15 @@ impl MemoryStore {
             .query_map([entity_id], |row| {
                 Ok(Observation {
                     id: row.get(0)?,
-                    entity_id: row.get(1)?,
-                    content: row.get(2)?,
-                    observed_at: row.get(3)?,
-                    valid_from: row.get(4)?,
-                    valid_until: row.get(5)?,
-                    confidence: row.get(6)?,
-                    source: row.get(7)?,
-                    supersedes: row.get(8)?,
+                    logical_id: row.get(1)?,
+                    entity_id: row.get(2)?,
+                    content: row.get(3)?,
+                    observed_at: row.get(4)?,
+                    valid_from: row.get(5)?,
+                    valid_until: row.get(6)?,
+                    confidence: row.get(7)?,
+                    source: row.get(8)?,
+                    supersedes: row.get(9)?,
                 })
             })?
             .filter_map(Result::ok)
@@ -772,24 +1368,152 @@ impl MemoryStore {
         Ok(rows)
     }
 
+    /// Retrieve an observation by ID.
+    pub fn get_observation(&self, observation_id: &str) -> MemResult<Option<Observation>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let result = conn.query_row(
+            "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
+                    confidence, source, supersedes
+             FROM observations
+             WHERE id = ?1",
+            [observation_id],
+            |row| {
+                Ok(Observation {
+                    id: row.get(0)?,
+                    logical_id: row.get(1)?,
+                    entity_id: row.get(2)?,
+                    content: row.get(3)?,
+                    observed_at: row.get(4)?,
+                    valid_from: row.get(5)?,
+                    valid_until: row.get(6)?,
+                    confidence: row.get(7)?,
+                    source: row.get(8)?,
+                    supersedes: row.get(9)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(obs) => Ok(Some(obs)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Invalidate an observation (soft delete by setting `valid_until`).
     pub fn invalidate_observation(&self, observation_id: &str) -> MemResult<bool> {
+        self.invalidate_observation_internal(observation_id, None)
+    }
+
+    fn invalidate_observation_internal(
+        &self,
+        observation_id: &str,
+        now_override: Option<i64>,
+    ) -> MemResult<bool> {
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let now = now_secs();
+        let now = now_override.unwrap_or_else(now_secs);
+
+        let entity_id: Option<String> = conn
+            .query_row(
+                "SELECT entity_id FROM observations WHERE id = ?1 AND valid_until IS NULL",
+                [observation_id],
+                |row| row.get(0),
+            )
+            .ok();
 
         let updated = conn.execute(
             "UPDATE observations SET valid_until = ?1 WHERE id = ?2 AND valid_until IS NULL",
             rusqlite::params![now, observation_id],
         )?;
 
-        // Also remove from search index
         if updated > 0 {
+            if let Some(entity_id) = entity_id {
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, entity_id],
+                )?;
+            }
+
             drop(conn);
             let uri = format!("memory://observation/{observation_id}");
             let _ = self.search.delete_by_uri(&uri);
         }
 
         Ok(updated > 0)
+    }
+
+    /// Supersede an active observation with a new version.
+    ///
+    /// Returns `Ok(Some(new_id))` on success, `Ok(None)` when the predecessor is
+    /// no longer active, and an error for invalid input.
+    pub fn supersede_observation(
+        &self,
+        observation_id: &str,
+        new_content: &str,
+        confidence: f32,
+        source: &str,
+    ) -> MemResult<Option<String>> {
+        if new_content.is_empty() {
+            return Err(MemoryError::InvalidInput(
+                "Observation content must not be empty".to_string(),
+            ));
+        }
+
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+
+        let predecessor: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT o.entity_id, o.logical_id, e.name
+                 FROM observations o
+                 JOIN entities e ON e.id = o.entity_id
+                 WHERE o.id = ?1 AND o.valid_until IS NULL",
+                [observation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok();
+
+        let Some((entity_id, logical_id, entity_name)) = predecessor else {
+            return Ok(None);
+        };
+
+        let updated = conn.execute(
+            "UPDATE observations SET valid_until = ?1 WHERE id = ?2 AND valid_until IS NULL",
+            rusqlite::params![now, observation_id],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        let new_id = new_id();
+        conn.execute(
+            "INSERT INTO observations (
+                 id, logical_id, entity_id, content, observed_at, valid_from,
+                 confidence, source, supersedes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                new_id,
+                logical_id,
+                entity_id,
+                new_content,
+                now,
+                now,
+                confidence,
+                source,
+                observation_id
+            ],
+        )?;
+        conn.execute(
+            "UPDATE entities SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, entity_id],
+        )?;
+        drop(conn);
+
+        let old_uri = format!("memory://observation/{observation_id}");
+        let _ = self.search.delete_by_uri(&old_uri);
+        self.index_observation(&new_id, &entity_name, new_content)?;
+
+        Ok(Some(new_id))
     }
 
     /// Delete an entity entirely, cascading to all its observations and
@@ -913,6 +1637,39 @@ impl MemoryStore {
             rusqlite::params![id, from_entity, to_entity, relation_type, weight, now, now, source],
         )?;
 
+        conn.execute(
+            "UPDATE entities SET updated_at = ?1 WHERE id IN (?2, ?3)",
+            rusqlite::params![now, from_entity, to_entity],
+        )?;
+
+        Ok(id)
+    }
+
+    fn insert_relation_tx(
+        conn: &Connection,
+        from_entity: &str,
+        to_entity: &str,
+        relation_type: &str,
+        weight: f32,
+        source: &str,
+        now: i64,
+    ) -> MemResult<String> {
+        if relation_type.is_empty() {
+            return Err(MemoryError::InvalidInput(
+                "Relation type must not be empty".to_string(),
+            ));
+        }
+
+        let id = new_id();
+        conn.execute(
+            "INSERT INTO relations (id, from_entity, to_entity, relation_type, weight, created_at, valid_from, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![id, from_entity, to_entity, relation_type, weight, now, now, source],
+        )?;
+        conn.execute(
+            "UPDATE entities SET updated_at = ?1 WHERE id IN (?2, ?3)",
+            rusqlite::params![now, from_entity, to_entity],
+        )?;
         Ok(id)
     }
 
@@ -945,6 +1702,65 @@ impl MemoryStore {
             .collect();
 
         Ok(rows)
+    }
+
+    /// Retrieve a relation by ID.
+    pub fn get_relation(&self, relation_id: &str) -> MemResult<Option<Relation>> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let result = conn.query_row(
+            "SELECT id, from_entity, to_entity, relation_type, weight, created_at,
+                    valid_from, valid_until, source
+             FROM relations
+             WHERE id = ?1",
+            [relation_id],
+            |row| {
+                Ok(Relation {
+                    id: row.get(0)?,
+                    from_entity: row.get(1)?,
+                    to_entity: row.get(2)?,
+                    relation_type: row.get(3)?,
+                    weight: row.get(4)?,
+                    created_at: row.get(5)?,
+                    valid_from: row.get(6)?,
+                    valid_until: row.get(7)?,
+                    source: row.get(8)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(relation) => Ok(Some(relation)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Soft-delete an active relation.
+    pub fn invalidate_relation(&self, relation_id: &str) -> MemResult<bool> {
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+        let relation: Option<(String, String)> = conn
+            .query_row(
+                "SELECT from_entity, to_entity
+                 FROM relations
+                 WHERE id = ?1 AND valid_until IS NULL",
+                [relation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        let updated = conn.execute(
+            "UPDATE relations SET valid_until = ?1 WHERE id = ?2 AND valid_until IS NULL",
+            rusqlite::params![now, relation_id],
+        )?;
+        if updated > 0 {
+            if let Some((from_entity, to_entity)) = relation {
+                conn.execute(
+                    "UPDATE entities SET updated_at = ?1 WHERE id IN (?2, ?3)",
+                    rusqlite::params![now, from_entity, to_entity],
+                )?;
+            }
+        }
+        Ok(updated > 0)
     }
 
     // -----------------------------------------------------------------------
@@ -996,7 +1812,7 @@ impl MemoryStore {
             // Single query: observation + entity + v2 access metadata.
             // All columns fetched in one round trip — no secondary lookups.
             let obs_entity = conn.query_row(
-                "SELECT o.id, o.entity_id, o.content, o.observed_at, o.valid_from, o.valid_until,
+                "SELECT o.id, o.logical_id, o.entity_id, o.content, o.observed_at, o.valid_from, o.valid_until,
                         o.confidence, o.source, o.supersedes,
                         e.name, e.entity_type,
                         o.access_count, o.last_accessed, o.memory_tier
@@ -1007,20 +1823,21 @@ impl MemoryStore {
                 |row| {
                     let obs = Observation {
                         id: row.get(0)?,
-                        entity_id: row.get(1)?,
-                        content: row.get(2)?,
-                        observed_at: row.get(3)?,
-                        valid_from: row.get(4)?,
-                        valid_until: row.get(5)?,
-                        confidence: row.get(6)?,
-                        source: row.get(7)?,
-                        supersedes: row.get(8)?,
+                        logical_id: row.get(1)?,
+                        entity_id: row.get(2)?,
+                        content: row.get(3)?,
+                        observed_at: row.get(4)?,
+                        valid_from: row.get(5)?,
+                        valid_until: row.get(6)?,
+                        confidence: row.get(7)?,
+                        source: row.get(8)?,
+                        supersedes: row.get(9)?,
                     };
-                    let entity_name: String = row.get(9)?;
-                    let entity_type_str: String = row.get(10)?;
-                    let access_count: i64 = row.get(11)?;
-                    let last_accessed: Option<i64> = row.get(12)?;
-                    let memory_tier: String = row.get(13)?;
+                    let entity_name: String = row.get(10)?;
+                    let entity_type_str: String = row.get(11)?;
+                    let access_count: i64 = row.get(12)?;
+                    let last_accessed: Option<i64> = row.get(13)?;
+                    let memory_tier: String = row.get(14)?;
                     Ok((
                         obs,
                         entity_name,
@@ -1221,7 +2038,7 @@ impl MemoryStore {
 
         // Prepare the observation query once, reuse for each entity.
         let mut obs_stmt = conn.prepare(
-            "SELECT id, entity_id, content, observed_at, valid_from, valid_until,
+            "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
                     confidence, source, supersedes
              FROM observations
              WHERE entity_id = ?1 AND valid_until IS NULL
@@ -1243,14 +2060,15 @@ impl MemoryStore {
                 .query_map([entity_id], |row| {
                     Ok(Observation {
                         id: row.get(0)?,
-                        entity_id: row.get(1)?,
-                        content: row.get(2)?,
-                        observed_at: row.get(3)?,
-                        valid_from: row.get(4)?,
-                        valid_until: row.get(5)?,
-                        confidence: row.get(6)?,
-                        source: row.get(7)?,
-                        supersedes: row.get(8)?,
+                        logical_id: row.get(1)?,
+                        entity_id: row.get(2)?,
+                        content: row.get(3)?,
+                        observed_at: row.get(4)?,
+                        valid_from: row.get(5)?,
+                        valid_until: row.get(6)?,
+                        confidence: row.get(7)?,
+                        source: row.get(8)?,
+                        supersedes: row.get(9)?,
                     })
                 })?
                 .filter_map(Result::ok)
@@ -1343,7 +2161,7 @@ impl MemoryStore {
         let mut entity_stmt =
             conn.prepare("SELECT name, entity_type FROM entities WHERE id = ?1")?;
         let mut obs_stmt = conn.prepare(
-            "SELECT id, entity_id, content, observed_at, valid_from, valid_until,
+            "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
                     confidence, source, supersedes
              FROM observations
              WHERE entity_id = ?1 AND valid_until IS NULL
@@ -1387,14 +2205,15 @@ impl MemoryStore {
                     .query_map([&neighbor_id], |row| {
                         Ok(Observation {
                             id: row.get(0)?,
-                            entity_id: row.get(1)?,
-                            content: row.get(2)?,
-                            observed_at: row.get(3)?,
-                            valid_from: row.get(4)?,
-                            valid_until: row.get(5)?,
-                            confidence: row.get(6)?,
-                            source: row.get(7)?,
-                            supersedes: row.get(8)?,
+                            logical_id: row.get(1)?,
+                            entity_id: row.get(2)?,
+                            content: row.get(3)?,
+                            observed_at: row.get(4)?,
+                            valid_from: row.get(5)?,
+                            valid_until: row.get(6)?,
+                            confidence: row.get(7)?,
+                            source: row.get(8)?,
+                            supersedes: row.get(9)?,
                         })
                     })?
                     .filter_map(Result::ok)
@@ -1507,7 +2326,10 @@ impl MemoryStore {
                             rusqlite::params![now, older_id],
                         )?;
                         conn.execute(
-                            "UPDATE observations SET supersedes = ?1 WHERE id = ?2",
+                            "UPDATE observations
+                             SET supersedes = ?1,
+                                 logical_id = (SELECT logical_id FROM observations WHERE id = ?1)
+                             WHERE id = ?2",
                             rusqlite::params![older_id, newer_id],
                         )?;
 
@@ -1521,7 +2343,7 @@ impl MemoryStore {
 
                     if text_sim > text_threshold {
                         // Pass 2: Near-duplicate by text (high Jaccard overlap)
-                        Self::supersede_observation(
+                        Self::merge_duplicate_observation(
                             &conn,
                             &observations[i].0,
                             &observations[j].0,
@@ -1540,7 +2362,7 @@ impl MemoryStore {
 
                         if embed_sim > text_threshold {
                             // Semantically identical — merge
-                            Self::supersede_observation(
+                            Self::merge_duplicate_observation(
                                 &conn,
                                 &observations[i].0,
                                 &observations[j].0,
@@ -1580,7 +2402,7 @@ impl MemoryStore {
     }
 
     /// Mark the older observation as superseded by the newer one.
-    fn supersede_observation(
+    fn merge_duplicate_observation(
         conn: &rusqlite::Connection,
         older_id: &str,
         newer_id: &str,
@@ -1593,7 +2415,10 @@ impl MemoryStore {
             rusqlite::params![now, older_id],
         )?;
         conn.execute(
-            "UPDATE observations SET supersedes = ?1 WHERE id = ?2",
+            "UPDATE observations
+             SET supersedes = ?1,
+                 logical_id = (SELECT logical_id FROM observations WHERE id = ?1)
+             WHERE id = ?2",
             rusqlite::params![older_id, newer_id],
         )?;
         superseded.insert(older_id.to_string());
@@ -1754,13 +2579,14 @@ impl MemoryStore {
         // `flush` is a FullTextStore trait method. `save` on the vector
         // store resolves to an inherent method on FlatVectorIndex but to
         // the VectorIndex trait method on HnswIndex — we always need the
-        // trait in scope to cover the hnsw build.
-        use sift_store::{FullTextStore as _, VectorIndex as _};
+        // trait-qualified call to cover the hnsw build.
+        use sift_store::FullTextStore as _;
 
         if !self.index_dir.as_os_str().is_empty() {
-            self.search
-                .vector_store
-                .save(&self.index_dir.join("vectors.bin"))?;
+            sift_store::VectorIndex::save(
+                &self.search.vector_store,
+                &self.index_dir.join("vectors.bin"),
+            )?;
             self.search.fulltext_store.flush()?;
         }
         Ok(())
@@ -1983,6 +2809,28 @@ mod tests {
 
         let observations = store.get_entity_observations(&entity_id).unwrap();
         assert_eq!(observations.len(), 2);
+    }
+
+    #[test]
+    fn create_entity_page_rolls_back_on_late_failure() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        let err = store
+            .create_entity_page(
+                "Raymond",
+                EntityType::Person,
+                &["prefers Rust over Python".to_string()],
+                &[RelationAddition {
+                    relation_type: String::new(),
+                    target_name: "sift".to_string(),
+                }],
+                "test",
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Relation type must not be empty"));
+        assert!(store.get_entity("Raymond").unwrap().is_none());
+        assert!(store.get_entity("sift").unwrap().is_none());
+        assert!(store.all_entities().unwrap().is_empty());
     }
 
     #[test]

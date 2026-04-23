@@ -15,3 +15,46 @@ pub fn run(config: &Config) -> SiftResult<()> {
             .map_err(sift_core::SiftError::Other)
     })
 }
+
+/// Run the MCP server over Streamable HTTP.
+///
+/// Starts an axum server at `http://<host>:<port>/mcp`. All stdio-accessible
+/// tools are exposed. When `bearer_token` is set, every request must carry
+/// `Authorization: Bearer <token>`.
+#[cfg(feature = "mcp-http")]
+pub fn run_http(
+    config: &Config,
+    host: &str,
+    port: u16,
+    bearer_token: Option<String>,
+    stateful: bool,
+) -> SiftResult<()> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+        sift_core::SiftError::Other(anyhow::anyhow!("Failed to start async runtime: {}", e))
+    })?;
+
+    rt.block_on(async {
+        let opts = sift_mcp::http::HttpServerOptions {
+            host: host.to_string(),
+            port,
+            bearer_token,
+            stateful,
+            ..Default::default()
+        };
+
+        // Wire Ctrl-C into the cancellation token so the server shuts down
+        // gracefully on SIGINT.
+        let ct = opts.cancellation_token.clone();
+        let server = tokio::spawn(sift_mcp::http::run_http_server(config.clone(), opts));
+
+        tokio::select! {
+            r = server => r
+                .map_err(|e| sift_core::SiftError::Other(anyhow::anyhow!("http server task: {e}")))?
+                .map_err(sift_core::SiftError::Other),
+            _ = tokio::signal::ctrl_c() => {
+                ct.cancel();
+                Ok(())
+            }
+        }
+    })
+}

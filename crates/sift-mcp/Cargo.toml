@@ -15,6 +15,15 @@ fulltext = ["sift-store/fulltext", "sift-memory/fulltext"]
 hnsw = ["sift-store/hnsw", "sift-memory/hnsw"]
 embeddings = ["dep:sift-embed", "sift-memory/embeddings"]
 memory = []
+# Enable the Streamable HTTP MCP transport (in addition to stdio).
+http = [
+    "rmcp/transport-streamable-http-server",
+    "rmcp/server-side-http",
+    "rmcp/tower",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:tower-http",
+]
 
 [dependencies]
 sift-core = { workspace = true }
@@ -32,5 +41,11 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 walkdir = { workspace = true }
 
+axum = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
+http-body-util = { workspace = true }
+tower = { workspace = true }

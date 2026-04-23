@@ -282,9 +282,30 @@ enum Commands {
     #[cfg(not(feature = "embeddings"))]
     Models {},
 
-    /// Start MCP server on stdio (for AI agent integration)
+    /// Start MCP server (stdio by default, HTTP with --http)
     #[cfg(feature = "mcp")]
-    Mcp,
+    Mcp {
+        /// Serve over Streamable HTTP instead of stdio.
+        #[arg(long)]
+        http: bool,
+
+        /// Host to bind the HTTP transport to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to bind the HTTP transport to
+        #[arg(long, default_value = "7821")]
+        port: u16,
+
+        /// Require `Authorization: Bearer <token>` on every request.
+        /// Defaults to the value of $SIFT_MCP_BEARER if unset.
+        #[arg(long, env = "SIFT_MCP_BEARER")]
+        bearer: Option<String>,
+
+        /// Run in stateless mode (no per-session state; no GET/DELETE).
+        #[arg(long)]
+        stateless: bool,
+    },
 
     /// Start MCP server on stdio [requires: --features mcp]
     #[cfg(not(feature = "mcp"))]
@@ -345,11 +366,78 @@ enum Commands {
         action: MemoryAction,
     },
 
+    /// Run as an Anthropic Memory Tool (memory_20250818) adapter
+    ///
+    /// Exposes a file-shaped memory tool backed by sift's persistent memory.
+    /// Pipe a tool_use JSON body to `exec` on stdin; the tool_result content
+    /// is written to stdout.
+    MemoryTool {
+        #[command(subcommand)]
+        action: MemoryToolAction,
+    },
+
+    /// Register sift as an MCP server in installed AI tools
+    ///
+    /// Detects Claude Code, Cursor, Codex, Gemini CLI, opencode, Windsurf,
+    /// Zed, VS Code and LM Studio and writes the right config entry. The
+    /// write is idempotent — re-running is a no-op unless --force is set.
+    Integrate {
+        /// Platforms to configure (default: all detected). Known:
+        /// claude-code, cursor, windsurf, codex, gemini, opencode, zed,
+        /// vscode, lm-studio.
+        platforms: Vec<String>,
+
+        /// List detected platforms without changing anything
+        #[arg(long)]
+        list: bool,
+
+        /// Show what would change without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Overwrite existing sift entries if they differ
+        #[arg(long)]
+        force: bool,
+
+        /// Remove sift entries from the named platforms (default: all)
+        #[arg(long)]
+        uninstall: bool,
+
+        /// Use HTTP MCP transport at this URL instead of spawning sift over stdio
+        #[arg(long, value_name = "URL")]
+        http: Option<String>,
+
+        /// Override the sift binary path written into configs
+        #[arg(long, value_name = "PATH")]
+        exe: Option<std::path::PathBuf>,
+    },
+
     /// Run Cortex memory system benchmarks
     Bench {
         /// Run a specific benchmark (latency-ingest, latency-recall, strengthening,
         /// forgetting, consolidation, skill-extraction, e2e) or "all"
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemoryToolAction {
+    /// Execute a memory_20250818 tool_use from stdin; write result to stdout
+    Exec {
+        /// Override the backing memory directory (default: current index memory dir)
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+    },
+    /// Print the backing memory directory used by the adapter
+    Path {
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+    },
+    /// Import legacy file-backed memory-tool notes into sift memory
+    Migrate {
+        /// Source directory to import (default: ~/.sift/memories/)
+        #[arg(long)]
+        source: Option<std::path::PathBuf>,
     },
 }
 
@@ -370,7 +458,7 @@ enum MemoryAction {
         #[arg(long)]
         phase: Option<String>,
     },
-    /// Generate .claude/rules/ files from consolidated memory
+    /// Generate AGENTS.md and .claude/rules/ files from consolidated memory
     GenerateRules,
     /// Print recommended Claude Code hooks configuration
     InitHooks,
@@ -583,8 +671,27 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
         }
 
         #[cfg(feature = "mcp")]
-        Commands::Mcp => {
-            commands::mcp::run(&config)?;
+        Commands::Mcp {
+            http,
+            host,
+            port,
+            bearer,
+            stateless,
+        } => {
+            if http {
+                #[cfg(feature = "mcp-http")]
+                {
+                    commands::mcp::run_http(&config, &host, port, bearer, !stateless)?;
+                }
+                #[cfg(not(feature = "mcp-http"))]
+                {
+                    anyhow::bail!(
+                        "`sift mcp --http` requires the `mcp-http` feature.\n  Rebuild with: cargo install sift --features mcp-http"
+                    );
+                }
+            } else {
+                commands::mcp::run(&config)?;
+            }
         }
 
         #[cfg(not(feature = "mcp"))]
@@ -634,6 +741,34 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "sift", &mut std::io::stdout());
         }
+
+        Commands::Integrate {
+            platforms,
+            list,
+            dry_run,
+            force,
+            uninstall,
+            http,
+            exe,
+        } => {
+            commands::integrate::run(commands::integrate::IntegrateOptions {
+                platforms,
+                dry_run,
+                force,
+                uninstall,
+                exe,
+                http_url: http,
+                list,
+            })?;
+        }
+
+        Commands::MemoryTool { action } => match action {
+            MemoryToolAction::Exec { root } => commands::memory_tool::exec(&config, root)?,
+            MemoryToolAction::Path { root } => commands::memory_tool::path_cmd(&config, root)?,
+            MemoryToolAction::Migrate { source } => {
+                commands::memory_tool::migrate(&config, source)?;
+            }
+        },
 
         Commands::Memory { action } => match action {
             MemoryAction::Ingest { event } => {
