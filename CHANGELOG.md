@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-04-23
+
 ### Added
 - **Embedding model registry** — `sift-embed` now carries a typed registry of
   nine embedding models (nomic-embed-text-v1.5, nomic-embed-text-v2-moe,

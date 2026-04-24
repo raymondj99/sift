@@ -51,7 +51,7 @@ checksum, and installs to `/usr/local/bin` (or `~/.local/bin` when sudo
 isn't available). All optional:
 
 ```bash
-SIFT_VERSION=v0.1.6         # pin to a specific version
+SIFT_VERSION=v0.1.7         # pin to a specific version
 SIFT_INSTALL_DIR=/custom    # custom install directory
 SIFT_NO_COMPLETIONS=1       # skip shell completion install
 SIFT_NO_MODIFY_PATH=1       # silence the PATH-guidance note
@@ -67,7 +67,7 @@ brew install raymondj99/tap/sift-search
 
 For users who prefer to inspect the tarball before running anything,
 download from the [releases page](https://github.com/raymondj99/sift/releases).
-Replace `VERSION` below with the release tag (e.g. `v0.1.6`):
+Replace `VERSION` below with the release tag (e.g. `v0.1.7`):
 
 ```bash
 # macOS (Apple Silicon)
@@ -193,7 +193,7 @@ require a Transformers or external runtime.
 | `sift export` | Export index data as JSONL |
 | `sift models [list\|download]` | Manage embedding models |
 | `sift init` | Initialize a `.sift.toml` project config in the current directory |
-| `sift mcp` | Start MCP server for AI agent integration (requires `mcp` feature) |
+| `sift mcp [--http]` | Start MCP server for AI agent integration — stdio by default, Streamable HTTP with `--http` (requires `mcp` feature) |
 | `sift memory <CMD>` | Manage the Cortex automated memory system (`status`, `consolidate`, `generate-rules`, `init-hooks`) |
 | `sift memory-tool <CMD>` | Anthropic `memory_20250818` adapter backed by sift memory (`exec`, `path`, `migrate`) |
 | `sift daemon` | Manage the sift background daemon (requires `serve` feature) |
@@ -241,7 +241,7 @@ require a Transformers or external runtime.
 
 ## AI agent integration
 
-Sift includes an MCP (Model Context Protocol) server that exposes search, indexing, and memory tools to AI agents. Start it with `sift mcp` — it communicates via JSON-RPC 2.0 over stdio.
+Sift includes an MCP (Model Context Protocol) server that exposes search, indexing, and memory tools to AI agents. Start it with `sift mcp` for JSON-RPC 2.0 over stdio (the default), or `sift mcp --http` for Streamable HTTP transport — useful for sharing a single sift memory across multiple agents on a host.
 
 ### Available MCP tools
 
