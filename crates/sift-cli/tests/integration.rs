@@ -490,7 +490,7 @@ fn test_hybrid_search_rrf_fusion() {
 fn test_config_defaults_and_roundtrip() {
     let config = Config::default();
 
-    assert_eq!(config.default.model, "nomic-embed-text-v2");
+    assert_eq!(config.default.model, "nomic-embed-text-v1.5");
     assert_eq!(config.default.chunk_size, 512);
     assert_eq!(config.default.chunk_overlap, 64);
     assert_eq!(config.default.max_file_size, 100 * 1024 * 1024);

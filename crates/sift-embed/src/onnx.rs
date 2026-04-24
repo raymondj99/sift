@@ -1,3 +1,4 @@
+use crate::models::{ModelSpec, PoolingStrategy};
 use crate::traits::Embedder;
 use ort::execution_providers::{CPUExecutionProvider, ExecutionProviderDispatch};
 use ort::session::Session;
@@ -41,10 +42,37 @@ pub struct OnnxEmbedder {
     dimensions: usize,
     model_name: String,
     max_tokens: usize,
+    pooling: PoolingStrategy,
 }
 
 impl OnnxEmbedder {
     pub fn load(model_dir: &Path, model_name: &str, dimensions: usize) -> SiftResult<Self> {
+        Self::load_with_options(
+            model_dir,
+            model_name,
+            dimensions,
+            8192,
+            PoolingStrategy::MeanPooling,
+        )
+    }
+
+    pub fn load_model(model_dir: &Path, model: &ModelSpec) -> SiftResult<Self> {
+        Self::load_with_options(
+            model_dir,
+            model.name,
+            model.dimensions,
+            model.max_tokens,
+            model.pooling,
+        )
+    }
+
+    fn load_with_options(
+        model_dir: &Path,
+        model_name: &str,
+        dimensions: usize,
+        max_tokens: usize,
+        pooling: PoolingStrategy,
+    ) -> SiftResult<Self> {
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
@@ -88,34 +116,9 @@ impl OnnxEmbedder {
             tokenizer: Arc::new(tokenizer),
             dimensions,
             model_name: model_name.to_string(),
-            max_tokens: 8192,
+            max_tokens,
+            pooling,
         })
-    }
-
-    /// Embed texts and then truncate to `target_dim` dimensions (Matryoshka).
-    ///
-    /// If `target_dim >= self.dimensions`, the full embeddings are returned
-    /// unchanged. Otherwise the vectors are truncated and re-normalised to
-    /// unit length.
-    pub fn embed_with_dim(&self, texts: &[&str], target_dim: usize) -> SiftResult<Vec<Vec<f32>>> {
-        let full = self.embed_batch(texts)?;
-        if target_dim >= self.dimensions {
-            return Ok(full);
-        }
-        // Truncate and re-normalize
-        Ok(full
-            .into_iter()
-            .map(|mut v| {
-                v.truncate(target_dim);
-                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if norm > 0.0 {
-                    for x in &mut v {
-                        *x /= norm;
-                    }
-                }
-                v
-            })
-            .collect())
     }
 
     /// Tokenize a batch of texts into flat, pre-padded tensors ready for ONNX.
@@ -210,6 +213,48 @@ impl OnnxEmbedder {
 
         results
     }
+
+    fn cls_pooling(
+        token_embeddings: &[f32],
+        batch_size: usize,
+        seq_len: usize,
+        hidden_size: usize,
+    ) -> Vec<Vec<f32>> {
+        let mut results = Vec::with_capacity(batch_size);
+
+        for b in 0..batch_size {
+            let offset = b * seq_len * hidden_size;
+            let mut pooled = token_embeddings[offset..offset + hidden_size].to_vec();
+            l2_normalize_in_place(&mut pooled);
+            results.push(pooled);
+        }
+
+        results
+    }
+
+    fn normalize_2d_embeddings(
+        embeddings: &[f32],
+        batch_size: usize,
+        hidden_size: usize,
+    ) -> Vec<Vec<f32>> {
+        let mut results = Vec::with_capacity(batch_size);
+        for b in 0..batch_size {
+            let offset = b * hidden_size;
+            let mut row = embeddings[offset..offset + hidden_size].to_vec();
+            l2_normalize_in_place(&mut row);
+            results.push(row);
+        }
+        results
+    }
+}
+
+fn l2_normalize_in_place(values: &mut [f32]) {
+    let norm: f32 = values.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in values {
+            *v /= norm;
+        }
+    }
 }
 
 impl Embedder for OnnxEmbedder {
@@ -261,16 +306,32 @@ impl Embedder for OnnxEmbedder {
         };
 
         let shape = output_array.shape();
-        let hidden_size = shape[shape.len() - 1];
         let token_embeddings: Vec<f32> = output_array.iter().copied().collect();
 
-        let results = Self::mean_pooling(
-            &token_embeddings,
-            &attention_mask_flat,
-            batch_size,
-            seq_len,
-            hidden_size,
-        );
+        let results = match shape {
+            [out_batch, hidden_size] if *out_batch == batch_size => {
+                Self::normalize_2d_embeddings(&token_embeddings, batch_size, *hidden_size)
+            }
+            [out_batch, out_seq_len, hidden_size] if *out_batch == batch_size => {
+                match self.pooling {
+                    PoolingStrategy::MeanPooling => Self::mean_pooling(
+                        &token_embeddings,
+                        &attention_mask_flat,
+                        batch_size,
+                        *out_seq_len,
+                        *hidden_size,
+                    ),
+                    PoolingStrategy::ClsToken => {
+                        Self::cls_pooling(&token_embeddings, batch_size, *out_seq_len, *hidden_size)
+                    }
+                }
+            }
+            _ => {
+                return Err(sift_core::SiftError::Embedding(format!(
+                    "Unexpected ONNX embedding output shape: {shape:?}"
+                )));
+            }
+        };
 
         Ok(results)
     }
@@ -400,5 +461,38 @@ mod tests {
         assert!((results[0][1] - 0.0).abs() < 1e-5);
         assert!((results[0][2] - 0.8).abs() < 1e-5);
         assert!((results[0][3] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cls_pooling_uses_first_token_per_batch() {
+        #[rustfmt::skip]
+        let token_embeddings: Vec<f32> = vec![
+            3.0, 4.0, // batch 0, token 0 -> normalized [0.6, 0.8]
+            9.0, 9.0, // batch 0, token 1 ignored
+            0.0, 5.0, // batch 1, token 0 -> normalized [0.0, 1.0]
+            7.0, 7.0, // batch 1, token 1 ignored
+        ];
+
+        let results = OnnxEmbedder::cls_pooling(&token_embeddings, 2, 2, 2);
+
+        assert_eq!(results.len(), 2);
+        assert!((results[0][0] - 0.6).abs() < 1e-6);
+        assert!((results[0][1] - 0.8).abs() < 1e-6);
+        assert!((results[1][0] - 0.0).abs() < 1e-6);
+        assert!((results[1][1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_2d_embeddings_normalizes_each_row() {
+        let embeddings = vec![3.0, 4.0, 0.0, 0.0, 0.0, 2.0];
+        let results = OnnxEmbedder::normalize_2d_embeddings(&embeddings, 2, 3);
+
+        assert_eq!(results.len(), 2);
+        assert!((results[0][0] - 0.6).abs() < 1e-6);
+        assert!((results[0][1] - 0.8).abs() < 1e-6);
+        assert!((results[0][2] - 0.0).abs() < 1e-6);
+        assert!((results[1][0] - 0.0).abs() < 1e-6);
+        assert!((results[1][1] - 0.0).abs() < 1e-6);
+        assert!((results[1][2] - 1.0).abs() < 1e-6);
     }
 }

@@ -10,7 +10,7 @@ const TEMPLATE: &str = r#"# Sift project configuration
 # Only keys you explicitly set will override — everything else inherits.
 
 [default]
-# model = "nomic-embed-text-v2"   # embedding model
+# model = "nomic-embed-text-v1.5"   # embedding model
 # chunk_size = 512                 # tokens per chunk
 # chunk_overlap = 64               # overlap between chunks
 # max_file_size = 104857600        # skip files larger than this (bytes)

@@ -10,7 +10,10 @@ use sift_core::{
     CancellationToken, Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult, SourceItem,
 };
 #[cfg(feature = "embeddings")]
-use sift_embed::{models::NOMIC_EMBED_TEXT_V2, EmbeddingCache, ModelManager, OnnxEmbedder};
+use sift_embed::{
+    models::{get_model, NOMIC_EMBED_TEXT_V1_5},
+    EmbeddingCache, ModelManager, OnnxEmbedder,
+};
 use sift_parsers::ParserRegistry;
 use sift_sources::{FilesystemSource, Source};
 #[cfg(feature = "sqlite")]
@@ -82,46 +85,62 @@ pub fn load_embedder(config: &Config, model_override: Option<&str>) -> Option<On
     manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
 
     // Determine which model to load
-    let (model_dir, model_name, dimensions) = if let Some(name) = model_override {
+    let (model_dir, model_def) = if let Some(name) = model_override {
         let path = std::path::Path::new(name);
         if path.is_absolute() && path.is_dir() {
             // Absolute path to a model directory
-            (
-                path.to_path_buf(),
-                name.to_string(),
-                NOMIC_EMBED_TEXT_V2.dimensions,
-            )
+            (path.to_path_buf(), &NOMIC_EMBED_TEXT_V1_5)
         } else {
             // Look up by name in ~/.sift/models/
-            if !manager.is_downloaded(name) {
+            let Some(model_def) = get_model(name) else {
                 info!(
-                    "Model '{}' not downloaded — using keyword-only mode. Run `sift models download {}` first.",
-                    name, name
+                    "Unknown embedding model '{}' — using keyword-only mode. Run `sift models list` to see supported models.",
+                    name
+                );
+                return None;
+            };
+            if !model_def.is_download_supported() {
+                info!(
+                    "Embedding model '{}' requires runtime '{}' — using keyword-only mode. {}",
+                    model_def.name,
+                    model_def.runtime.as_str(),
+                    model_def.notes
                 );
                 return None;
             }
-            (
-                manager.model_dir(name),
-                name.to_string(),
-                NOMIC_EMBED_TEXT_V2.dimensions,
-            )
+            let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
+                info!(
+                    "Model '{}' not downloaded — using keyword-only mode. Run `sift models download {}` first.",
+                    model_def.name, model_def.name
+                );
+                return None;
+            };
+            (model_dir, model_def)
         }
     } else {
-        let model_def = &NOMIC_EMBED_TEXT_V2;
-        if !manager.is_downloaded(model_def.name) {
-            info!("Embedding model not downloaded — using keyword-only mode. Run `sift models download nomic-embed-text-v2` for semantic search.");
+        let model_def = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
+        if !model_def.is_download_supported() {
+            info!(
+                "Default embedding model '{}' requires runtime '{}' — using keyword-only mode. {}",
+                model_def.name,
+                model_def.runtime.as_str(),
+                model_def.notes
+            );
             return None;
         }
-        (
-            manager.model_dir(model_def.name),
-            model_def.name.to_string(),
-            model_def.dimensions,
-        )
+        let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
+            info!(
+                "Embedding model not downloaded — using keyword-only mode. Run `sift models download {}` for semantic search.",
+                model_def.name
+            );
+            return None;
+        };
+        (model_dir, model_def)
     };
 
-    match OnnxEmbedder::load(&model_dir, &model_name, dimensions) {
+    match OnnxEmbedder::load_model(&model_dir, model_def) {
         Ok(embedder) => {
-            info!("Loaded embedding model: {}", model_name);
+            info!("Loaded embedding model: {}", model_def.name);
             Some(embedder)
         }
         Err(e) => {

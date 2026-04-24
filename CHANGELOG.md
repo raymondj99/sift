@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Embedding model registry** — `sift-embed` now carries a typed registry of
+  nine embedding models (nomic-embed-text-v1.5, nomic-embed-text-v2-moe,
+  bge-m3, embeddinggemma-300m, snowflake-arctic-embed-l-v2.0,
+  qwen3-embedding-0.6b, jina-embeddings-v5-text-small-retrieval, nv-embed-v2,
+  nomic-embed-vision-v1.5) with runtime, license, pooling strategy, prefix
+  templates, Matryoshka dimensions, and file layout per model. `sift models
+  list` prints runtime + license + notes + aliases per entry, and `sift
+  models download` refuses non-ONNX models with a message listing what is
+  natively downloadable. `OnnxEmbedder::load_model` consumes `&ModelSpec`
+  directly so pooling (mean vs. CLS) is driven by the spec — bge-m3 now uses
+  CLS pooling as its model card requires.
+- **Configurable embedding model** — `sift-cli` pipeline and `sift-mcp` both
+  honor `config.default.model` instead of hardcoding a single model name.
+  Legacy `~/.sift/models/nomic-embed-text-v2/` directories resolve as the
+  `nomic-embed-text-v1.5` spec via alias, so existing installs keep working
+  without a migration step.
+
 - **First-class Anthropic memory-tool adapter** — `sift memory-tool` now
   projects entity pages directly from sift memory instead of using a separate
   filesystem-backed store. Existing entities live at
@@ -20,6 +37,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   values so superseded edits can preserve a stable logical chain across rewrites.
 
 ### Changed
+- **Default embedding model name** — `Config.default.model` now reports
+  `"nomic-embed-text-v1.5"` (the repo the old `nomic-embed-text-v2` constant
+  was actually pointing at). Existing configs set to `"nomic-embed-text-v2"`
+  are resolved via alias with no behavior change.
 - **Rules generation output** — `sift memory generate-rules` now documents the
   real support matrix: `AGENTS.md` is always generated, while `.claude/rules/`
   is written only when a `.claude/` directory is present.
