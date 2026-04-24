@@ -1989,6 +1989,49 @@ fn test_cli_quiet_suppresses_logs() {
 }
 
 #[test]
+fn test_cli_quiet_memory_consolidate_is_silent() {
+    let project = TempDir::new().unwrap();
+    let home = test_home();
+    let idx = format!("cli-memory-{}", uuid::Uuid::now_v7());
+
+    let ingest_output = sift_cmd_isolated(&idx, home.path())
+        .current_dir(project.path())
+        .args(["memory", "ingest", "--event", "stop"])
+        .write_stdin(
+            r#"{
+                "session_id": "codex-session",
+                "last_assistant_message": "Finished a Codex stop-hook smoke test.",
+                "stop_hook_active": true
+            }"#,
+        )
+        .output()
+        .unwrap();
+    assert!(
+        ingest_output.status.success(),
+        "memory ingest failed: {}",
+        String::from_utf8_lossy(&ingest_output.stderr)
+    );
+
+    let output = sift_cmd_isolated(&idx, home.path())
+        .current_dir(project.path())
+        .args(["memory", "consolidate", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "memory consolidate failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "expected no stdout in quiet consolidation mode, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(project.path().join("AGENTS.md").exists());
+}
+
+#[test]
 fn test_cli_sift_index_env() {
     let dir = setup_cli_corpus();
     let idx = format!("cli-test-{}", uuid::Uuid::now_v7());

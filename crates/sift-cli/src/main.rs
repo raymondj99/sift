@@ -460,8 +460,12 @@ enum MemoryAction {
     },
     /// Generate AGENTS.md and .claude/rules/ files from consolidated memory
     GenerateRules,
-    /// Print recommended Claude Code hooks configuration
-    InitHooks,
+    /// Print recommended hook configuration for a supported client
+    InitHooks {
+        /// Hook target to generate for
+        #[arg(long, default_value = "claude")]
+        target: String,
+    },
 }
 
 #[cfg(feature = "serve")]
@@ -779,10 +783,13 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
             }
             MemoryAction::Status => commands::memory::status(&config)?,
             MemoryAction::Consolidate { phase } => {
-                commands::memory::consolidate(&config, phase.as_deref())?;
+                commands::memory::consolidate(&config, phase.as_deref(), cli.quiet)?;
             }
             MemoryAction::GenerateRules => commands::memory::generate_rules(&config)?,
-            MemoryAction::InitHooks => commands::memory::init_hooks()?,
+            MemoryAction::InitHooks { target } => {
+                let target = commands::memory::HookTarget::parse(&target)?;
+                commands::memory::init_hooks(target)?;
+            }
         },
 
         Commands::Bench { name } => {

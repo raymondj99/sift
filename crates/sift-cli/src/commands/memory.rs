@@ -4,14 +4,138 @@
 //! - `ingest`: Hot path — capture a hook event into the episodes table
 //! - `consolidate`: Run the 5-phase consolidation pipeline
 //! - `status`: Show memory system statistics
-//! - `init-hooks`: Print recommended Claude Code hooks JSON
+//! - `init-hooks`: Print recommended hook configuration for supported clients
 
 #[cfg(not(feature = "fancy"))]
 use crate::color_stub::*;
+use anyhow::anyhow;
 #[cfg(feature = "fancy")]
 use colored::*;
 use sift_core::Config;
+use sift_memory::consolidation::FullConsolidationReport;
 use sift_memory::episodes::{self, EpisodeStore};
+use sift_memory::rules::RuleGenReport;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookTarget {
+    Claude,
+    Codex,
+}
+
+impl HookTarget {
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "claude" | "claude-code" => Ok(Self::Claude),
+            "codex" => Ok(Self::Codex),
+            other => Err(anyhow!(
+                "unknown hook target '{other}'. Known: claude, codex"
+            )),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+        }
+    }
+
+    fn config_path(self) -> &'static str {
+        match self {
+            Self::Claude => "~/.claude/settings.json",
+            Self::Codex => "<project-root>/.codex/hooks.json",
+        }
+    }
+}
+
+pub fn codex_hooks_path(project_root: &Path) -> PathBuf {
+    project_root.join(".codex/hooks.json")
+}
+
+pub fn build_hooks_json(target: HookTarget, exe: &str) -> serde_json::Value {
+    match target {
+        HookTarget::Claude => serde_json::json!({
+            "hooks": {
+                "PostToolUse": [
+                    {
+                        "matcher": "Edit|Write|MultiEdit|Bash|NotebookEdit|mcp__*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory ingest --event post-tool-use"),
+                                "timeout": 5000
+                            }
+                        ]
+                    }
+                ],
+                "Stop": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory ingest --event stop"),
+                                "timeout": 5000
+                            },
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory consolidate --quiet"),
+                                "timeout": 30000
+                            }
+                        ]
+                    }
+                ],
+                "PostCompact": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory ingest --event post-compact"),
+                                "timeout": 5000
+                            }
+                        ]
+                    }
+                ]
+            }
+        }),
+        HookTarget::Codex => serde_json::json!({
+            "hooks": {
+                "PostToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory ingest --event post-tool-use"),
+                                "statusMessage": "sift: ingest Bash tool use",
+                                "timeout": 5
+                            }
+                        ]
+                    }
+                ],
+                "Stop": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory ingest --event stop"),
+                                "statusMessage": "sift: ingest stop summary",
+                                "timeout": 5
+                            },
+                            {
+                                "type": "command",
+                                "command": format!("{exe} memory consolidate --quiet"),
+                                "statusMessage": "sift: consolidate memory",
+                                "timeout": 30
+                            }
+                        ]
+                    }
+                ]
+            }
+        }),
+    }
+}
 
 /// Memory directory path (alongside the search index).
 fn memory_dir(config: &Config) -> anyhow::Result<std::path::PathBuf> {
@@ -183,8 +307,9 @@ pub fn status(config: &Config) -> anyhow::Result<()> {
 /// Run the consolidation pipeline.
 ///
 /// Opens the full MemoryStore (with search engine) and EpisodeStore,
-/// runs all 5 phases (or a specific phase), and prints a report.
-pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
+/// runs all 5 phases (or a specific phase), and prints a report unless
+/// quiet mode is enabled.
+pub fn consolidate(config: &Config, phase: Option<&str>, quiet: bool) -> anyhow::Result<()> {
     let dir = memory_dir(config)?;
 
     if !dir.join("memory.db").exists() {
@@ -193,10 +318,12 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
 
     if phase.is_some() {
         // TODO: per-phase execution. For now, always run all phases.
-        println!(
-            "{}",
-            "Per-phase filtering not yet implemented, running all phases.".dimmed()
-        );
+        if !quiet {
+            println!(
+                "{}",
+                "Per-phase filtering not yet implemented, running all phases.".dimmed()
+            );
+        }
     }
 
     let memory_store = sift_memory::MemoryStore::open(&dir)?;
@@ -215,6 +342,26 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
     // Save search index changes to disk
     memory_store.save()?;
 
+    if !quiet {
+        print_consolidation_report(&report, elapsed);
+    }
+
+    // Regenerate agent rules after consolidation
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
+    match sift_memory::rules::generate_all_rules(&memory_store, &project_root) {
+        Ok(r) if r.files_written > 0 => {
+            if !quiet {
+                print_rules_regenerated_message(&r);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn print_consolidation_report(report: &FullConsolidationReport, elapsed: Duration) {
     println!("{}", "Consolidation Report".bold());
     println!("  Time:                {:.1}s", elapsed.as_secs_f64());
     println!();
@@ -243,26 +390,18 @@ pub fn consolidate(config: &Config, phase: Option<&str>) -> anyhow::Result<()> {
     println!("{}", "Phase 5: Decay & Pruning".bold());
     println!("  Observations pruned: {}", report.observations_pruned);
     println!("  Entities pruned:     {}", report.entities_pruned);
+}
 
-    // Regenerate agent rules after consolidation
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
-    match sift_memory::rules::generate_all_rules(&memory_store, &project_root) {
-        Ok(r) if r.files_written > 0 => {
-            println!();
-            println!(
-                "{}",
-                format!(
-                    "Rules regenerated: {} rules, ~{} tokens",
-                    r.total_rules, r.total_tokens_approx
-                )
-                .green()
-            );
-        }
-        _ => {}
-    }
-
-    Ok(())
+fn print_rules_regenerated_message(report: &RuleGenReport) {
+    println!();
+    println!(
+        "{}",
+        format!(
+            "Rules regenerated: {} rules, ~{} tokens",
+            report.total_rules, report.total_tokens_approx
+        )
+        .green()
+    );
 }
 
 /// Generate AGENTS.md and optional .claude/rules/ files from consolidated memory.
@@ -315,61 +454,18 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Print recommended Claude Code hooks configuration to stdout.
-pub fn init_hooks() -> anyhow::Result<()> {
+/// Print recommended hook configuration to stdout.
+pub fn init_hooks(target: HookTarget) -> anyhow::Result<()> {
     // Resolve the sift binary path
     let exe =
         std::env::current_exe().map_or_else(|_| "sift".to_string(), |p| p.display().to_string());
-
-    let hooks_json = serde_json::json!({
-        "hooks": {
-            "PostToolUse": [
-                {
-                    "matcher": "Edit|Write|MultiEdit|Bash|NotebookEdit|mcp__*",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": format!("{exe} memory ingest --event post-tool-use"),
-                            "timeout": 5000
-                        }
-                    ]
-                }
-            ],
-            "Stop": [
-                {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": format!("{exe} memory ingest --event stop"),
-                            "timeout": 5000
-                        },
-                        {
-                            "type": "command",
-                            "command": format!("{exe} memory consolidate --quiet"),
-                            "timeout": 30000
-                        }
-                    ]
-                }
-            ],
-            "PostCompact": [
-                {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": format!("{exe} memory ingest --event post-compact"),
-                            "timeout": 5000
-                        }
-                    ]
-                }
-            ]
-        }
-    });
+    let hooks_json = build_hooks_json(target, &exe);
 
     println!(
         "{}",
-        "Add the following to your Claude Code settings:".bold()
+        format!("Add the following to your {} hooks config:", target.label()).bold()
     );
-    println!("  File: ~/.claude/settings.json");
+    println!("  File: {}", target.config_path());
     println!();
     println!(
         "{}",
@@ -382,4 +478,44 @@ pub fn init_hooks() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_hooks_json, HookTarget};
+
+    #[test]
+    fn claude_hooks_include_post_compact() {
+        let hooks = build_hooks_json(HookTarget::Claude, "/tmp/sift");
+        let post_compact = &hooks["hooks"]["PostCompact"][0]["hooks"][0];
+        assert_eq!(
+            post_compact["command"],
+            "/tmp/sift memory ingest --event post-compact"
+        );
+        assert_eq!(post_compact["timeout"], 5000);
+    }
+
+    #[test]
+    fn codex_hooks_match_bash_only() {
+        let hooks = build_hooks_json(HookTarget::Codex, "/tmp/sift");
+        assert_eq!(hooks["hooks"]["PostToolUse"][0]["matcher"], "Bash");
+        assert!(hooks["hooks"].get("PostCompact").is_none());
+    }
+
+    #[test]
+    fn codex_stop_runs_ingest_then_consolidate() {
+        let hooks = build_hooks_json(HookTarget::Codex, "/tmp/sift");
+        let stop_hooks = hooks["hooks"]["Stop"][0]["hooks"].as_array().unwrap();
+        assert_eq!(stop_hooks.len(), 2);
+        assert_eq!(
+            stop_hooks[0]["command"],
+            "/tmp/sift memory ingest --event stop"
+        );
+        assert_eq!(stop_hooks[0]["timeout"], 5);
+        assert_eq!(
+            stop_hooks[1]["command"],
+            "/tmp/sift memory consolidate --quiet"
+        );
+        assert_eq!(stop_hooks[1]["timeout"], 30);
+    }
 }

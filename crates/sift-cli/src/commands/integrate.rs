@@ -12,12 +12,14 @@
 //!   --mcp-http` endpoint. Preferred when multiple clients should share memory
 //!   without each spawning its own process.
 
+use super::memory::{build_hooks_json, codex_hooks_path, HookTarget};
 #[cfg(not(feature = "fancy"))]
 use crate::color_stub::*;
 use anyhow::{anyhow, Context, Result};
 #[cfg(feature = "fancy")]
 use colored::*;
 use serde_json::{json, Value};
+use sift_core::Config as SiftConfig;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -430,7 +432,6 @@ fn install_json_under_key(
             describe_json(&root)
         ));
     }
-
     // Ensure `top_key` is an object (create if missing).
     let entry_name = "sift";
     let new_entry = standard_entry(def);
@@ -538,6 +539,16 @@ fn describe_json(v: &Value) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn install_codex(path: &Path, def: &SiftServerDef, opts: &IntegrateOptions) -> Result<Action> {
+    let project_root = resolve_codex_project_root();
+    install_codex_with_project_root(path, def, opts, &project_root)
+}
+
+fn install_codex_with_project_root(
+    path: &Path,
+    def: &SiftServerDef,
+    opts: &IntegrateOptions,
+    project_root: &Path,
+) -> Result<Action> {
     if def.is_http() {
         // Codex only supports stdio MCP servers today.
         return Ok(Action::Skipped(
@@ -576,33 +587,68 @@ fn install_codex(path: &Path, def: &SiftServerDef, opts: &IntegrateOptions) -> R
         .unwrap()
         .entry("mcp_servers")
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-    let parent_table = parent
+    let existing = parent
         .as_table_mut()
-        .ok_or_else(|| anyhow!("codex config: [mcp_servers] is not a table"))?;
-
-    let existing = parent_table.get("sift").cloned();
+        .ok_or_else(|| anyhow!("codex config: [mcp_servers] is not a table"))?
+        .get("sift")
+        .cloned();
     let desired = toml::Value::Table(entry);
     let already_matches = existing.as_ref().is_some_and(|v| v == &desired);
+    let had_existing_config = existing.is_some();
 
-    if already_matches {
-        return Ok(Action::AlreadyPresent);
-    }
-    if existing.is_some() && !opts.force {
+    if had_existing_config && !already_matches && !opts.force {
         return Ok(Action::Skipped(
             "existing [mcp_servers.sift] differs; re-run with --force".into(),
         ));
+    }
+
+    let features = doc
+        .as_table_mut()
+        .unwrap()
+        .entry("features")
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let features_table = features
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("codex config: [features] is not a table"))?;
+    let hooks_enabled = features_table
+        .get("codex_hooks")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    let features_changed = !hooks_enabled;
+    if features_changed {
+        features_table.insert("codex_hooks".into(), toml::Value::Boolean(true));
+    }
+
+    let config_changed = !already_matches || features_changed;
+    if !already_matches {
+        let parent_table = doc
+            .as_table_mut()
+            .unwrap()
+            .get_mut("mcp_servers")
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| anyhow!("codex config: [mcp_servers] is not a table"))?;
+        parent_table.insert("sift".into(), desired);
+    }
+
+    let hooks_path = codex_hooks_path(project_root);
+    let hooks_state = sync_codex_hooks(&hooks_path, def, opts, false)?;
+
+    if !config_changed && !hooks_state.changed {
+        return Ok(Action::AlreadyPresent);
     }
     if opts.dry_run {
         return Ok(Action::Planned);
     }
 
-    parent_table.insert("sift".into(), desired);
-    let out = toml::to_string_pretty(&doc).context("serializing codex TOML")?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    if config_changed {
+        let out = toml::to_string_pretty(&doc).context("serializing codex TOML")?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        atomic_write(path, out.as_bytes())?;
     }
-    atomic_write(path, out.as_bytes())?;
-    Ok(if existing.is_some() {
+
+    Ok(if had_existing_config || hooks_state.had_existing {
         Action::Updated
     } else {
         Action::Installed
@@ -610,30 +656,209 @@ fn install_codex(path: &Path, def: &SiftServerDef, opts: &IntegrateOptions) -> R
 }
 
 fn uninstall_codex(path: &Path, opts: &IntegrateOptions) -> Result<Action> {
-    if !path.exists() {
-        return Ok(Action::NothingToUninstall);
-    }
+    let project_root = resolve_codex_project_root();
+    uninstall_codex_with_project_root(path, opts, &project_root)
+}
+
+fn uninstall_codex_with_project_root(
+    path: &Path,
+    opts: &IntegrateOptions,
+    project_root: &Path,
+) -> Result<Action> {
+    let hooks_path = codex_hooks_path(project_root);
+    let hooks_state = sync_codex_hooks(
+        &hooks_path,
+        &SiftServerDef {
+            exe: PathBuf::from("sift"),
+            args: vec!["mcp".into()],
+            env: BTreeMap::new(),
+            http_url: None,
+        },
+        opts,
+        true,
+    )?;
+
+    let mut removed_config = false;
     let mut doc = read_toml_or_default(path)?;
-    let Some(mcp) = doc
-        .as_table_mut()
-        .and_then(|t| t.get_mut("mcp_servers"))
-        .and_then(|v| v.as_table_mut())
-    else {
-        return Ok(Action::NothingToUninstall);
-    };
-    if mcp.remove("sift").is_none() {
-        return Ok(Action::NothingToUninstall);
+    if path.exists() {
+        if let Some(mcp) = doc
+            .as_table_mut()
+            .and_then(|t| t.get_mut("mcp_servers"))
+            .and_then(|v| v.as_table_mut())
+        {
+            removed_config = mcp.remove("sift").is_some();
+            if mcp.is_empty() {
+                doc.as_table_mut().unwrap().remove("mcp_servers");
+            }
+        }
     }
-    // If [mcp_servers] is now empty, drop it entirely for cleanliness.
-    if mcp.is_empty() {
-        doc.as_table_mut().unwrap().remove("mcp_servers");
+
+    if !removed_config && !hooks_state.changed && !hooks_state.had_existing {
+        return Ok(Action::NothingToUninstall);
     }
     if opts.dry_run {
         return Ok(Action::Planned);
     }
-    let out = toml::to_string_pretty(&doc)?;
-    atomic_write(path, out.as_bytes())?;
+
+    if removed_config {
+        let out = toml::to_string_pretty(&doc)?;
+        atomic_write(path, out.as_bytes())?;
+    }
     Ok(Action::Uninstalled)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CodexHookSyncState {
+    changed: bool,
+    had_existing: bool,
+}
+
+fn resolve_codex_project_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    SiftConfig::find_project_root(&cwd).unwrap_or(cwd)
+}
+
+fn sync_codex_hooks(
+    path: &Path,
+    def: &SiftServerDef,
+    opts: &IntegrateOptions,
+    remove: bool,
+) -> Result<CodexHookSyncState> {
+    let mut root = read_json_or_default(path)?;
+    if !root.is_object() {
+        return Err(anyhow!(
+            "{}: expected top-level JSON object, found {}",
+            path.display(),
+            describe_json(&root)
+        ));
+    }
+    let original_root = root.clone();
+
+    let desired = build_hooks_json(HookTarget::Codex, &def.exe.display().to_string());
+    let desired_hooks = desired
+        .get("hooks")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("codex hooks template missing top-level 'hooks' object"))?;
+
+    let root_obj = root.as_object_mut().unwrap();
+    let hooks_value = root_obj
+        .entry("hooks".to_string())
+        .or_insert_with(|| json!({}));
+    if !hooks_value.is_object() {
+        return Err(anyhow!(
+            "{}: 'hooks' must be an object, found {}",
+            path.display(),
+            describe_json(hooks_value)
+        ));
+    }
+    let hooks_obj = hooks_value.as_object_mut().unwrap();
+
+    let mut had_existing = false;
+
+    for (event, desired_groups_value) in desired_hooks {
+        let desired_groups = desired_groups_value
+            .as_array()
+            .ok_or_else(|| anyhow!("codex hooks template event '{event}' is not an array"))?;
+
+        let existing_groups = hooks_obj
+            .get(event)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut rebuilt_groups = Vec::new();
+        for group in existing_groups {
+            let Some(group_obj) = group.as_object() else {
+                rebuilt_groups.push(group);
+                continue;
+            };
+            let matcher = group_obj.get("matcher").and_then(Value::as_str);
+            let Some(existing_hooks) = group_obj.get("hooks").and_then(Value::as_array) else {
+                rebuilt_groups.push(group);
+                continue;
+            };
+
+            let mut filtered_hooks = Vec::new();
+            let mut removed_any = false;
+            for hook in existing_hooks {
+                if is_managed_codex_hook(event, matcher, hook) {
+                    had_existing = true;
+                    removed_any = true;
+                } else {
+                    filtered_hooks.push(hook.clone());
+                }
+            }
+
+            if filtered_hooks.is_empty() {
+                if !removed_any {
+                    rebuilt_groups.push(group);
+                }
+                continue;
+            }
+
+            if removed_any {
+                let mut new_group = group_obj.clone();
+                new_group.insert("hooks".into(), Value::Array(filtered_hooks));
+                rebuilt_groups.push(Value::Object(new_group));
+            } else {
+                rebuilt_groups.push(group);
+            }
+        }
+
+        if !remove {
+            for desired_group in desired_groups {
+                if !rebuilt_groups.iter().any(|group| group == desired_group) {
+                    rebuilt_groups.push(desired_group.clone());
+                }
+            }
+        }
+
+        if rebuilt_groups.is_empty() {
+            hooks_obj.remove(event);
+        } else {
+            let new_value = Value::Array(rebuilt_groups);
+            hooks_obj.insert(event.clone(), new_value);
+        }
+    }
+
+    if hooks_obj.is_empty() {
+        root_obj.remove("hooks");
+    }
+
+    let changed = root != original_root;
+
+    if changed && !opts.dry_run {
+        write_json_pretty(path, &root)?;
+    }
+
+    Ok(CodexHookSyncState {
+        changed,
+        had_existing,
+    })
+}
+
+fn is_managed_codex_hook(event: &str, matcher: Option<&str>, hook: &Value) -> bool {
+    let Some(hook_obj) = hook.as_object() else {
+        return false;
+    };
+    let status = hook_obj.get("statusMessage").and_then(Value::as_str);
+    let command = hook_obj
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match event {
+        "PostToolUse" => {
+            matcher == Some("Bash")
+                && status == Some("sift: ingest Bash tool use")
+                && command.contains(" memory ingest --event post-tool-use")
+        }
+        "Stop" => match status {
+            Some("sift: ingest stop summary") => command.contains(" memory ingest --event stop"),
+            Some("sift: consolidate memory") => command.contains(" memory consolidate --quiet"),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn read_toml_or_default(path: &Path) -> Result<toml::Value> {
@@ -1148,20 +1373,29 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let cfg = tmp.path().join("config.toml");
         let def = test_def(tmp.path());
-        let action = install_codex(&cfg, &def, &mk_opts()).unwrap();
+        let action = install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
         assert_eq!(action, Action::Installed);
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert!(text.contains("[mcp_servers.sift]"));
+        assert!(text.contains("[features]"));
+        assert!(text.contains("codex_hooks = true"));
         assert!(text.contains("command"));
         assert!(text.contains("ORT_DYLIB_PATH"));
+        let hooks_path = tmp.path().join(".codex/hooks.json");
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(hooks["hooks"]["PostToolUse"][0]["matcher"], json!("Bash"));
 
-        let action = install_codex(&cfg, &def, &mk_opts()).unwrap();
+        let action = install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
         assert_eq!(action, Action::AlreadyPresent);
 
-        let action = uninstall_codex(&cfg, &mk_opts()).unwrap();
+        let action = uninstall_codex_with_project_root(&cfg, &mk_opts(), tmp.path()).unwrap();
         assert_eq!(action, Action::Uninstalled);
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert!(!text.contains("mcp_servers"));
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(hooks, json!({}));
     }
 
     #[test]
@@ -1170,7 +1404,7 @@ mod tests {
         let cfg = tmp.path().join("config.toml");
         let mut def = test_def(tmp.path());
         def.http_url = Some("http://localhost:7821/mcp".into());
-        let action = install_codex(&cfg, &def, &mk_opts()).unwrap();
+        let action = install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
         assert!(matches!(action, Action::Skipped(_)));
     }
 
@@ -1190,12 +1424,196 @@ command = "/bin/other"
         )
         .unwrap();
         let def = test_def(tmp.path());
-        install_codex(&cfg, &def, &mk_opts()).unwrap();
+        install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
         let doc: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
         assert!(doc.get("profile").is_some());
         let servers = doc.get("mcp_servers").unwrap().as_table().unwrap();
         assert!(servers.contains_key("sift"));
         assert!(servers.contains_key("other"));
+        let features = doc.get("features").unwrap().as_table().unwrap();
+        assert_eq!(
+            features.get("codex_hooks"),
+            Some(&toml::Value::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn codex_hooks_merge_and_uninstall_preserve_unrelated_handlers() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let hooks_path = tmp.path().join(".codex/hooks.json");
+        std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hooks_path,
+            r#"{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/old/sift memory ingest --event post-tool-use",
+            "statusMessage": "sift: ingest Bash tool use",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/bin/other",
+            "statusMessage": "other"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/old/sift memory ingest --event stop",
+            "statusMessage": "sift: ingest stop summary",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/old/sift memory consolidate --quiet",
+            "statusMessage": "sift: consolidate memory",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "/bin/stop"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .unwrap();
+
+        let cfg = tmp.path().join("config.toml");
+        let def = test_def(tmp.path());
+        let action = install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
+        assert_eq!(action, Action::Updated);
+
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        let post_tool_use = hooks["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post_tool_use.len(), 2);
+        assert_eq!(
+            post_tool_use[0]["hooks"],
+            json!([{
+                "type": "command",
+                "command": "/bin/other",
+                "statusMessage": "other"
+            }])
+        );
+        assert_eq!(
+            post_tool_use[1]["hooks"][0]["command"],
+            json!(format!(
+                "{} memory ingest --event post-tool-use",
+                def.exe.display()
+            ))
+        );
+
+        let stop = hooks["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(
+            stop[0]["hooks"],
+            json!([{
+                "type": "command",
+                "command": "/bin/stop"
+            }])
+        );
+        let stop_hooks = stop[1]["hooks"].as_array().unwrap();
+        assert_eq!(
+            stop_hooks[0]["command"],
+            json!(format!("{} memory ingest --event stop", def.exe.display()))
+        );
+        assert_eq!(
+            stop_hooks[1]["command"],
+            json!(format!("{} memory consolidate --quiet", def.exe.display()))
+        );
+
+        let action = uninstall_codex_with_project_root(&cfg, &mk_opts(), tmp.path()).unwrap();
+        assert_eq!(action, Action::Uninstalled);
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(
+            hooks["hooks"]["PostToolUse"][0]["hooks"],
+            json!([{
+                "type": "command",
+                "command": "/bin/other",
+                "statusMessage": "other"
+            }])
+        );
+        assert_eq!(
+            hooks["hooks"]["Stop"][0]["hooks"],
+            json!([{
+                "type": "command",
+                "command": "/bin/stop"
+            }])
+        );
+    }
+
+    #[test]
+    fn codex_uninstall_leaves_features_table_untouched() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            r#"
+[features]
+codex_hooks = true
+apps = true
+
+[mcp_servers.sift]
+command = "/bin/sift"
+args = ["mcp"]
+"#,
+        )
+        .unwrap();
+
+        let action = uninstall_codex_with_project_root(&cfg, &mk_opts(), tmp.path()).unwrap();
+        assert_eq!(action, Action::Uninstalled);
+        let doc: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        let features = doc.get("features").unwrap().as_table().unwrap();
+        assert_eq!(
+            features.get("codex_hooks"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert_eq!(features.get("apps"), Some(&toml::Value::Boolean(true)));
+    }
+
+    #[test]
+    fn codex_stop_consolidation_writes_agents_md() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("config.toml");
+        let def = test_def(tmp.path());
+        let action = install_codex_with_project_root(&cfg, &def, &mk_opts(), tmp.path()).unwrap();
+        assert_eq!(action, Action::Installed);
+
+        let memory_dir = tmp.path().join(".sift/indexes/default/memory");
+        let episodes = sift_memory::episodes::EpisodeStore::open(&memory_dir).unwrap();
+        let content = r#"{
+            "session_id": "codex-session",
+            "last_assistant_message": "Finished the Codex hook parity implementation.",
+            "stop_hook_active": true
+        }"#;
+        episodes.ingest("codex-session", "stop", content).unwrap();
+
+        let store = sift_memory::MemoryStore::open(&memory_dir).unwrap();
+        let report = sift_memory::consolidation::run_consolidation(
+            &store,
+            &episodes,
+            &sift_memory::ConsolidationConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(report.episodes_processed, 1);
+
+        let rule_report = sift_memory::rules::generate_all_rules(&store, tmp.path()).unwrap();
+        assert!(rule_report.formats.contains(&"AGENTS.md".to_string()));
+        assert!(tmp.path().join("AGENTS.md").exists());
     }
 
     #[test]

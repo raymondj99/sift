@@ -572,6 +572,25 @@ mod tests {
     }
 
     #[test]
+    fn ingest_codex_stop_payload() {
+        let store = EpisodeStore::open_in_memory().unwrap();
+
+        let content = r#"{
+            "session_id": "codex-session",
+            "last_assistant_message": "Implemented Codex hook parity and queued consolidation.",
+            "turn_id": "turn_123",
+            "stop_hook_active": true
+        }"#;
+        let id = store.ingest("codex-session", "stop", content).unwrap();
+        assert!(id.is_some());
+
+        let episodes = store.fetch_pending(10).unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].event_type, "stop");
+        assert!(episodes[0].content.contains("last_assistant_message"));
+    }
+
+    #[test]
     fn ingest_post_compact_event() {
         let store = EpisodeStore::open_in_memory().unwrap();
 
@@ -661,6 +680,26 @@ mod tests {
         let content = r#"{"tool_name": "Bash", "tool_input": {"command": "make install"}}"#;
         let result = store.ingest("sess1", "post_tool_use", content).unwrap();
         assert!(result.is_some(), "make install should be stored");
+    }
+
+    #[test]
+    fn ingest_codex_bash_post_tool_use_payload() {
+        let store = EpisodeStore::open_in_memory().unwrap();
+
+        let content = r#"{
+            "session_id": "codex-session",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo test -p sift-cli"},
+            "tool_response": {"exit_code": 0, "stdout": "ok"}
+        }"#;
+        let result = store
+            .ingest("codex-session", "post_tool_use", content)
+            .unwrap();
+        assert!(result.is_some(), "codex bash tool use should be stored");
+
+        let episodes = store.fetch_pending(10).unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].tool_name.as_deref(), Some("Bash"));
     }
 
     #[test]
