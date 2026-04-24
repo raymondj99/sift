@@ -350,10 +350,8 @@ pub fn consolidate(config: &Config, phase: Option<&str>, quiet: bool) -> anyhow:
     let cwd = std::env::current_dir().unwrap_or_default();
     let project_root = sift_core::Config::find_project_root(&cwd).unwrap_or(cwd);
     match sift_memory::rules::generate_all_rules(&memory_store, &project_root) {
-        Ok(r) if r.files_written > 0 => {
-            if !quiet {
-                print_rules_regenerated_message(&r);
-            }
+        Ok(r) if r.files_written > 0 && !quiet => {
+            print_rules_regenerated_message(&r);
         }
         _ => {}
     }

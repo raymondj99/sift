@@ -162,7 +162,7 @@ If built with the `embeddings` feature and ONNX Runtime is available:
 
 ```bash
 # Download embedding model
-sift models download nomic-embed-text-v2
+sift models download nomic-embed-text-v1.5
 
 # Scan with embeddings
 sift scan .
@@ -173,6 +173,12 @@ sift search "error handling in payment service"
 # Pure vector search
 sift search --vector-only "retry logic patterns"
 ```
+
+Run `sift models list` to see all tracked embedding models. Native ONNX
+downloads include `nomic-embed-text-v1.5`, `bge-m3`,
+`embeddinggemma-300m`, `snowflake-arctic-embed-l-v2.0`, and
+`jina-embeddings-v5-text-small-retrieval`; some tracked frontier models
+require a Transformers or external runtime.
 
 ## Commands
 
@@ -266,7 +272,7 @@ Before configuring any agent, index the directories you want searchable:
 sift scan ~/my-project
 
 # (Optional) Download embedding model for semantic search
-sift models download nomic-embed-text-v2
+sift models download nomic-embed-text-v1.5
 
 # Verify
 sift status
@@ -583,7 +589,7 @@ Per-project overrides can be placed in `.sift.toml` at the project root.
 
 ```toml
 [default]
-model = "nomic-embed-text-v2"
+model = "nomic-embed-text-v1.5"
 chunk_size = 512
 chunk_overlap = 64
 max_file_size = 104857600  # 100 MB

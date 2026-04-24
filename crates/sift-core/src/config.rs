@@ -486,7 +486,7 @@ impl Default for Config {
 
 impl DefaultConfig {
     fn default_model() -> String {
-        "nomic-embed-text-v2".into()
+        "nomic-embed-text-v1.5".into()
     }
     fn default_chunk_size() -> usize {
         512
@@ -897,7 +897,7 @@ chunk_overlap = 200
         assert_eq!(config.default.chunk_size, 512);
         assert_eq!(config.default.chunk_overlap, 64);
         assert_eq!(config.default.max_file_size, 100 * 1024 * 1024);
-        assert_eq!(config.default.model, "nomic-embed-text-v2");
+        assert_eq!(config.default.model, "nomic-embed-text-v1.5");
         assert_eq!(config.search.max_results, 10);
         assert!((config.search.hybrid_alpha - 0.7).abs() < f32::EPSILON);
         assert!(config.search.rerank);
@@ -928,7 +928,7 @@ chunk_size = 256
         // chunk_size should be overridden
         assert_eq!(merged.default.chunk_size, 256);
         // Other fields should keep global defaults
-        assert_eq!(merged.default.model, "nomic-embed-text-v2");
+        assert_eq!(merged.default.model, "nomic-embed-text-v1.5");
         assert_eq!(merged.default.chunk_overlap, 64);
         assert_eq!(merged.search.max_results, 10);
         assert_eq!(merged.server.port, 7820);
@@ -985,7 +985,7 @@ patterns = ["vendor/"]
             r#"
 [default]
 chunk_size = 512
-model = "nomic-embed-text-v2"
+model = "nomic-embed-text-v1.5"
 
 [search]
 max_results = 10
@@ -1014,7 +1014,7 @@ chunk_size = 256
         let merged = global.merge(&project, &table);
 
         assert_eq!(merged.default.chunk_size, 256);
-        assert_eq!(merged.default.model, "nomic-embed-text-v2");
+        assert_eq!(merged.default.model, "nomic-embed-text-v1.5");
         assert_eq!(merged.search.max_results, 10);
     }
 

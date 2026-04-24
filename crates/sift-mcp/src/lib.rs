@@ -1567,23 +1567,34 @@ fn open_engine(
 /// Load the ONNX embedding model for query embedding.
 #[cfg(feature = "embeddings")]
 fn load_embedder(config: &Config) -> Option<sift_embed::OnnxEmbedder> {
-    use sift_embed::{models::NOMIC_EMBED_TEXT_V2, ModelManager};
+    use sift_embed::{
+        models::{get_model, NOMIC_EMBED_TEXT_V1_5},
+        ModelManager,
+    };
 
     let manager = ModelManager::new().ok()?;
     manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
 
-    let model_def = &NOMIC_EMBED_TEXT_V2;
-    if !manager.is_downloaded(model_def.name) {
+    let model_def = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
+    if !model_def.is_download_supported() {
+        info!(
+            "Embedding model '{}' requires runtime '{}' — MCP search will use keyword-only mode. {}",
+            model_def.name,
+            model_def.runtime.as_str(),
+            model_def.notes
+        );
+        return None;
+    }
+    let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
         info!(
             "Embedding model not available — MCP search will use keyword-only mode. \
              Run `sift models download {}` for semantic search.",
             model_def.name
         );
         return None;
-    }
+    };
 
-    let model_dir = manager.model_dir(model_def.name);
-    match sift_embed::OnnxEmbedder::load(&model_dir, model_def.name, model_def.dimensions) {
+    match sift_embed::OnnxEmbedder::load_model(&model_dir, model_def) {
         Ok(emb) => {
             info!("Loaded embedding model: {}", model_def.name);
             Some(emb)

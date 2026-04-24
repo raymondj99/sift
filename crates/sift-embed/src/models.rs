@@ -44,12 +44,104 @@ pub enum PoolingStrategy {
     ClsToken,
 }
 
-/// Extended model specification with prefix, pooling, and Matryoshka metadata.
+/// Broad model category. Text models need a tokenizer; vision models consume
+/// image tensors directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelKind {
+    Text,
+    Vision,
+}
+
+/// Runtime required to execute a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRuntime {
+    /// Supported by sift's native ONNX Runtime embedder.
+    Onnx,
+    /// Requires a Transformers/SentenceTransformers-style runtime.
+    Transformers,
+    /// Requires a dedicated server or integration outside sift's native path.
+    External,
+}
+
+impl ModelRuntime {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Onnx => "onnx",
+            Self::Transformers => "transformers",
+            Self::External => "external",
+        }
+    }
+}
+
+/// License family. Kept deliberately coarse for CLI display and policy checks;
+/// model cards remain the source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelLicense {
+    Apache2,
+    Mit,
+    Gemma,
+    CcByNc4,
+    NvidiaOpenModelNonCommercial,
+    Unknown,
+}
+
+impl ModelLicense {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Apache2 => "Apache-2.0",
+            Self::Mit => "MIT",
+            Self::Gemma => "Gemma terms",
+            Self::CcByNc4 => "CC-BY-NC-4.0",
+            Self::NvidiaOpenModelNonCommercial => "NVIDIA non-commercial",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// File copied from a Hugging Face repo into sift's canonical local model dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelFile {
+    /// Path in the Hugging Face repo.
+    pub source: &'static str,
+    /// Path relative to the local model directory.
+    pub dest: &'static str,
+}
+
+impl ModelFile {
+    pub const fn new(source: &'static str, dest: &'static str) -> Self {
+        Self { source, dest }
+    }
+}
+
+const BASIC_ONNX_FILES: &[ModelFile] = &[
+    ModelFile::new("onnx/model.onnx", "model.onnx"),
+    ModelFile::new("tokenizer.json", "tokenizer.json"),
+];
+
+const ONNX_WITH_EXTERNAL_DATA_FILES: &[ModelFile] = &[
+    ModelFile::new("onnx/model.onnx", "model.onnx"),
+    ModelFile::new("onnx/model.onnx_data", "model.onnx_data"),
+    ModelFile::new("tokenizer.json", "tokenizer.json"),
+];
+
+const BGE_M3_ONNX_FILES: &[ModelFile] = &[
+    ModelFile::new("onnx/model.onnx", "model.onnx"),
+    ModelFile::new("onnx/model.onnx_data", "model.onnx_data"),
+    ModelFile::new("onnx/Constant_7_attr__value", "Constant_7_attr__value"),
+    ModelFile::new("onnx/tokenizer.json", "tokenizer.json"),
+];
+
+/// Extended model specification with runtime, license, pooling, file-layout,
+/// and Matryoshka metadata.
 pub struct ModelSpec {
     pub name: &'static str,
+    pub aliases: &'static [&'static str],
     pub repo_id: &'static str,
     pub dimensions: usize,
     pub max_tokens: usize,
+    pub kind: ModelKind,
+    pub runtime: ModelRuntime,
+    pub license: ModelLicense,
     /// Prefix prepended to search/query texts before embedding.
     pub search_prefix: &'static str,
     /// Prefix prepended to document/passage texts before embedding.
@@ -59,6 +151,12 @@ pub struct ModelSpec {
     /// Matryoshka-supported truncated dimensions (largest first).
     /// Empty slice means the model does not support Matryoshka truncation.
     pub matryoshka_dims: &'static [usize],
+    /// Files that sift's native downloader knows how to materialize locally.
+    /// Empty means the model is tracked for evaluation but not natively
+    /// downloadable by this binary yet.
+    pub download_files: &'static [ModelFile],
+    /// Short operational note for CLI display and future policy decisions.
+    pub notes: &'static str,
 }
 
 /// Backwards-compatible alias so that existing code referencing `ModelDef`
@@ -71,35 +169,141 @@ pub type ModelDef = ModelSpec;
 
 pub const NOMIC_EMBED_TEXT_V1_5: ModelSpec = ModelSpec {
     name: "nomic-embed-text-v1.5",
+    // Backwards compatibility: earlier sift releases exposed the v1.5 ONNX
+    // repo under `nomic-embed-text-v2`. Keep resolving that name to the model
+    // users actually downloaded, while tracking the true v2 MoE model below.
+    aliases: &["nomic-embed-text-v2"],
     repo_id: "nomic-ai/nomic-embed-text-v1.5",
     dimensions: 768,
     max_tokens: 8192,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::Apache2,
     search_prefix: "search_query: ",
     document_prefix: "search_document: ",
     pooling: PoolingStrategy::MeanPooling,
     matryoshka_dims: &[768, 512, 256, 128, 64],
+    download_files: BASIC_ONNX_FILES,
+    notes: "Current native local default; legacy alias: nomic-embed-text-v2.",
 };
 
-pub const NOMIC_EMBED_TEXT_V2: ModelSpec = ModelSpec {
-    name: "nomic-embed-text-v2",
-    repo_id: "nomic-ai/nomic-embed-text-v1.5",
+pub const NOMIC_EMBED_TEXT_V2_MOE: ModelSpec = ModelSpec {
+    name: "nomic-embed-text-v2-moe",
+    aliases: &[],
+    repo_id: "nomic-ai/nomic-embed-text-v2-moe",
     dimensions: 768,
-    max_tokens: 8192,
+    max_tokens: 2048,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Transformers,
+    license: ModelLicense::Apache2,
     search_prefix: "search_query: ",
     document_prefix: "search_document: ",
     pooling: PoolingStrategy::MeanPooling,
     matryoshka_dims: &[768, 512, 256, 128],
+    download_files: &[],
+    notes: "True Nomic v2 MoE model; tracked for evaluation, native ONNX path not available in the upstream repo.",
 };
 
 pub const BGE_M3: ModelSpec = ModelSpec {
     name: "bge-m3",
+    aliases: &[],
     repo_id: "BAAI/bge-m3",
     dimensions: 1024,
     max_tokens: 8192,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::Mit,
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::ClsToken,
     matryoshka_dims: &[],
+    download_files: BGE_M3_ONNX_FILES,
+    notes: "Dense path is native; sparse and multi-vector outputs need future runtime support.",
+};
+
+pub const EMBEDDING_GEMMA_300M: ModelSpec = ModelSpec {
+    name: "embeddinggemma-300m",
+    aliases: &["google-embeddinggemma-300m"],
+    repo_id: "onnx-community/embeddinggemma-300m-ONNX",
+    dimensions: 768,
+    max_tokens: 2048,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::Gemma,
+    search_prefix: "task: search result | query: ",
+    document_prefix: "title: none | text: ",
+    pooling: PoolingStrategy::MeanPooling,
+    matryoshka_dims: &[],
+    download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
+    notes: "Small multilingual on-device model via ONNX community export.",
+};
+
+pub const SNOWFLAKE_ARCTIC_EMBED_L_V2: ModelSpec = ModelSpec {
+    name: "snowflake-arctic-embed-l-v2.0",
+    aliases: &["arctic-embed-l-v2.0"],
+    repo_id: "Snowflake/snowflake-arctic-embed-l-v2.0",
+    dimensions: 1024,
+    max_tokens: 8192,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::Apache2,
+    search_prefix: "query: ",
+    document_prefix: "",
+    pooling: PoolingStrategy::ClsToken,
+    matryoshka_dims: &[1024, 256],
+    download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
+    notes: "Apache-2.0 multilingual retrieval model with Matryoshka-friendly storage tradeoffs.",
+};
+
+pub const QWEN3_EMBEDDING_0_6B: ModelSpec = ModelSpec {
+    name: "qwen3-embedding-0.6b",
+    aliases: &["Qwen/Qwen3-Embedding-0.6B", "qwen3-embedding-0.6B"],
+    repo_id: "Qwen/Qwen3-Embedding-0.6B",
+    dimensions: 1024,
+    max_tokens: 32768,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Transformers,
+    license: ModelLicense::Apache2,
+    search_prefix: "",
+    document_prefix: "",
+    pooling: PoolingStrategy::MeanPooling,
+    matryoshka_dims: &[1024, 768, 512, 256, 128, 64, 32],
+    download_files: &[],
+    notes: "Instruction-aware SOTA-class model; needs Transformers/runtime support before native download.",
+};
+
+pub const JINA_EMBEDDINGS_V5_TEXT_SMALL: ModelSpec = ModelSpec {
+    name: "jina-embeddings-v5-text-small-retrieval",
+    aliases: &["jina-embeddings-v5-text-small"],
+    repo_id: "jinaai/jina-embeddings-v5-text-small-retrieval",
+    dimensions: 1024,
+    max_tokens: 32768,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::CcByNc4,
+    search_prefix: "",
+    document_prefix: "",
+    pooling: PoolingStrategy::MeanPooling,
+    matryoshka_dims: &[1024, 768, 512, 256, 128, 64, 32],
+    download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
+    notes: "High-quality multilingual ONNX retrieval adapter; non-commercial license.",
+};
+
+pub const NV_EMBED_V2: ModelSpec = ModelSpec {
+    name: "nv-embed-v2",
+    aliases: &["nvidia/NV-Embed-v2"],
+    repo_id: "nvidia/NV-Embed-v2",
+    dimensions: 4096,
+    max_tokens: 32768,
+    kind: ModelKind::Text,
+    runtime: ModelRuntime::External,
+    license: ModelLicense::NvidiaOpenModelNonCommercial,
+    search_prefix: "",
+    document_prefix: "",
+    pooling: PoolingStrategy::MeanPooling,
+    matryoshka_dims: &[],
+    download_files: &[],
+    notes: "Benchmark/reference model only; gated and not native-downloadable.",
 };
 
 /// Nomic Embed Vision v1.5 — image embedding model.
@@ -107,26 +311,40 @@ pub const BGE_M3: ModelSpec = ModelSpec {
 /// enabling cross-modal search (search images with text queries).
 pub const NOMIC_EMBED_VISION_V1_5: ModelSpec = ModelSpec {
     name: "nomic-embed-vision-v1.5",
+    aliases: &[],
     repo_id: "nomic-ai/nomic-embed-vision-v1.5",
     dimensions: 768,
     max_tokens: 0, // not applicable for vision models
+    kind: ModelKind::Vision,
+    runtime: ModelRuntime::Onnx,
+    license: ModelLicense::Apache2,
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::MeanPooling,
     matryoshka_dims: &[],
+    download_files: &[ModelFile::new("onnx/model.onnx", "model.onnx")],
+    notes: "Vision-side model sharing Nomic text v1.5 latent space.",
 };
 
 /// All known model specs, for programmatic iteration and lookup.
 const ALL_MODELS: &[&ModelSpec] = &[
     &NOMIC_EMBED_TEXT_V1_5,
-    &NOMIC_EMBED_TEXT_V2,
+    &NOMIC_EMBED_TEXT_V2_MOE,
     &BGE_M3,
+    &EMBEDDING_GEMMA_300M,
+    &SNOWFLAKE_ARCTIC_EMBED_L_V2,
+    &QWEN3_EMBEDDING_0_6B,
+    &JINA_EMBEDDINGS_V5_TEXT_SMALL,
+    &NV_EMBED_V2,
     &NOMIC_EMBED_VISION_V1_5,
 ];
 
 /// Look up a model specification by its short name (e.g. `"bge-m3"`).
 pub fn get_model(name: &str) -> Option<&'static ModelSpec> {
-    ALL_MODELS.iter().find(|m| m.name == name).copied()
+    ALL_MODELS
+        .iter()
+        .find(|m| m.name == name || m.aliases.contains(&name))
+        .copied()
 }
 
 /// Return a slice of all registered model specs.
@@ -134,7 +352,23 @@ pub fn all_models() -> &'static [&'static ModelSpec] {
     ALL_MODELS
 }
 
+/// Return all text embedding models that sift can natively download and run.
+pub fn downloadable_text_models() -> impl Iterator<Item = &'static ModelSpec> {
+    ALL_MODELS
+        .iter()
+        .copied()
+        .filter(|m| m.kind == ModelKind::Text && m.is_download_supported())
+}
+
 impl ModelSpec {
+    pub fn is_download_supported(&self) -> bool {
+        self.runtime == ModelRuntime::Onnx && !self.download_files.is_empty()
+    }
+
+    pub fn is_text_embedding(&self) -> bool {
+        self.kind == ModelKind::Text
+    }
+
     /// Return the ONNX filename for a given quantization level.
     ///
     /// By convention, quantized variants live alongside the full-precision
@@ -192,7 +426,45 @@ impl ModelManager {
     }
 
     pub fn is_downloaded(&self, model_name: &str) -> bool {
+        if let Some(model) = get_model(model_name) {
+            return self.is_downloaded_model(model);
+        }
         self.model_path(model_name).exists() && self.tokenizer_path(model_name).exists()
+    }
+
+    pub fn is_downloaded_model(&self, model: &ModelSpec) -> bool {
+        self.downloaded_model_dir(model).is_some()
+    }
+
+    pub fn downloaded_model_dir(&self, model: &ModelSpec) -> Option<PathBuf> {
+        if !model.is_download_supported() {
+            return None;
+        }
+
+        let mut candidates = Vec::with_capacity(1 + model.aliases.len());
+        candidates.push(model.name);
+        candidates.extend_from_slice(model.aliases);
+
+        candidates.into_iter().find_map(|name| {
+            let dir = self.model_dir(name);
+            let complete = model
+                .download_files
+                .iter()
+                .all(|file| dir.join(file.dest).exists());
+            complete.then_some(dir)
+        })
+    }
+
+    fn has_legacy_basic_download(&self, model_name: &str) -> bool {
+        let dir = self.model_dir(model_name);
+        dir.join("model.onnx").exists() && dir.join("tokenizer.json").exists()
+    }
+
+    pub fn is_downloaded_legacy_dir(&self, model_name: &str) -> bool {
+        if let Some(model) = get_model(model_name) {
+            return self.is_downloaded_model(model);
+        }
+        self.has_legacy_basic_download(model_name)
     }
 
     /// Check if a model's ONNX file exists (without requiring a tokenizer).
@@ -204,12 +476,19 @@ impl ModelManager {
     /// Download model files from `HuggingFace`.
     /// Retries transient network failures with exponential backoff.
     pub fn download(&self, model_def: &ModelDef) -> SiftResult<()> {
+        if !model_def.is_download_supported() {
+            return Err(sift_core::SiftError::Model(format!(
+                "Model '{}' requires runtime '{}' and cannot be downloaded by sift's native ONNX downloader yet. {}",
+                model_def.name,
+                model_def.runtime.as_str(),
+                model_def.notes
+            )));
+        }
+
         let dir = self.model_dir(model_def.name);
         std::fs::create_dir_all(&dir)?;
 
         let base_url = format!("https://huggingface.co/{}/resolve/main", model_def.repo_id);
-
-        let files = ["model.onnx", "tokenizer.json"];
 
         let retry_config = sift_core::RetryConfig::network();
         let is_retryable = |e: &sift_core::SiftError| {
@@ -219,20 +498,19 @@ impl ModelManager {
             )
         };
 
-        for file in &files {
-            let dest = dir.join(file);
+        for file in model_def.download_files {
+            let dest = dir.join(file.dest);
             if dest.exists() {
-                info!("{} already exists, skipping", file);
+                info!("{} already exists, skipping", file.dest);
                 continue;
             }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
 
-            let url = if *file == "model.onnx" {
-                format!("{base_url}/onnx/model.onnx")
-            } else {
-                format!("{base_url}/{file}")
-            };
+            let url = format!("{base_url}/{}", file.source);
 
-            info!("Downloading {} from {}", file, url);
+            info!("Downloading {} from {}", file.source, url);
 
             let bytes = sift_core::with_retry(&retry_config, is_retryable, || {
                 let response = ureq::get(&url)
@@ -247,7 +525,7 @@ impl ModelManager {
             })?;
 
             std::fs::write(&dest, &bytes)?;
-            info!("Saved {} ({} bytes)", file, bytes.len());
+            info!("Saved {} ({} bytes)", file.dest, bytes.len());
         }
 
         Ok(())
@@ -270,12 +548,19 @@ impl ModelManager {
     }
 
     pub fn ensure_model(&self, model_name: &str) -> SiftResult<PathBuf> {
-        if !self.is_downloaded(model_name) {
+        let Some(model) = get_model(model_name) else {
             return Err(sift_core::SiftError::Model(format!(
-                "Model '{model_name}' not found. Run `sift models download {model_name}` first."
+                "Unknown model '{model_name}'. Run `sift models list` to see supported models."
             )));
-        }
-        Ok(self.model_dir(model_name))
+        };
+
+        let Some(model_dir) = self.downloaded_model_dir(model) else {
+            return Err(sift_core::SiftError::Model(format!(
+                "Model '{model_name}' not found. Run `sift models download {}` first.",
+                model.name
+            )));
+        };
+        Ok(model_dir)
     }
 
     /// Path where the ONNX Runtime shared library is stored.
@@ -522,7 +807,7 @@ mod tests {
     #[test]
     fn onnx_file_for_quant_int8() {
         assert_eq!(
-            NOMIC_EMBED_TEXT_V2.onnx_file_for_quant(QuantizationType::INT8),
+            NOMIC_EMBED_TEXT_V2_MOE.onnx_file_for_quant(QuantizationType::INT8),
             "model_int8.onnx"
         );
     }
@@ -552,6 +837,13 @@ mod tests {
     }
 
     #[test]
+    fn get_model_alias_resolves() {
+        let m = get_model("nomic-embed-text-v2").expect("alias should resolve");
+        assert_eq!(m.name, "nomic-embed-text-v1.5");
+        assert_eq!(m.repo_id, "nomic-ai/nomic-embed-text-v1.5");
+    }
+
+    #[test]
     fn get_model_unknown_returns_none() {
         assert!(get_model("does-not-exist").is_none());
     }
@@ -561,18 +853,36 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn all_models_returns_four() {
+    fn all_models_returns_nine() {
         let models = all_models();
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 9);
     }
 
     #[test]
     fn all_models_contains_expected_names() {
         let names: Vec<&str> = all_models().iter().map(|m| m.name).collect();
         assert!(names.contains(&"nomic-embed-text-v1.5"));
-        assert!(names.contains(&"nomic-embed-text-v2"));
+        assert!(names.contains(&"nomic-embed-text-v2-moe"));
         assert!(names.contains(&"bge-m3"));
+        assert!(names.contains(&"embeddinggemma-300m"));
+        assert!(names.contains(&"snowflake-arctic-embed-l-v2.0"));
+        assert!(names.contains(&"qwen3-embedding-0.6b"));
+        assert!(names.contains(&"jina-embeddings-v5-text-small-retrieval"));
+        assert!(names.contains(&"nv-embed-v2"));
         assert!(names.contains(&"nomic-embed-vision-v1.5"));
+    }
+
+    #[test]
+    fn downloadable_text_models_excludes_external_runtime_models() {
+        let names: Vec<&str> = downloadable_text_models().map(|m| m.name).collect();
+        assert!(names.contains(&"nomic-embed-text-v1.5"));
+        assert!(names.contains(&"bge-m3"));
+        assert!(names.contains(&"embeddinggemma-300m"));
+        assert!(names.contains(&"snowflake-arctic-embed-l-v2.0"));
+        assert!(names.contains(&"jina-embeddings-v5-text-small-retrieval"));
+        assert!(!names.contains(&"nomic-embed-text-v2-moe"));
+        assert!(!names.contains(&"qwen3-embedding-0.6b"));
+        assert!(!names.contains(&"nv-embed-v2"));
     }
 
     // -----------------------------------------------------------------------
@@ -684,6 +994,21 @@ mod tests {
         assert!(mgr.is_downloaded("my-model"));
     }
 
+    #[test]
+    fn downloaded_model_dir_accepts_legacy_alias_directory() {
+        let tmp = tempdir().unwrap();
+        let legacy_dir = tmp.path().join("nomic-embed-text-v2");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("model.onnx"), b"fake").unwrap();
+        std::fs::write(legacy_dir.join("tokenizer.json"), b"fake").unwrap();
+
+        let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
+        assert_eq!(
+            mgr.downloaded_model_dir(&NOMIC_EMBED_TEXT_V1_5),
+            Some(legacy_dir)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // ModelManager::is_model_file_downloaded
     // -----------------------------------------------------------------------
@@ -722,7 +1047,7 @@ mod tests {
         let tmp = tempdir().unwrap();
 
         // Create a fully downloaded model
-        let model_dir = tmp.path().join("model-a");
+        let model_dir = tmp.path().join(NOMIC_EMBED_TEXT_V1_5.name);
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
         std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
@@ -735,7 +1060,7 @@ mod tests {
         let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
         let downloaded = mgr.list_downloaded();
         assert_eq!(downloaded.len(), 1);
-        assert!(downloaded.contains(&"model-a".to_string()));
+        assert!(downloaded.contains(&NOMIC_EMBED_TEXT_V1_5.name.to_string()));
     }
 
     #[test]
@@ -765,13 +1090,13 @@ mod tests {
     #[test]
     fn ensure_model_ok_when_downloaded() {
         let tmp = tempdir().unwrap();
-        let model_dir = tmp.path().join("good-model");
+        let model_dir = tmp.path().join(NOMIC_EMBED_TEXT_V1_5.name);
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("model.onnx"), b"fake").unwrap();
         std::fs::write(model_dir.join("tokenizer.json"), b"fake").unwrap();
 
         let mgr = ModelManager::with_dir(tmp.path().to_path_buf());
-        let result = mgr.ensure_model("good-model");
+        let result = mgr.ensure_model(NOMIC_EMBED_TEXT_V1_5.name);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), model_dir);
     }
@@ -915,6 +1240,10 @@ mod tests {
     fn model_spec_prefixes() {
         assert_eq!(NOMIC_EMBED_TEXT_V1_5.search_prefix, "search_query: ");
         assert_eq!(NOMIC_EMBED_TEXT_V1_5.document_prefix, "search_document: ");
+        assert_eq!(
+            EMBEDDING_GEMMA_300M.search_prefix,
+            "task: search result | query: "
+        );
         assert_eq!(BGE_M3.search_prefix, "");
         assert_eq!(BGE_M3.document_prefix, "");
     }
@@ -931,9 +1260,32 @@ mod tests {
             NOMIC_EMBED_TEXT_V1_5.matryoshka_dims,
             &[768, 512, 256, 128, 64]
         );
-        assert_eq!(NOMIC_EMBED_TEXT_V2.matryoshka_dims, &[768, 512, 256, 128]);
+        assert_eq!(
+            NOMIC_EMBED_TEXT_V2_MOE.matryoshka_dims,
+            &[768, 512, 256, 128]
+        );
+        assert_eq!(
+            QWEN3_EMBEDDING_0_6B.matryoshka_dims,
+            &[1024, 768, 512, 256, 128, 64, 32]
+        );
         assert!(BGE_M3.matryoshka_dims.is_empty());
         assert!(NOMIC_EMBED_VISION_V1_5.matryoshka_dims.is_empty());
+    }
+
+    #[test]
+    fn onnx_models_with_external_data_require_sidecar_download() {
+        assert!(EMBEDDING_GEMMA_300M
+            .download_files
+            .iter()
+            .any(|f| f.dest == "model.onnx_data"));
+        assert!(SNOWFLAKE_ARCTIC_EMBED_L_V2
+            .download_files
+            .iter()
+            .any(|f| f.dest == "model.onnx_data"));
+        assert!(BGE_M3
+            .download_files
+            .iter()
+            .any(|f| f.dest == "Constant_7_attr__value"));
     }
 
     // -----------------------------------------------------------------------
