@@ -35,6 +35,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `sift memory-tool migrate`.
 - **Observation lineage IDs** — observations now store indexed `logical_id`
   values so superseded edits can preserve a stable logical chain across rewrites.
+- **`sift mcp --http` ships in release binaries** — the Streamable HTTP MCP
+  transport is now part of `RELEASE_FEATURES` (`standard,mcp,mcp-http,serve,
+  completions`), so `sift mcp --http --port 7821` works out of the installed
+  binary with no rebuild. Adds `--host`, `--port`, `--bearer`
+  (`$SIFT_MCP_BEARER`), and `--stateless` flags. Binary-size cost: +0.51 MB
+  (15.48 MB → 15.99 MB), well under the 25 MB release threshold.
 
 ### Changed
 - **Default embedding model name** — `Config.default.model` now reports

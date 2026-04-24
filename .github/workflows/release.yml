@@ -11,8 +11,8 @@ env:
   CARGO_TERM_COLOR: always
   # Features included in release binaries.
   # standard = ast + documents + data-formats + email + archive + fts5 + sqlite + hnsw + embeddings + fancy
-  # Plus: MCP server, HTTP server, shell completions.
-  RELEASE_FEATURES: "standard,mcp,serve,completions"
+  # Plus: MCP server (stdio + HTTP transports), HTTP server, shell completions.
+  RELEASE_FEATURES: "standard,mcp,mcp-http,serve,completions"
 
 jobs:
   # ── Validate before building ──────────────────────────────────────────
