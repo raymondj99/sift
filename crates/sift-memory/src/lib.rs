@@ -40,6 +40,8 @@ const SPREADING_MIN_SCORE: f32 = 0.1;
 /// memories — higher priority during recall.
 const CORRECTION_RETRIEVAL_BOOST: f32 = 1.3;
 
+const MEMORY_REBUILD_EMBED_BATCH_SIZE: usize = 64;
+
 /// Error type for memory operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -318,6 +320,18 @@ impl MemoryStore {
         }
     }
 
+    /// Force a full rebuild of the memory search index and persist it.
+    ///
+    /// Intended for maintenance and benchmarks. Normal callers should prefer
+    /// [`Self::rebuild_if_stale`] so startup only pays the rebuild cost when
+    /// the vector index is out of sync with SQLite.
+    #[cfg(feature = "embeddings")]
+    pub fn rebuild_search_index_now(&self) -> MemResult<()> {
+        let _guard = self.rebuild_lock.write().unwrap_or_else(|e| e.into_inner());
+        self.rebuild_search_index()?;
+        self.save()
+    }
+
     /// Rebuild the search index from all active observations in SQLite.
     ///
     /// Clears both vector and fulltext stores, then re-indexes every active
@@ -355,12 +369,16 @@ impl MemoryStore {
         }
 
         // Re-index with "entity_name: content" text and real embeddings.
-        let chunks: Vec<sift_core::EmbeddedChunk> = observations
-            .iter()
-            .map(|(id, entity_name, content)| {
-                let search_text = format!("{entity_name}: {content}");
-                let vector = self.embed_observation(&search_text);
-                sift_core::EmbeddedChunk {
+        let mut chunks: Vec<sift_core::EmbeddedChunk> = Vec::with_capacity(observations.len());
+        for batch in observations.chunks(MEMORY_REBUILD_EMBED_BATCH_SIZE) {
+            let search_texts: Vec<String> = batch
+                .iter()
+                .map(|(_, entity_name, content)| format!("{entity_name}: {content}"))
+                .collect();
+            let vectors = self.embed_observations_batch(&search_texts);
+
+            chunks.extend(batch.iter().zip(search_texts).zip(vectors).map(
+                |(((id, _, _), search_text), vector)| sift_core::EmbeddedChunk {
                     chunk: sift_core::Chunk {
                         text: search_text,
                         source_uri: format!("memory://observation/{id}"),
@@ -372,9 +390,9 @@ impl MemoryStore {
                         byte_range: None,
                     },
                     vector,
-                }
-            })
-            .collect();
+                },
+            ));
+        }
 
         if !chunks.is_empty() {
             self.search.insert(&chunks)?;
@@ -2614,6 +2632,40 @@ impl MemoryStore {
         vec![0.0f32; 768]
     }
 
+    /// Embed observation texts for rebuild indexing.
+    ///
+    /// `texts` must be the unprefixed indexed form (`entity_name: content`).
+    /// On embedder failure, returns zero vectors — matching the single-text
+    /// path's behavior in [`Self::embed_observation`].
+    #[allow(unused_variables, clippy::unused_self)]
+    fn embed_observations_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        #[cfg(feature = "embeddings")]
+        {
+            if let Some(ref embedder) = self.embedder {
+                let prefixed: Vec<String> = texts
+                    .iter()
+                    .map(|text| format!("search_document: {text}"))
+                    .collect();
+                let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
+
+                match embedder.embed_batch(&refs) {
+                    Ok(vectors) if vectors.len() == texts.len() => return vectors,
+                    Ok(vectors) => warn!(
+                        "Batch embedding returned {} vectors for {} observations; using zero vectors",
+                        vectors.len(),
+                        texts.len()
+                    ),
+                    Err(e) => warn!(
+                        "Batch embedding failed for {} observations: {e}; using zero vectors",
+                        texts.len()
+                    ),
+                }
+            }
+        }
+
+        texts.iter().map(|_| vec![0.0f32; 768]).collect()
+    }
+
     /// Embed a query for search.
     #[allow(unused_variables, clippy::unused_self)]
     fn embed_for_search(&self, query: &str) -> (Vec<f32>, sift_core::SearchMode) {
@@ -3539,6 +3591,86 @@ mod tests {
             )
             .unwrap();
         assert!(!results.is_empty(), "Case-insensitive filter should match");
+    }
+
+    #[cfg(feature = "embeddings")]
+    struct RecordingEmbedder {
+        calls: std::sync::Mutex<Vec<usize>>,
+    }
+
+    #[cfg(feature = "embeddings")]
+    impl RecordingEmbedder {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<usize> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    impl sift_core::Embedder for RecordingEmbedder {
+        fn embed_batch(&self, texts: &[&str]) -> sift_core::SiftResult<Vec<Vec<f32>>> {
+            self.calls.lock().unwrap().push(texts.len());
+            Ok(texts.iter().map(|_| vec![0.1; 768]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            768
+        }
+
+        fn model_name(&self) -> &'static str {
+            "recording"
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    fn seed_rebuild_observations(store: &MemoryStore, count: usize) {
+        for i in 0..count {
+            let entity_id = store
+                .save_entity(&format!("entity-{i}"), EntityType::Concept, 1.0, "test")
+                .unwrap();
+            store
+                .add_observation(
+                    &entity_id,
+                    &format!("batched rebuild searchable observation number {i}"),
+                    1.0,
+                    "test",
+                )
+                .unwrap();
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn rebuild_search_index_batches_embeddings() {
+        let store = MemoryStore::open_in_memory().unwrap();
+        seed_rebuild_observations(&store, MEMORY_REBUILD_EMBED_BATCH_SIZE + 1);
+
+        let embedder = std::sync::Arc::new(RecordingEmbedder::new());
+        let embedder_dyn: std::sync::Arc<dyn sift_core::Embedder> = embedder.clone();
+        let store = store.with_embedder(embedder_dyn);
+
+        store.rebuild_search_index_now().unwrap();
+
+        assert_eq!(embedder.calls(), vec![MEMORY_REBUILD_EMBED_BATCH_SIZE, 1]);
+
+        let results = store
+            .recall(
+                "batched rebuild searchable observation number 32",
+                MEMORY_REBUILD_EMBED_BATCH_SIZE + 1,
+                &RecallFilters::default(),
+            )
+            .unwrap();
+        assert!(
+            results
+                .iter()
+                .any(|result| result.observation.content.contains("number 32")),
+            "rebuilt observation should remain searchable: {results:?}"
+        );
     }
 
     // -- Conflict detection tests --

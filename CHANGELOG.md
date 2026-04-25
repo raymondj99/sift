@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Memory rebuild benchmark** — `sift bench memory-rebuild` now runs an
+  opt-in ONNX-backed rebuild benchmark for the production embedding batch size,
+  reporting median elapsed time and throughput so memory vector-index rebuild
+  changes can be compared before and after locally.
+
+### Changed
+- **Batched memory index rebuilds** — Cortex memory search-index rebuilds now
+  embed observations in batches of 64 while preserving the existing
+  `search_document:` prefix and falling back to per-observation embedding if a
+  batch fails.
+
 ## [0.1.7] - 2026-04-23
 
 ### Added

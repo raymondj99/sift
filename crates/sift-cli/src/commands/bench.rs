@@ -28,12 +28,13 @@ pub fn run(filter: Option<&str>) -> anyhow::Result<()> {
         ("e2e", bench_end_to_end),
     ];
 
+    let explicit_benchmark = filter.filter(|f| *f != "all");
     let mut passed = 0usize;
     let mut failed = 0usize;
 
     for (name, func) in &benchmarks {
-        if let Some(f) = filter {
-            if *name != f && f != "all" {
+        if let Some(f) = explicit_benchmark {
+            if *name != f {
                 continue;
             }
         }
@@ -54,6 +55,23 @@ pub fn run(filter: Option<&str>) -> anyhow::Result<()> {
         println!();
     }
 
+    if explicit_benchmark == Some("memory-rebuild") {
+        let result = bench_memory_rebuild();
+        let status = if result.passed {
+            passed += 1;
+            "PASS".green().bold().to_string()
+        } else {
+            failed += 1;
+            "FAIL".red().bold().to_string()
+        };
+
+        println!("  [{status}] memory-rebuild");
+        for line in &result.details {
+            println!("         {line}");
+        }
+        println!();
+    }
+
     println!("{}", format!("{passed} passed, {failed} failed").bold());
 
     if failed > 0 {
@@ -61,6 +79,147 @@ pub fn run(filter: Option<&str>) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+// ===========================================================================
+// Benchmark: Memory Rebuild
+// ===========================================================================
+
+#[cfg(feature = "embeddings")]
+const MEMORY_REBUILD_OBSERVATIONS: usize = 1_000;
+#[cfg(feature = "embeddings")]
+const MEMORY_REBUILD_EMBED_BATCH_SIZE: usize = 64;
+#[cfg(feature = "embeddings")]
+const MEMORY_REBUILD_ITERATIONS: usize = 3;
+
+/// Time a forced rebuild of the memory search index with a real local embedder.
+fn bench_memory_rebuild() -> BenchResult {
+    #[cfg(not(feature = "embeddings"))]
+    {
+        return BenchResult::fail(vec![
+            "requires the `embeddings` feature".to_string(),
+            "build with `cargo build --features embeddings` or a feature set that includes MCP"
+                .to_string(),
+        ]);
+    }
+
+    #[cfg(feature = "embeddings")]
+    {
+        use sift_core::Config;
+        use sift_core::Embedder as _;
+        use sift_embed::models::{get_model, NOMIC_EMBED_TEXT_V1_5};
+        use sift_embed::{ModelManager, OnnxEmbedder};
+        use std::sync::Arc;
+
+        let config = match Config::load() {
+            Ok(config) => config,
+            Err(err) => return BenchResult::fail(vec![format!("failed to load config: {err}")]),
+        };
+
+        let manager = match ModelManager::new() {
+            Ok(manager) => manager,
+            Err(err) => {
+                return BenchResult::fail(vec![format!("failed to locate model directory: {err}")]);
+            }
+        };
+        manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
+
+        let model = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
+        if !model.is_download_supported() {
+            return BenchResult::fail(vec![format!(
+                "default model '{}' does not support local ONNX download/runtime: {}",
+                model.name, model.notes
+            )]);
+        }
+
+        let Some(model_dir) = manager.downloaded_model_dir(model) else {
+            return BenchResult::fail(vec![format!(
+                "model '{}' is not downloaded; run `sift models download {}`",
+                model.name, model.name
+            )]);
+        };
+
+        let embedder = match OnnxEmbedder::load_model(&model_dir, model) {
+            Ok(embedder) => Arc::new(embedder),
+            Err(err) => return BenchResult::fail(vec![format!("failed to load embedder: {err}")]),
+        };
+        let model_name = embedder.model_name().to_string();
+        let embedder: Arc<dyn sift_core::Embedder> = embedder;
+
+        let mut elapsed_samples = Vec::with_capacity(MEMORY_REBUILD_ITERATIONS);
+        for iteration in 0..MEMORY_REBUILD_ITERATIONS {
+            let store = match seeded_memory_rebuild_store(MEMORY_REBUILD_OBSERVATIONS) {
+                Ok(store) => store.with_embedder(Arc::clone(&embedder)),
+                Err(err) => {
+                    return BenchResult::fail(vec![format!(
+                        "failed to create benchmark store for iteration {}: {err}",
+                        iteration + 1
+                    )]);
+                }
+            };
+
+            let start = Instant::now();
+            if let Err(err) = store.rebuild_search_index_now() {
+                return BenchResult::fail(vec![format!(
+                    "forced rebuild failed for iteration {}: {err}",
+                    iteration + 1
+                )]);
+            }
+            elapsed_samples.push(start.elapsed());
+        }
+
+        elapsed_samples.sort();
+        let median = elapsed_samples[elapsed_samples.len() / 2];
+        let median_secs = median.as_secs_f64();
+        let observations_per_sec = MEMORY_REBUILD_OBSERVATIONS as f64 / median_secs.max(0.000_001);
+        let all_samples = elapsed_samples
+            .iter()
+            .map(|sample| format!("{:.2}s", sample.as_secs_f64()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let details = vec![
+            format!("observations: {MEMORY_REBUILD_OBSERVATIONS}"),
+            format!("model: {model_name}"),
+            format!("batch size: {MEMORY_REBUILD_EMBED_BATCH_SIZE}"),
+            format!("iterations: {MEMORY_REBUILD_ITERATIONS}"),
+            format!("median elapsed: {:.2}s", median_secs),
+            format!(
+                "median throughput: {:.1} observations/sec",
+                observations_per_sec
+            ),
+            format!("samples: [{all_samples}]"),
+        ];
+
+        BenchResult::pass(details)
+    }
+}
+
+#[cfg(feature = "embeddings")]
+fn seeded_memory_rebuild_store(
+    observation_count: usize,
+) -> anyhow::Result<sift_memory::MemoryStore> {
+    let store = sift_memory::MemoryStore::open_in_memory_for_bench()?;
+
+    for i in 0..observation_count {
+        let entity_id = store.save_entity(
+            &format!("memory-rebuild-entity-{i}"),
+            sift_memory::EntityType::Concept,
+            1.0,
+            "bench",
+        )?;
+
+        store.add_observation(
+            &entity_id,
+            &format!(
+                "memory rebuild benchmark observation {i} about batched embedding throughput and recall startup latency"
+            ),
+            0.8,
+            "bench",
+        )?;
+    }
+
+    Ok(store)
 }
 
 struct BenchResult {
