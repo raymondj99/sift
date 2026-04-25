@@ -3323,6 +3323,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "sift-retrieval-lab"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "blake3",
+ "chrono",
+ "clap",
+ "predicates",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sift-core",
+ "sift-embed",
+ "sift-store",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "sift-server"
 version = "0.1.7"
 dependencies = [

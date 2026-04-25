@@ -11,10 +11,12 @@ members = [
     "crates/sift-server",
     "crates/sift-mcp",
     "crates/sift-memory",
+    "crates/sift-retrieval-lab",
 ]
-# Fast default build: excludes sift-server (pulls in tantivy ~43s) and
-# sift-embed (pulls in tokenizers+onig_sys ~20s). Use `cargo build --workspace`
-# or `cargo build -p sift-server` to build those explicitly.
+# Fast default build: excludes sift-server (pulls in tantivy ~43s),
+# sift-embed (pulls in tokenizers+onig_sys ~20s), and sift-retrieval-lab
+# (depends on sift-embed). Use `cargo build --workspace` or
+# `cargo build -p sift-retrieval-lab` to build those explicitly.
 default-members = [
     "crates/sift-cli",
     "crates/sift-core",
