@@ -6,13 +6,13 @@ use sift_core::{Config, SiftResult};
 /// over stdin/stdout. All logging goes to stderr.
 pub fn run(config: &Config) -> SiftResult<()> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        sift_core::SiftError::Other(anyhow::anyhow!("Failed to start async runtime: {}", e))
+        sift_core::SiftError::Runtime(format!("Failed to start async runtime: {e}"))
     })?;
 
     rt.block_on(async {
         sift_mcp::run_stdio_server(config.clone())
             .await
-            .map_err(sift_core::SiftError::Other)
+            .map_err(|e| sift_core::SiftError::Runtime(e.to_string()))
     })
 }
 
@@ -30,7 +30,7 @@ pub fn run_http(
     stateful: bool,
 ) -> SiftResult<()> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        sift_core::SiftError::Other(anyhow::anyhow!("Failed to start async runtime: {}", e))
+        sift_core::SiftError::Runtime(format!("Failed to start async runtime: {e}"))
     })?;
 
     rt.block_on(async {
@@ -49,8 +49,8 @@ pub fn run_http(
 
         tokio::select! {
             r = server => r
-                .map_err(|e| sift_core::SiftError::Other(anyhow::anyhow!("http server task: {e}")))?
-                .map_err(sift_core::SiftError::Other),
+                .map_err(|e| sift_core::SiftError::Runtime(format!("http server task: {e}")))?
+                .map_err(|e| sift_core::SiftError::Runtime(e.to_string())),
             _ = tokio::signal::ctrl_c() => {
                 ct.cancel();
                 Ok(())

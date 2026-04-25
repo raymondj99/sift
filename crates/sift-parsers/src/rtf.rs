@@ -48,45 +48,49 @@ impl Parser for RtfParser {
 }
 
 /// Strip RTF control words, groups, and formatting to extract plain text.
+///
+/// RTF's grammar is byte-oriented: control words are ASCII, and non-ASCII
+/// payload always travels through `\'XX` or `\uN` escapes. We walk the input
+/// as bytes for O(1) index access without materializing a `Vec<char>`.
 fn strip_rtf(rtf: &str) -> String {
-    let mut output = String::with_capacity(rtf.len() / 2);
-    let chars: Vec<char> = rtf.chars().collect();
-    let len = chars.len();
+    let bytes = rtf.as_bytes();
+    let len = bytes.len();
+    let mut output = String::with_capacity(len / 2);
     let mut i = 0;
     let mut depth: i32 = 0;
     // Skip content inside special destination groups like \fonttbl, \colortbl, \stylesheet, etc.
     let mut skip_depth: Option<i32> = None;
 
     while i < len {
-        let ch = chars[i];
+        let b = bytes[i];
 
-        match ch {
-            '{' => {
+        match b {
+            b'{' => {
                 depth += 1;
                 i += 1;
             }
-            '}' => {
+            b'}' => {
                 if skip_depth == Some(depth) {
                     skip_depth = None;
                 }
                 depth -= 1;
                 i += 1;
             }
-            '\\' if i + 1 < len => {
+            b'\\' if i + 1 < len => {
                 // Check if we are inside a skip group
                 if skip_depth.is_some() {
                     // Skip until end of control word
                     i += 1;
                     while i < len
-                        && chars[i] != ' '
-                        && chars[i] != '\\'
-                        && chars[i] != '{'
-                        && chars[i] != '}'
+                        && bytes[i] != b' '
+                        && bytes[i] != b'\\'
+                        && bytes[i] != b'{'
+                        && bytes[i] != b'}'
                     {
                         i += 1;
                     }
                     // Consume trailing space after control word
-                    if i < len && chars[i] == ' ' {
+                    if i < len && bytes[i] == b' ' {
                         i += 1;
                     }
                     continue;
@@ -95,14 +99,14 @@ fn strip_rtf(rtf: &str) -> String {
                 i += 1; // skip the backslash
 
                 // Escaped literal characters
-                if chars[i] == '\\' || chars[i] == '{' || chars[i] == '}' {
-                    output.push(chars[i]);
+                if bytes[i] == b'\\' || bytes[i] == b'{' || bytes[i] == b'}' {
+                    output.push(bytes[i] as char);
                     i += 1;
                     continue;
                 }
 
                 // Unicode escape: \'XX (hex byte)
-                if chars[i] == '\'' && i + 2 < len {
+                if bytes[i] == b'\'' && i + 2 < len {
                     let hex = &rtf[i + 1..i + 3];
                     if let Ok(byte) = u8::from_str_radix(hex, 16) {
                         // Windows-1252 compatible: ASCII range maps directly
@@ -119,18 +123,20 @@ fn strip_rtf(rtf: &str) -> String {
 
                 // Read the control word
                 let start = i;
-                while i < len && chars[i].is_ascii_alphabetic() {
+                while i < len && bytes[i].is_ascii_alphabetic() {
                     i += 1;
                 }
                 let word = &rtf[start..i];
 
                 // Skip optional numeric parameter
-                while i < len && (chars[i].is_ascii_digit() || chars[i] == '-') {
+                let param_start = i;
+                while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b'-') {
                     i += 1;
                 }
+                let param_end = i;
 
                 // Consume the delimiter space (if present)
-                if i < len && chars[i] == ' ' {
+                if i < len && bytes[i] == b' ' {
                     i += 1;
                 }
 
@@ -140,13 +146,7 @@ fn strip_rtf(rtf: &str) -> String {
                     "tab" => output.push('\t'),
                     // Unicode escape: \uN followed by a replacement char
                     "u" => {
-                        // The numeric param was already consumed; parse it from the original
-                        let param_str: String = rtf[start..i]
-                            .chars()
-                            .skip_while(char::is_ascii_alphabetic)
-                            .take_while(|c| c.is_ascii_digit() || *c == '-')
-                            .collect();
-                        if let Ok(code) = param_str.parse::<i32>() {
+                        if let Ok(code) = rtf[param_start..param_end].parse::<i32>() {
                             let code = if code < 0 {
                                 (code + 65536) as u32
                             } else {
@@ -157,7 +157,7 @@ fn strip_rtf(rtf: &str) -> String {
                             }
                         }
                         // Skip the replacement character (usually ?)
-                        if i < len && chars[i] != '\\' && chars[i] != '{' && chars[i] != '}' {
+                        if i < len && bytes[i] != b'\\' && bytes[i] != b'{' && bytes[i] != b'}' {
                             i += 1;
                         }
                     }
@@ -173,10 +173,14 @@ fn strip_rtf(rtf: &str) -> String {
                 }
             }
             _ => {
+                // Literal text: advance by the full UTF-8 char width so a
+                // multi-byte sequence isn't split into invalid chars.
+                let rest = &rtf[i..];
+                let ch = rest.chars().next().unwrap_or('\0');
                 if skip_depth.is_none() {
                     output.push(ch);
                 }
-                i += 1;
+                i += ch.len_utf8().max(1);
             }
         }
     }

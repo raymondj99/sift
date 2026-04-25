@@ -300,7 +300,11 @@ fn bench_latency_ingest() -> BenchResult {
         let content =
             format!(r#"{{"tool_name": "Edit", "tool_input": {{"file_path": "/src/file{i}.rs"}}}}"#);
         collector.record(|| {
-            let _ = store.ingest("bench-session", "post_tool_use", &content);
+            let _ = store.ingest(
+                "bench-session",
+                sift_memory::EventType::PostToolUse,
+                &content,
+            );
         });
     }
 
@@ -635,7 +639,7 @@ fn bench_skill_extraction() -> BenchResult {
         for tool in ["Edit", "Bash", "Edit"] {
             let content = format!(r#"{{"tool_name": "{tool}", "tool_input": "bench"}}"#);
             episodes
-                .ingest(&session, "post_tool_use", &content)
+                .ingest(&session, sift_memory::EventType::PostToolUse, &content)
                 .unwrap();
         }
     }
@@ -704,14 +708,22 @@ fn bench_end_to_end() -> BenchResult {
 
     // 1. Ingest a PostCompact episode (the gold signal)
     let compact_content = r#"{"compact_summary": "The user is building a Rust semantic search engine called sift with an automated memory system called Cortex."}"#;
-    let ingest_result = episodes.ingest("e2e-session", "post_compact", compact_content);
+    let ingest_result = episodes.ingest(
+        "e2e-session",
+        sift_memory::EventType::PostCompact,
+        compact_content,
+    );
     let ingested = ingest_result.is_ok() && ingest_result.unwrap().is_some();
 
     // 2. Ingest a PostToolUse episode
     let tool_content =
         r#"{"tool_name": "Edit", "tool_input": {"file_path": "/src/cortex/consolidation.rs"}}"#;
     episodes
-        .ingest("e2e-session", "post_tool_use", tool_content)
+        .ingest(
+            "e2e-session",
+            sift_memory::EventType::PostToolUse,
+            tool_content,
+        )
         .unwrap();
 
     // 3. Consolidate

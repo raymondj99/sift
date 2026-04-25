@@ -634,33 +634,7 @@ fn render_page_basis(
     observations: &[PageObservation],
     relations: &[PageRelation],
 ) -> String {
-    let mut out = String::new();
-    out.push_str("---\n");
-    let _ = writeln!(out, "entity: {}", entity.name);
-    let _ = writeln!(out, "entity_id: {}", entity.id);
-    let _ = writeln!(out, "entity_type: {}", entity.entity_type);
-    out.push_str("---\n\n");
-    let _ = writeln!(out, "# {}\n", entity.name);
-    out.push_str("## Observations\n");
-    for obs in observations {
-        let _ = writeln!(
-            out,
-            "- [{}] {}",
-            obs.anchor.as_deref().unwrap_or("new"),
-            obs.text
-        );
-    }
-    out.push_str("\n## Relations\n");
-    for rel in relations {
-        let _ = writeln!(
-            out,
-            "- [{}] {} -> {}",
-            rel.anchor.as_deref().unwrap_or("new"),
-            rel.relation_type,
-            rel.target
-        );
-    }
-    out
+    render_page_inner(entity, None, observations, relations)
 }
 
 fn render_page(
@@ -669,12 +643,29 @@ fn render_page(
     observations: &[PageObservation],
     relations: &[PageRelation],
 ) -> String {
+    render_page_inner(entity, Some(revision), observations, relations)
+}
+
+/// Shared body for `render_page` and `render_page_basis`.
+///
+/// `revision = None` produces the canonical "basis" form (no `page_revision`
+/// line, no trailing newline) — fed back into `page_revision()` to compute the
+/// content hash. `revision = Some(rev)` adds the `page_revision: <rev>` line
+/// and a trailing newline; that's the form actually written to disk.
+fn render_page_inner(
+    entity: &Entity,
+    revision: Option<&str>,
+    observations: &[PageObservation],
+    relations: &[PageRelation],
+) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     let _ = writeln!(out, "entity: {}", entity.name);
     let _ = writeln!(out, "entity_id: {}", entity.id);
     let _ = writeln!(out, "entity_type: {}", entity.entity_type);
-    let _ = writeln!(out, "page_revision: {revision}");
+    if let Some(rev) = revision {
+        let _ = writeln!(out, "page_revision: {rev}");
+    }
     out.push_str("---\n\n");
     let _ = writeln!(out, "# {}\n", entity.name);
     out.push_str("## Observations\n");
@@ -696,7 +687,9 @@ fn render_page(
             rel.target
         );
     }
-    out.push('\n');
+    if revision.is_some() {
+        out.push('\n');
+    }
     out
 }
 

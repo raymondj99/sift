@@ -28,7 +28,34 @@ pub struct RuleGenReport {
     pub skipped_noise: usize,
     pub skipped_long: usize,
     /// Which output formats were written.
-    pub formats: Vec<String>,
+    pub formats: Vec<OutputFormat>,
+}
+
+/// Agent instruction format produced by `generate_*_rules`.
+///
+/// Adding a new agent format (e.g. Cursor-native, Codex-native) becomes a
+/// type-checked enum extension instead of a magic string written in two places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Universal `AGENTS.md` at project root, read by 20+ agents.
+    AgentsMd,
+    /// Claude Code native `.claude/rules/cortex-*.md` directory.
+    ClaudeRules,
+}
+
+impl OutputFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentsMd => "AGENTS.md",
+            Self::ClaudeRules => ".claude/rules/",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Maximum word count for a single rule entry.
@@ -300,7 +327,7 @@ fn write_agents_md(
         .count();
     report.files_written += 1;
     report.total_rules += rule_count;
-    report.formats.push("AGENTS.md".to_string());
+    report.formats.push(OutputFormat::AgentsMd);
 
     Ok(tokens)
 }
@@ -450,7 +477,7 @@ fn write_claude_rules(
     )?;
 
     if total_tokens > 0 {
-        report.formats.push(".claude/rules/".to_string());
+        report.formats.push(OutputFormat::ClaudeRules);
     }
 
     Ok(total_tokens)
@@ -1526,7 +1553,7 @@ mod tests {
         let report = generate_all_rules(&store, tmp.path()).unwrap();
 
         assert!(
-            report.formats.contains(&"AGENTS.md".to_string()),
+            report.formats.contains(&OutputFormat::AgentsMd),
             "Should write AGENTS.md"
         );
 
@@ -1607,11 +1634,11 @@ mod tests {
         let report = generate_all_rules(&store, tmp.path()).unwrap();
 
         assert!(
-            report.formats.contains(&"AGENTS.md".to_string()),
+            report.formats.contains(&OutputFormat::AgentsMd),
             "Should write AGENTS.md"
         );
         assert!(
-            report.formats.contains(&".claude/rules/".to_string()),
+            report.formats.contains(&OutputFormat::ClaudeRules),
             "Should write .claude/rules/ when .claude/ exists"
         );
 
@@ -1631,11 +1658,11 @@ mod tests {
         let report = generate_all_rules(&store, tmp.path()).unwrap();
 
         assert!(
-            report.formats.contains(&"AGENTS.md".to_string()),
+            report.formats.contains(&OutputFormat::AgentsMd),
             "Should always write AGENTS.md"
         );
         assert!(
-            !report.formats.contains(&".claude/rules/".to_string()),
+            !report.formats.contains(&OutputFormat::ClaudeRules),
             "Should NOT write .claude/rules/ without .claude/ dir"
         );
     }
@@ -1649,10 +1676,12 @@ mod tests {
         let config = ConsolidationConfig::default();
 
         let compact = r#"{"compact_summary": "User prefers functional programming style in TypeScript. Always use const, arrow functions."}"#;
-        episodes.ingest("sess1", "post_compact", compact).unwrap();
+        episodes
+            .ingest("sess1", EventType::PostCompact, compact)
+            .unwrap();
 
         let stop = r#"{"last_assistant_message": "I apologize for using var instead of const. The correct approach is to always use const for immutable bindings."}"#;
-        episodes.ingest("sess1", "stop", stop).unwrap();
+        episodes.ingest("sess1", EventType::Stop, stop).unwrap();
 
         let user = store
             .save_entity("Developer", EntityType::Person, 1.0, "sift_remember")

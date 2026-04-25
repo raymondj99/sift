@@ -151,6 +151,9 @@ fn memory_dir(config: &Config) -> anyhow::Result<std::path::PathBuf> {
 /// Reads JSON from stdin, applies the attention filter, and writes to
 /// the episodes table if the event is worth encoding.
 pub fn ingest(config: &Config, event_type: &str) -> anyhow::Result<()> {
+    let event = sift_memory::EventType::parse(event_type)
+        .ok_or_else(|| anyhow::anyhow!("unknown hook event type: {event_type}"))?;
+
     let dir = memory_dir(config)?;
     let store = EpisodeStore::open(&dir)?;
 
@@ -168,12 +171,12 @@ pub fn ingest(config: &Config, event_type: &str) -> anyhow::Result<()> {
         .and_then(|v| v.get("session_id")?.as_str().map(String::from))
         .unwrap_or_else(episodes::session_id_from_env);
 
-    match store.ingest(&session_id, event_type, &content)? {
+    match store.ingest(&session_id, event, &content)? {
         Some(id) => {
-            tracing::debug!("Ingested episode {id} (event={event_type})");
+            tracing::debug!("Ingested episode {id} (event={event})");
         }
         None => {
-            tracing::debug!("Skipped event (event={event_type}, filtered by attention)");
+            tracing::debug!("Skipped event (event={event}, filtered by attention)");
         }
     }
 
@@ -424,10 +427,19 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
 
     let report = sift_memory::rules::generate_all_rules(&memory_store, &project_root)?;
 
+    use sift_memory::rules::OutputFormat;
+
+    let formats_csv = report
+        .formats
+        .iter()
+        .map(|f| f.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
     println!("  Files written:    {}", report.files_written);
     println!("  Total rules:      {}", report.total_rules);
     println!("  Approx tokens:    {}", report.total_tokens_approx);
-    println!("  Formats:          {}", report.formats.join(", "));
+    println!("  Formats:          {formats_csv}");
 
     if report.files_written == 0 {
         println!(
@@ -438,10 +450,9 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
         let targets: Vec<&str> = report
             .formats
             .iter()
-            .map(|f| match f.as_str() {
-                "AGENTS.md" => "AGENTS.md (20+ tools)",
-                ".claude/rules/" => ".claude/rules/ (Claude Code)",
-                other => other,
+            .map(|f| match f {
+                OutputFormat::AgentsMd => "AGENTS.md (20+ tools)",
+                OutputFormat::ClaudeRules => ".claude/rules/ (Claude Code)",
             })
             .collect();
         println!(

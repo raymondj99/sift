@@ -45,14 +45,14 @@ impl Parser for ImageParser {
         let mut metadata = HashMap::new();
         let mut text_parts: Vec<String> = Vec::new();
 
-        // Detect format
-        let format = if let Some(kind) = infer::get(content) {
-            let fmt = kind.mime_type().to_string();
-            metadata.insert("format".to_string(), fmt.clone());
-            fmt
-        } else {
-            mime_type.unwrap_or("image/unknown").to_string()
-        };
+        // Trust the caller-provided MIME (from the scan step) and only fall back
+        // to byte sniffing when none was supplied. Stops redoing detection that
+        // FilesystemSource already performed.
+        let format = mime_type
+            .map(str::to_owned)
+            .or_else(|| infer::get(content).map(|k| k.mime_type().to_string()))
+            .unwrap_or_else(|| "image/unknown".to_string());
+        metadata.insert("format".to_string(), format.clone());
 
         let ext = extension.unwrap_or("image");
         metadata.insert("extension".to_string(), ext.to_string());
@@ -89,7 +89,7 @@ impl Parser for ImageParser {
         }
 
         // SVG: extract text content
-        if ext == "svg" || format.contains("svg") {
+        if ext == "svg" || format == "image/svg+xml" {
             if let Ok(svg_text) = std::str::from_utf8(content) {
                 let extracted = extract_svg_text(svg_text);
                 if !extracted.is_empty() {
@@ -127,19 +127,17 @@ impl Parser for ImageParser {
 }
 
 /// Read image dimensions from raw bytes for common formats.
+///
+/// `mime` must be the canonical IANA media type (e.g. `image/png`); a substring
+/// match would let `application/x-pngwriter` masquerade as PNG.
 fn read_dimensions(data: &[u8], mime: &str) -> Option<(u32, u32)> {
-    if mime.contains("png") {
-        read_png_dimensions(data)
-    } else if mime.contains("jpeg") || mime.contains("jpg") {
-        read_jpeg_dimensions(data)
-    } else if mime.contains("gif") {
-        read_gif_dimensions(data)
-    } else if mime.contains("webp") {
-        read_webp_dimensions(data)
-    } else if mime.contains("bmp") {
-        read_bmp_dimensions(data)
-    } else {
-        None
+    match mime {
+        "image/png" => read_png_dimensions(data),
+        "image/jpeg" => read_jpeg_dimensions(data),
+        "image/gif" => read_gif_dimensions(data),
+        "image/webp" => read_webp_dimensions(data),
+        "image/bmp" => read_bmp_dimensions(data),
+        _ => None,
     }
 }
 

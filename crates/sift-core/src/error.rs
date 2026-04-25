@@ -29,8 +29,12 @@ pub enum SiftError {
     #[error("Source error: {0}")]
     Source(String),
 
-    #[error("{0}")]
-    Other(#[from] anyhow::Error),
+    /// Operational/runtime error from process management, async runtime,
+    /// or other host-side failures. Replaces the former `Other(anyhow::Error)`
+    /// catch-all; using both `thiserror` (typed) and `anyhow` (untyped) inside
+    /// one error enum mixed two paradigms.
+    #[error("Runtime error: {0}")]
+    Runtime(String),
 
     #[error("Error processing {path}: {source}")]
     WithPath {
@@ -197,10 +201,8 @@ mod tests {
     }
 
     #[test]
-    fn from_anyhow_error() {
-        let anyhow_err = anyhow::anyhow!("something went wrong");
-        let sift_err: SiftError = anyhow_err.into();
-        assert!(matches!(sift_err, SiftError::Other(_)));
-        assert!(sift_err.to_string().contains("something went wrong"));
+    fn display_runtime_error() {
+        let err = SiftError::Runtime("daemon spawn failed".into());
+        assert_eq!(err.to_string(), "Runtime error: daemon spawn failed");
     }
 }

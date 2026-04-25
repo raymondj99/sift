@@ -42,7 +42,7 @@ pub use json_metadata::MetadataStore;
 pub use metadata::{MetadataStore, TransactionGuard};
 #[cfg(feature = "fulltext")]
 pub use tantivy_store::TantivyStore;
-pub use traits::{CollectSink, FullTextStore, SearchSink, VectorIndex, VectorStore};
+pub use traits::{FullTextStore, VectorIndex, VectorStore};
 
 #[cfg(test)]
 pub mod test_utils;

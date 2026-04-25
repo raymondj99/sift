@@ -37,10 +37,10 @@ impl EmbeddingCache {
     pub fn open(path: &Path) -> SiftResult<Self> {
         let data = if path.exists() {
             let json = std::fs::read_to_string(path).map_err(|e| {
-                sift_core::SiftError::Other(anyhow::anyhow!("Failed to read cache file: {}", e))
+                sift_core::SiftError::Storage(format!("Failed to read cache file: {e}"))
             })?;
             serde_json::from_str(&json).map_err(|e| {
-                sift_core::SiftError::Other(anyhow::anyhow!("Failed to parse cache JSON: {}", e))
+                sift_core::SiftError::Storage(format!("Failed to parse cache JSON: {e}"))
             })?
         } else {
             CacheData::default()

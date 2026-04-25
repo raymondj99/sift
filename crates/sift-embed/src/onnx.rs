@@ -43,6 +43,7 @@ pub struct OnnxEmbedder {
     model_name: String,
     max_tokens: usize,
     pooling: PoolingStrategy,
+    output_tensor: &'static str,
 }
 
 impl OnnxEmbedder {
@@ -53,6 +54,7 @@ impl OnnxEmbedder {
             dimensions,
             8192,
             PoolingStrategy::MeanPooling,
+            "last_hidden_state",
         )
     }
 
@@ -63,6 +65,7 @@ impl OnnxEmbedder {
             model.dimensions,
             model.max_tokens,
             model.pooling,
+            model.output_tensor,
         )
     }
 
@@ -72,6 +75,7 @@ impl OnnxEmbedder {
         dimensions: usize,
         max_tokens: usize,
         pooling: PoolingStrategy,
+        output_tensor: &'static str,
     ) -> SiftResult<Self> {
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -118,6 +122,7 @@ impl OnnxEmbedder {
             model_name: model_name.to_string(),
             max_tokens,
             pooling,
+            output_tensor,
         })
     }
 
@@ -292,18 +297,23 @@ impl Embedder for OnnxEmbedder {
             )
             .map_err(|e| sift_core::SiftError::Embedding(format!("ONNX inference failed: {e}")))?;
 
-        // Extract the first output tensor (last_hidden_state or token_embeddings)
-        // Try named output first, fall back to index-based access
-        let output_array = if let Some(v) = outputs.get("last_hidden_state") {
-            v.try_extract_tensor::<f32>()
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {e}")))?
-        } else {
-            // Use the first output by index
-            let first = &outputs[0];
-            first
-                .try_extract_tensor::<f32>()
-                .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {e}")))?
-        };
+        // Extract the named output tensor declared in the model spec.
+        // The previous index-based fallback silently produced wrong embeddings
+        // for models whose first output isn't the embedding tensor.
+        let output_array = outputs
+            .get(self.output_tensor)
+            .ok_or_else(|| {
+                sift_core::SiftError::Embedding(format!(
+                    "ONNX output tensor `{}` not found in model `{}`. \
+                     Declared outputs: {:?}. Update `ModelSpec::output_tensor` \
+                     for this model.",
+                    self.output_tensor,
+                    self.model_name,
+                    outputs.keys().collect::<Vec<_>>(),
+                ))
+            })?
+            .try_extract_tensor::<f32>()
+            .map_err(|e| sift_core::SiftError::Embedding(format!("Extract error: {e}")))?;
 
         let shape = output_array.shape();
         let token_embeddings: Vec<f32> = output_array.iter().copied().collect();

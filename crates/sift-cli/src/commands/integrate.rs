@@ -213,25 +213,29 @@ fn resolve_exe(override_: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn resolve_ort_dylib() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("ORT_DYLIB_PATH") {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
-        }
-    }
-    let home = home_dir()?;
-    // Standard location used by `sift models download`.
-    for rel in [
+    dylib_candidates(home_dir().as_deref()).find(|p| p.exists())
+}
+
+/// Ordered candidate locations for the ONNX Runtime shared library.
+///
+/// Caller-supplied `$ORT_DYLIB_PATH` wins; otherwise we look at the platform
+/// install paths used by `sift models download`. Returning an iterator (rather
+/// than a `Vec`) keeps the search lazy and makes the resolver trivially
+/// testable: collect the candidates, assert their order, no I/O.
+fn dylib_candidates(home: Option<&std::path::Path>) -> impl Iterator<Item = PathBuf> {
+    const PLATFORM_RELS: &[&str] = &[
         ".sift/models/ort/libonnxruntime.dylib",
         ".sift/models/ort/libonnxruntime.so",
         ".sift/models/ort/onnxruntime.dll",
-    ] {
-        let p = home.join(rel);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+    ];
+
+    let env_path = std::env::var("ORT_DYLIB_PATH").ok().map(PathBuf::from);
+    let home_owned = home.map(std::path::Path::to_path_buf);
+    env_path.into_iter().chain(
+        PLATFORM_RELS
+            .iter()
+            .filter_map(move |rel| home_owned.as_ref().map(|h| h.join(rel))),
+    )
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -1579,7 +1583,9 @@ args = ["mcp"]
             "last_assistant_message": "Finished the Codex hook parity implementation.",
             "stop_hook_active": true
         }"#;
-        episodes.ingest("codex-session", "stop", content).unwrap();
+        episodes
+            .ingest("codex-session", sift_memory::EventType::Stop, content)
+            .unwrap();
 
         let store = sift_memory::MemoryStore::open(&memory_dir).unwrap();
         let report = sift_memory::consolidation::run_consolidation(
@@ -1594,7 +1600,9 @@ args = ["mcp"]
         assert_eq!(report.episodes_deferred, 1);
 
         let rule_report = sift_memory::rules::generate_all_rules(&store, tmp.path()).unwrap();
-        assert!(rule_report.formats.contains(&"AGENTS.md".to_string()));
+        assert!(rule_report
+            .formats
+            .contains(&sift_memory::rules::OutputFormat::AgentsMd));
         assert!(tmp.path().join("AGENTS.md").exists());
     }
 

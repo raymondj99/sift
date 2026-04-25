@@ -148,6 +148,11 @@ pub struct ModelSpec {
     pub document_prefix: &'static str,
     /// How the model pools token-level representations.
     pub pooling: PoolingStrategy,
+    /// Name of the ONNX output tensor that holds the embedding.
+    /// Most BERT-family models export `last_hidden_state`; declaring it
+    /// per-model removes the index-based fallback that previously masked
+    /// silently-incorrect embeddings from non-standard exports.
+    pub output_tensor: &'static str,
     /// Matryoshka-supported truncated dimensions (largest first).
     /// Empty slice means the model does not support Matryoshka truncation.
     pub matryoshka_dims: &'static [usize],
@@ -182,6 +187,7 @@ pub const NOMIC_EMBED_TEXT_V1_5: ModelSpec = ModelSpec {
     search_prefix: "search_query: ",
     document_prefix: "search_document: ",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[768, 512, 256, 128, 64],
     download_files: BASIC_ONNX_FILES,
     notes: "Current native local default; legacy alias: nomic-embed-text-v2.",
@@ -199,6 +205,7 @@ pub const NOMIC_EMBED_TEXT_V2_MOE: ModelSpec = ModelSpec {
     search_prefix: "search_query: ",
     document_prefix: "search_document: ",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[768, 512, 256, 128],
     download_files: &[],
     notes: "True Nomic v2 MoE model; tracked for evaluation, native ONNX path not available in the upstream repo.",
@@ -216,6 +223,7 @@ pub const BGE_M3: ModelSpec = ModelSpec {
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::ClsToken,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[],
     download_files: BGE_M3_ONNX_FILES,
     notes: "Dense path is native; sparse and multi-vector outputs need future runtime support.",
@@ -233,6 +241,7 @@ pub const EMBEDDING_GEMMA_300M: ModelSpec = ModelSpec {
     search_prefix: "task: search result | query: ",
     document_prefix: "title: none | text: ",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[],
     download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
     notes: "Small multilingual on-device model via ONNX community export.",
@@ -250,6 +259,7 @@ pub const SNOWFLAKE_ARCTIC_EMBED_L_V2: ModelSpec = ModelSpec {
     search_prefix: "query: ",
     document_prefix: "",
     pooling: PoolingStrategy::ClsToken,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[1024, 256],
     download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
     notes: "Apache-2.0 multilingual retrieval model with Matryoshka-friendly storage tradeoffs.",
@@ -267,6 +277,7 @@ pub const QWEN3_EMBEDDING_0_6B: ModelSpec = ModelSpec {
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[1024, 768, 512, 256, 128, 64, 32],
     download_files: &[],
     notes: "Instruction-aware SOTA-class model; needs Transformers/runtime support before native download.",
@@ -284,6 +295,7 @@ pub const JINA_EMBEDDINGS_V5_TEXT_SMALL: ModelSpec = ModelSpec {
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[1024, 768, 512, 256, 128, 64, 32],
     download_files: ONNX_WITH_EXTERNAL_DATA_FILES,
     notes: "High-quality multilingual ONNX retrieval adapter; non-commercial license.",
@@ -301,6 +313,7 @@ pub const NV_EMBED_V2: ModelSpec = ModelSpec {
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[],
     download_files: &[],
     notes: "Benchmark/reference model only; gated and not native-downloadable.",
@@ -321,6 +334,7 @@ pub const NOMIC_EMBED_VISION_V1_5: ModelSpec = ModelSpec {
     search_prefix: "",
     document_prefix: "",
     pooling: PoolingStrategy::MeanPooling,
+    output_tensor: "last_hidden_state",
     matryoshka_dims: &[],
     download_files: &[ModelFile::new("onnx/model.onnx", "model.onnx")],
     notes: "Vision-side model sharing Nomic text v1.5 latent space.",
@@ -388,14 +402,24 @@ impl ModelSpec {
 ///
 /// The heuristic accounts for both the output embedding vectors (dimension x 4
 /// bytes per f32) and an approximation of the intermediate transformer
-/// activations. The result is clamped to the range `[8, 256]`.
+/// activations. The result is clamped to the range `[MIN_BATCH, MAX_BATCH]`.
 pub fn optimal_batch_size(dimension: usize, available_memory_mb: usize) -> usize {
-    // Per-item cost: output vector + rough estimate of transient activations
-    let per_item_bytes = (dimension * 4) + (512 * 8 * 2);
-    // Use ~25% of available memory for the embedding batch
-    let budget = available_memory_mb * 1024 * 1024 / 4;
+    /// Empirical estimate of transient activations per item in bytes.
+    /// Derived as `seq_len(512) × hidden_layers(8) × 2 (KV cache f16)` —
+    /// covers the dominant intermediate-tensor cost during forward pass.
+    const ACTIVATION_BYTES_PER_ITEM: usize = 512 * 8 * 2;
+    /// Floor to keep ONNX session overhead worth paying per call.
+    const MIN_BATCH: usize = 8;
+    /// Ceiling to avoid pathologically large allocations on huge-RAM hosts.
+    const MAX_BATCH: usize = 256;
+    /// Fraction of available memory we budget for one embedding batch
+    /// (the rest is reserved for the model weights, OS, etc.).
+    const MEMORY_BUDGET_DIVISOR: usize = 4;
+
+    let per_item_bytes = (dimension * 4) + ACTIVATION_BYTES_PER_ITEM;
+    let budget = available_memory_mb * 1024 * 1024 / MEMORY_BUDGET_DIVISOR;
     let batch = budget / per_item_bytes;
-    batch.clamp(8, 256)
+    batch.clamp(MIN_BATCH, MAX_BATCH)
 }
 
 pub struct ModelManager {

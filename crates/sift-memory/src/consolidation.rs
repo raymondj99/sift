@@ -191,14 +191,10 @@ fn phase_episode_processing(
                 continue;
             };
 
-            let result = match ep.event_type.as_str() {
-                "post_compact" => extract_from_post_compact(memory, ep, &parsed, &llm),
-                "stop" => extract_from_stop(memory, ep, &parsed, &llm),
-                "post_tool_use" => extract_from_post_tool_use(memory, ep, &parsed),
-                _ => {
-                    skipped_ids.push(ep.id.clone());
-                    continue;
-                }
+            let result = match ep.event_type {
+                EventType::PostCompact => extract_from_post_compact(memory, ep, &parsed, &llm),
+                EventType::Stop => extract_from_stop(memory, ep, &parsed, &llm),
+                EventType::PostToolUse => extract_from_post_tool_use(memory, ep, &parsed),
             };
 
             match result {
@@ -842,14 +838,19 @@ fn store_llm_observations(
     let mut observations_created = 0usize;
 
     for obs in extracted {
-        let confidence = crate::llm::category_confidence(&obs.category);
-        let source = crate::llm::category_source(&obs.category);
+        // `parse_observations` already filters unknown categories, so this
+        // should always succeed; guard with a `continue` rather than panicking
+        // if the upstream filter ever drifts.
+        let Some(category) = crate::llm::Category::parse(&obs.category) else {
+            continue;
+        };
+        let confidence = category.confidence();
+        let source = category.source();
 
         let entity_id = if let Some(id) = entity_ids.get(&obs.entity) {
             id.clone()
         } else {
-            let entity_type = crate::llm::category_entity_type(&obs.category);
-            let id = memory.save_entity(&obs.entity, entity_type, confidence, source)?;
+            let id = memory.save_entity(&obs.entity, category.entity_type(), confidence, source)?;
             entity_ids.insert(obs.entity.clone(), id.clone());
             id
         };
@@ -1046,7 +1047,9 @@ mod tests {
 
         let content =
             r#"{"compact_summary": "User is building a Rust memory system called Cortex."}"#;
-        episodes.ingest("sess1", "post_compact", content).unwrap();
+        episodes
+            .ingest("sess1", EventType::PostCompact, content)
+            .unwrap();
 
         // LLM disabled (default) — PostCompact episodes are deferred,
         // not falsely counted as processed.
@@ -1064,7 +1067,7 @@ mod tests {
         let episodes = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"last_assistant_message": "I've finished implementing the consolidation engine. All tests pass."}"#;
-        episodes.ingest("sess1", "stop", content).unwrap();
+        episodes.ingest("sess1", EventType::Stop, content).unwrap();
 
         // LLM disabled (default) — Stop episodes are deferred,
         // not falsely counted as processed.
@@ -1082,7 +1085,9 @@ mod tests {
         let episodes = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"tool_name": "Edit", "tool_input": {"file_path": "/Users/rjow/sift/crates/sift-memory/src/lib.rs"}, "tool_response": "ok"}"#;
-        episodes.ingest("sess1", "post_tool_use", content).unwrap();
+        episodes
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
 
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();
@@ -1183,7 +1188,9 @@ mod tests {
 
         // Bash command with compilation error in stdout
         let content = r#"{"tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_response": {"stdout": "   Compiling sift\nerror[E0433]: failed to resolve\nerror: could not compile", "stderr": "", "interrupted": false}}"#;
-        episodes.ingest("sess1", "post_tool_use", content).unwrap();
+        episodes
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
 
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();

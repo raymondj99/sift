@@ -36,10 +36,68 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(feature = "llm")]
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The set of category labels we accept from the LLM. Anything else is
-/// dropped by `parse_observations` to avoid storing arbitrary strings.
-#[cfg(feature = "llm")]
-const VALID_CATEGORIES: &[&str] = &["decision", "correction", "workflow", "preference"];
+/// Category labels we accept from the LLM. Anything else is dropped by
+/// `parse_observations`. Centralizing the set as a typed enum collapses three
+/// independent string-match accessors (`category_confidence`,
+/// `category_source`, `category_entity_type`) into methods on one type — so
+/// adding a new category becomes a single-file change instead of touching
+/// three lookup tables that drifted apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Decision,
+    Correction,
+    Workflow,
+    Preference,
+}
+
+impl Category {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "decision" => Some(Self::Decision),
+            "correction" => Some(Self::Correction),
+            "workflow" => Some(Self::Workflow),
+            "preference" => Some(Self::Preference),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decision => "decision",
+            Self::Correction => "correction",
+            Self::Workflow => "workflow",
+            Self::Preference => "preference",
+        }
+    }
+
+    /// Confidence assigned to observations in this category.
+    pub fn confidence(self) -> f32 {
+        match self {
+            Self::Correction => 0.90,
+            Self::Workflow | Self::Preference => 0.85,
+            Self::Decision => 0.80,
+        }
+    }
+
+    /// Source tag stored alongside the observation for provenance.
+    pub fn source(self) -> &'static str {
+        match self {
+            Self::Correction => "cortex:correction",
+            Self::Workflow => "cortex:procedural",
+            Self::Preference => "cortex:preference",
+            Self::Decision => "cortex:decision",
+        }
+    }
+
+    /// Entity type the observation should attach to when no entity exists yet.
+    pub fn entity_type(self) -> crate::types::EntityType {
+        match self {
+            Self::Preference => crate::types::EntityType::Preference,
+            Self::Workflow | Self::Decision => crate::types::EntityType::Concept,
+            Self::Correction => crate::types::EntityType::Fact,
+        }
+    }
+}
 
 /// Shared system prompt used across all providers.
 #[cfg(feature = "llm")]
@@ -327,7 +385,7 @@ fn parse_observations(text: &str) -> Result<Vec<ExtractedObservation>, String> {
             if o.category == "skip" {
                 return false;
             }
-            if !VALID_CATEGORIES.contains(&o.category.as_str()) {
+            if Category::parse(&o.category).is_none() {
                 dropped_unknown += 1;
                 return false;
             }
@@ -423,39 +481,10 @@ fn find_balanced_array(s: &str) -> Option<&str> {
 // ---------------------------------------------------------------------------
 // Category mapping (shared across all providers)
 // ---------------------------------------------------------------------------
-
-/// Map a category string to a confidence value.
-pub fn category_confidence(category: &str) -> f32 {
-    match category {
-        "correction" => 0.90,
-        "workflow" => 0.85,
-        "preference" => 0.85,
-        "decision" => 0.80,
-        _ => 0.70,
-    }
-}
-
-/// Map a category string to a source tag for the observation.
-pub fn category_source(category: &str) -> &'static str {
-    match category {
-        "correction" => "cortex:correction",
-        "workflow" => "cortex:procedural",
-        "preference" => "cortex:preference",
-        "decision" => "cortex:decision",
-        _ => "cortex:llm",
-    }
-}
-
-/// Map a category string to an entity type.
-pub fn category_entity_type(category: &str) -> crate::types::EntityType {
-    match category {
-        "preference" => crate::types::EntityType::Preference,
-        "workflow" => crate::types::EntityType::Concept,
-        "correction" => crate::types::EntityType::Fact,
-        "decision" => crate::types::EntityType::Concept,
-        _ => crate::types::EntityType::Concept,
-    }
-}
+//
+// The `Category` enum (defined above) carries `confidence`, `source`, and
+// `entity_type` accessors as methods. Earlier this lived in three independent
+// string-match functions whose match arms drifted out of sync.
 
 #[cfg(all(test, feature = "llm"))]
 mod tests {

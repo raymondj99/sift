@@ -153,7 +153,13 @@ fn parse_pptx(content: &[u8]) -> SiftResult<String> {
     slide_names.sort_by(|a, b| {
         let num_a = extract_slide_number(a);
         let num_b = extract_slide_number(b);
-        num_a.cmp(&num_b)
+        // Sort `None` (non-numeric slide names) last instead of clustering at 0.
+        match (num_a, num_b) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(b),
+        }
     });
 
     let mut output = String::with_capacity(slide_names.len() * 500);
@@ -181,12 +187,13 @@ fn parse_pptx(content: &[u8]) -> SiftResult<String> {
     Ok(output)
 }
 
-fn extract_slide_number(name: &str) -> u32 {
-    // Extract number from "ppt/slides/slide123.xml"
+fn extract_slide_number(name: &str) -> Option<u32> {
+    // Extract number from "ppt/slides/slide123.xml"; returns `None` for
+    // entries that don't follow the conventional `slideN.xml` pattern.
     name.trim_start_matches("ppt/slides/slide")
         .trim_end_matches(".xml")
         .parse()
-        .unwrap_or(0)
+        .ok()
 }
 
 /// Extract text from PPTX slide XML. Collects <a:t> text nodes.

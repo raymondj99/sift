@@ -176,12 +176,14 @@ impl Config {
         Ok(Self::sift_dir()?.join("config.toml"))
     }
 
+    #[must_use = "ignoring a loaded `Config` makes the disk read pointless and silently uses defaults"]
     pub fn load() -> crate::SiftResult<Self> {
         let config = Self::load_from(Self::config_path()?)?;
         config.validate()?;
         Ok(config)
     }
 
+    #[must_use = "ignoring a loaded `Config` makes the disk read pointless and silently uses defaults"]
     pub fn load_from(path: impl AsRef<Path>) -> crate::SiftResult<Self> {
         let path = path.as_ref();
         let config = if path.exists() {
@@ -195,6 +197,7 @@ impl Config {
     }
 
     /// Load global config, then merge with a `.sift.toml` in `project_dir` if present.
+    #[must_use = "ignoring the merged `Config` discards both global and project overrides"]
     pub fn load_merged(project_dir: Option<&Path>) -> crate::SiftResult<Self> {
         let global = Self::load()?;
         let project_dir = match project_dir {
@@ -573,11 +576,17 @@ impl Default for SearchConfig {
 
 impl ServerConfig {
     fn default_host() -> String {
-        "127.0.0.1".into()
+        Self::DEFAULT_HOST.into()
     }
     fn default_port() -> u16 {
-        7820
+        Self::DEFAULT_PORT
     }
+
+    /// Loopback address — local-only by default; set explicitly to expose.
+    pub const DEFAULT_HOST: &'static str = "127.0.0.1";
+    /// Default HTTP port for `sift serve`. Picked from the IANA user range
+    /// to avoid collision with common dev tools (Vite 5173, Postgres 5432, …).
+    pub const DEFAULT_PORT: u16 = 7820;
 }
 
 impl Default for ServerConfig {

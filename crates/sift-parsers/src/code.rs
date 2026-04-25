@@ -132,7 +132,13 @@ impl Parser for CodeParser {
         _mime_type: Option<&str>,
         extension: Option<&str>,
     ) -> SiftResult<ParsedDocument> {
-        let text = String::from_utf8_lossy(content).into_owned();
+        // Avoid the unconditional clone in `from_utf8_lossy(...).into_owned()`:
+        // valid UTF-8 (the common case for source code) goes through `to_owned`
+        // on a `&str`; only invalid sequences pay the lossy-replacement cost.
+        let text = match std::str::from_utf8(content) {
+            Ok(s) => s.to_owned(),
+            Err(_) => String::from_utf8_lossy(content).into_owned(),
+        };
 
         let language = extension
             .and_then(Self::extension_to_language)

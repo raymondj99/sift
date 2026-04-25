@@ -12,7 +12,7 @@
 //! the consolidation pipeline.
 
 use crate::schema;
-use crate::types::{Episode, EpisodeState};
+use crate::types::{Episode, EpisodeState, EventType};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -68,7 +68,7 @@ impl EpisodeStore {
     pub fn ingest(
         &self,
         session_id: &str,
-        event_type: &str,
+        event_type: EventType,
         content: &str,
     ) -> Result<Option<String>, rusqlite::Error> {
         let parsed: serde_json::Value =
@@ -110,7 +110,7 @@ impl EpisodeStore {
         self.db.execute(
             "INSERT INTO episodes (id, session_id, event_type, tool_name, content, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![id, session_id, event_type, tool_name, content, now],
+            rusqlite::params![id, session_id, event_type.as_str(), tool_name, content, now],
         )?;
 
         Ok(Some(id))
@@ -120,7 +120,7 @@ impl EpisodeStore {
     pub fn pending_count(&self) -> Result<u64, rusqlite::Error> {
         self.db.query_row(
             "SELECT COUNT(*) FROM episodes WHERE processed = ?1",
-            [EpisodeState::Pending.as_i32()],
+            [EpisodeState::Pending as i32],
             |row| row.get(0),
         )
     }
@@ -143,12 +143,23 @@ impl EpisodeStore {
 
         let rows = stmt
             .query_map(
-                rusqlite::params![EpisodeState::Pending.as_i32(), limit as i64],
+                rusqlite::params![EpisodeState::Pending as i32, limit as i64],
                 |row| {
+                    let event_type_str: String = row.get(2)?;
+                    let event_type = EventType::parse(&event_type_str).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("unknown event_type {event_type_str:?}"),
+                            )),
+                        )
+                    })?;
                     Ok(Episode {
                         id: row.get(0)?,
                         session_id: row.get(1)?,
-                        event_type: row.get(2)?,
+                        event_type,
                         tool_name: row.get(3)?,
                         content: row.get(4)?,
                         timestamp: row.get(5)?,
@@ -181,7 +192,7 @@ impl EpisodeStore {
             .prepare("UPDATE episodes SET processed = ?1, batch_id = ?2 WHERE id = ?3")?;
 
         for id in episode_ids {
-            stmt.execute(rusqlite::params![state.as_i32(), batch_id, id])?;
+            stmt.execute(rusqlite::params![state as i32, batch_id, id])?;
         }
         drop(stmt);
         self.db.execute_batch("COMMIT")?;
@@ -222,15 +233,15 @@ pub enum AttentionDecision {
 /// `bash_command` should be the pre-extracted shell command string for Bash
 /// tools (avoids double JSON parsing on the hot path).
 pub fn attention_filter(
-    event_type: &str,
+    event_type: EventType,
     tool_name: Option<&str>,
     bash_command: Option<&str>,
 ) -> AttentionDecision {
     match event_type {
         // Session boundaries are always valuable
-        "stop" | "post_compact" => AttentionDecision::Encode,
+        EventType::Stop | EventType::PostCompact => AttentionDecision::Encode,
 
-        "post_tool_use" => {
+        EventType::PostToolUse => {
             let tool = match tool_name {
                 Some(t) => t,
                 None => return AttentionDecision::Skip,
@@ -265,9 +276,6 @@ pub fn attention_filter(
             // Unknown tool — default to skip (conservative)
             AttentionDecision::Skip
         }
-
-        // Unknown event type — skip
-        _ => AttentionDecision::Skip,
     }
 }
 
@@ -410,7 +418,7 @@ mod tests {
     #[test]
     fn stop_events_always_encode() {
         assert_eq!(
-            attention_filter("stop", None, None),
+            attention_filter(EventType::Stop, None, None),
             AttentionDecision::Encode
         );
     }
@@ -418,7 +426,7 @@ mod tests {
     #[test]
     fn post_compact_events_always_encode() {
         assert_eq!(
-            attention_filter("post_compact", None, None),
+            attention_filter(EventType::PostCompact, None, None),
             AttentionDecision::Encode
         );
     }
@@ -427,7 +435,7 @@ mod tests {
     fn write_tools_encode() {
         for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
             assert_eq!(
-                attention_filter("post_tool_use", Some(tool), None),
+                attention_filter(EventType::PostToolUse, Some(tool), None),
                 AttentionDecision::Encode,
                 "Expected {tool} to encode"
             );
@@ -438,7 +446,7 @@ mod tests {
     fn read_tools_skip() {
         for tool in ["Read", "Glob", "Grep", "Agent", "LSP"] {
             assert_eq!(
-                attention_filter("post_tool_use", Some(tool), None),
+                attention_filter(EventType::PostToolUse, Some(tool), None),
                 AttentionDecision::Skip,
                 "Expected {tool} to skip"
             );
@@ -448,7 +456,11 @@ mod tests {
     #[test]
     fn bash_write_commands_encode() {
         assert_eq!(
-            attention_filter("post_tool_use", Some("Bash"), Some("cargo build --release")),
+            attention_filter(
+                EventType::PostToolUse,
+                Some("Bash"),
+                Some("cargo build --release")
+            ),
             AttentionDecision::Encode
         );
     }
@@ -464,7 +476,7 @@ mod tests {
             "git log --oneline",
         ] {
             assert_eq!(
-                attention_filter("post_tool_use", Some("Bash"), Some(cmd)),
+                attention_filter(EventType::PostToolUse, Some("Bash"), Some(cmd)),
                 AttentionDecision::Skip,
                 "Expected bash '{cmd}' to skip"
             );
@@ -480,7 +492,7 @@ mod tests {
             "git rebase main",
         ] {
             assert_eq!(
-                attention_filter("post_tool_use", Some("Bash"), Some(cmd)),
+                attention_filter(EventType::PostToolUse, Some("Bash"), Some(cmd)),
                 AttentionDecision::Encode,
                 "Expected bash '{cmd}' to encode"
             );
@@ -490,11 +502,11 @@ mod tests {
     #[test]
     fn sift_read_mcp_tools_skip() {
         assert_eq!(
-            attention_filter("post_tool_use", Some("mcp__sift__sift_search"), None),
+            attention_filter(EventType::PostToolUse, Some("mcp__sift__sift_search"), None),
             AttentionDecision::Skip
         );
         assert_eq!(
-            attention_filter("post_tool_use", Some("mcp__sift__sift_recall"), None),
+            attention_filter(EventType::PostToolUse, Some("mcp__sift__sift_recall"), None),
             AttentionDecision::Skip
         );
     }
@@ -502,11 +514,19 @@ mod tests {
     #[test]
     fn sift_write_mcp_tools_encode() {
         assert_eq!(
-            attention_filter("post_tool_use", Some("mcp__sift__sift_remember"), None),
+            attention_filter(
+                EventType::PostToolUse,
+                Some("mcp__sift__sift_remember"),
+                None
+            ),
             AttentionDecision::Encode
         );
         assert_eq!(
-            attention_filter("post_tool_use", Some("mcp__sift__sift_index_text"), None),
+            attention_filter(
+                EventType::PostToolUse,
+                Some("mcp__sift__sift_index_text"),
+                None
+            ),
             AttentionDecision::Encode
         );
     }
@@ -514,23 +534,19 @@ mod tests {
     #[test]
     fn unknown_mcp_tools_encode() {
         assert_eq!(
-            attention_filter("post_tool_use", Some("mcp__slack__send_message"), None),
+            attention_filter(
+                EventType::PostToolUse,
+                Some("mcp__slack__send_message"),
+                None
+            ),
             AttentionDecision::Encode
-        );
-    }
-
-    #[test]
-    fn unknown_event_type_skips() {
-        assert_eq!(
-            attention_filter("pre_tool_use", Some("Edit"), None),
-            AttentionDecision::Skip
         );
     }
 
     #[test]
     fn no_tool_name_in_post_tool_use_skips() {
         assert_eq!(
-            attention_filter("post_tool_use", None, None),
+            attention_filter(EventType::PostToolUse, None, None),
             AttentionDecision::Skip
         );
     }
@@ -543,12 +559,16 @@ mod tests {
 
         // Ingest a write tool event
         let content = r#"{"tool_name": "Edit", "tool_input": "{}", "tool_response": "ok"}"#;
-        let id = store.ingest("sess1", "post_tool_use", content).unwrap();
+        let id = store
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
         assert!(id.is_some());
 
         // Ingest a read tool event — should be skipped
         let content = r#"{"tool_name": "Read", "tool_input": "{}", "tool_response": "ok"}"#;
-        let id = store.ingest("sess1", "post_tool_use", content).unwrap();
+        let id = store
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
         assert!(id.is_none());
 
         assert_eq!(store.pending_count().unwrap(), 1);
@@ -556,7 +576,7 @@ mod tests {
 
         let episodes = store.fetch_pending(10).unwrap();
         assert_eq!(episodes.len(), 1);
-        assert_eq!(episodes[0].event_type, "post_tool_use");
+        assert_eq!(episodes[0].event_type, EventType::PostToolUse);
         assert_eq!(episodes[0].tool_name.as_deref(), Some("Edit"));
         assert_eq!(episodes[0].session_id, "sess1");
     }
@@ -566,7 +586,7 @@ mod tests {
         let store = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"last_assistant_message": "Done!", "stop_hook_active": true}"#;
-        let id = store.ingest("sess1", "stop", content).unwrap();
+        let id = store.ingest("sess1", EventType::Stop, content).unwrap();
         assert!(id.is_some());
         assert_eq!(store.pending_count().unwrap(), 1);
     }
@@ -581,12 +601,14 @@ mod tests {
             "turn_id": "turn_123",
             "stop_hook_active": true
         }"#;
-        let id = store.ingest("codex-session", "stop", content).unwrap();
+        let id = store
+            .ingest("codex-session", EventType::Stop, content)
+            .unwrap();
         assert!(id.is_some());
 
         let episodes = store.fetch_pending(10).unwrap();
         assert_eq!(episodes.len(), 1);
-        assert_eq!(episodes[0].event_type, "stop");
+        assert_eq!(episodes[0].event_type, EventType::Stop);
         assert!(episodes[0].content.contains("last_assistant_message"));
     }
 
@@ -595,7 +617,9 @@ mod tests {
         let store = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"compact_summary": "User is building a memory system..."}"#;
-        let id = store.ingest("sess1", "post_compact", content).unwrap();
+        let id = store
+            .ingest("sess1", EventType::PostCompact, content)
+            .unwrap();
         assert!(id.is_some());
     }
 
@@ -605,7 +629,7 @@ mod tests {
 
         let content = r#"{"tool_name": "Edit", "tool_input": "{}"}"#;
         let id = store
-            .ingest("sess1", "post_tool_use", content)
+            .ingest("sess1", EventType::PostToolUse, content)
             .unwrap()
             .unwrap();
 
@@ -623,7 +647,9 @@ mod tests {
 
         for i in 0..5 {
             let content = format!(r#"{{"tool_name": "Edit", "tool_input": "file{i}"}}"#);
-            store.ingest("sess1", "post_tool_use", &content).unwrap();
+            store
+                .ingest("sess1", EventType::PostToolUse, &content)
+                .unwrap();
         }
 
         let episodes = store.fetch_pending(3).unwrap();
@@ -638,8 +664,12 @@ mod tests {
         let content1 = r#"{"tool_name": "Edit", "tool_input": "first"}"#;
         let content2 = r#"{"tool_name": "Write", "tool_input": "second"}"#;
 
-        store.ingest("sess1", "post_tool_use", content1).unwrap();
-        store.ingest("sess1", "post_tool_use", content2).unwrap();
+        store
+            .ingest("sess1", EventType::PostToolUse, content1)
+            .unwrap();
+        store
+            .ingest("sess1", EventType::PostToolUse, content2)
+            .unwrap();
 
         let episodes = store.fetch_pending(10).unwrap();
         assert_eq!(episodes.len(), 2);
@@ -656,12 +686,16 @@ mod tests {
 
         // tool_input as a JSON string (Claude Code sends it this way)
         let trivial = r#"{"tool_name": "Bash", "tool_input": "{\"command\": \"git status\"}"}"#;
-        let result = store.ingest("sess1", "post_tool_use", trivial).unwrap();
+        let result = store
+            .ingest("sess1", EventType::PostToolUse, trivial)
+            .unwrap();
         assert!(result.is_none(), "trivial bash should be filtered");
 
         // Non-trivial bash command should be stored
         let write = r#"{"tool_name": "Bash", "tool_input": "{\"command\": \"cargo build\"}"}"#;
-        let result = store.ingest("sess1", "post_tool_use", write).unwrap();
+        let result = store
+            .ingest("sess1", EventType::PostToolUse, write)
+            .unwrap();
         assert!(result.is_some(), "cargo build should be stored");
     }
 
@@ -671,14 +705,18 @@ mod tests {
 
         // Some hooks send tool_input as an object, not a JSON string
         let content = r#"{"tool_name": "Bash", "tool_input": {"command": "ls -la"}}"#;
-        let result = store.ingest("sess1", "post_tool_use", content).unwrap();
+        let result = store
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
         assert!(
             result.is_none(),
             "ls should be filtered even as object input"
         );
 
         let content = r#"{"tool_name": "Bash", "tool_input": {"command": "make install"}}"#;
-        let result = store.ingest("sess1", "post_tool_use", content).unwrap();
+        let result = store
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
         assert!(result.is_some(), "make install should be stored");
     }
 
@@ -693,7 +731,7 @@ mod tests {
             "tool_response": {"exit_code": 0, "stdout": "ok"}
         }"#;
         let result = store
-            .ingest("codex-session", "post_tool_use", content)
+            .ingest("codex-session", EventType::PostToolUse, content)
             .unwrap();
         assert!(result.is_some(), "codex bash tool use should be stored");
 
@@ -707,7 +745,9 @@ mod tests {
         let store = EpisodeStore::open_in_memory().unwrap();
 
         // Completely invalid JSON — should not panic, should skip
-        let result = store.ingest("sess1", "post_tool_use", "not json").unwrap();
+        let result = store
+            .ingest("sess1", EventType::PostToolUse, "not json")
+            .unwrap();
         assert!(result.is_none(), "malformed JSON should skip gracefully");
     }
 
@@ -716,7 +756,7 @@ mod tests {
         let store = EpisodeStore::open_in_memory().unwrap();
 
         // Empty content with stop event — stop always encodes
-        let result = store.ingest("sess1", "stop", "").unwrap();
+        let result = store.ingest("sess1", EventType::Stop, "").unwrap();
         // Note: even empty content on a stop event will encode,
         // because attention filter only checks event_type for stop
         assert!(result.is_some());
@@ -727,7 +767,9 @@ mod tests {
         let store = EpisodeStore::open_in_memory().unwrap();
 
         let content = r#"{"tool_name": "Edit", "tool_input": {"file_path": "/foo/bar.rs"}, "tool_response": "success: 42 lines changed"}"#;
-        store.ingest("sess1", "post_tool_use", content).unwrap();
+        store
+            .ingest("sess1", EventType::PostToolUse, content)
+            .unwrap();
 
         let episodes = store.fetch_pending(10).unwrap();
         assert_eq!(episodes.len(), 1);
@@ -755,7 +797,7 @@ mod tests {
     fn bash_no_command_encodes() {
         // Bash with no command extraction — encode by default (conservative)
         assert_eq!(
-            attention_filter("post_tool_use", Some("Bash"), None),
+            attention_filter(EventType::PostToolUse, Some("Bash"), None),
             AttentionDecision::Encode
         );
     }
@@ -765,7 +807,11 @@ mod tests {
         // Piped commands don't match simple first-token patterns
         // "grep" is not in the trivial list, so this encodes
         assert_eq!(
-            attention_filter("post_tool_use", Some("Bash"), Some("grep -r TODO | wc -l")),
+            attention_filter(
+                EventType::PostToolUse,
+                Some("Bash"),
+                Some("grep -r TODO | wc -l")
+            ),
             AttentionDecision::Encode
         );
     }
@@ -776,7 +822,7 @@ mod tests {
         // doesn't match "ls" in the trivial list. This is correct: compound
         // commands are ambiguous, so we encode them to be safe.
         assert_eq!(
-            attention_filter("post_tool_use", Some("Bash"), Some("ls; rm -rf /")),
+            attention_filter(EventType::PostToolUse, Some("Bash"), Some("ls; rm -rf /")),
             AttentionDecision::Encode
         );
     }
@@ -793,7 +839,7 @@ mod tests {
             "kubectl apply -f deploy.yaml",
         ] {
             assert_eq!(
-                attention_filter("post_tool_use", Some("Bash"), Some(cmd)),
+                attention_filter(EventType::PostToolUse, Some("Bash"), Some(cmd)),
                 AttentionDecision::Encode,
                 "Expected '{cmd}' to encode"
             );

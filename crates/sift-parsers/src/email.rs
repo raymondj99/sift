@@ -7,6 +7,11 @@ use std::fmt::Write as FmtWrite;
 /// Parser for email formats: EML and MBOX.
 pub struct EmailParser;
 
+/// Cap mbox parsing at this many messages.
+///
+/// Above this, parsing time and memory dominate the call; embedding-side
+/// chunking already handles the truncated body. Keeps a malicious or
+/// runaway mbox from blocking the indexer.
 const MAX_MBOX_MESSAGES: usize = 1000;
 
 impl EmailParser {

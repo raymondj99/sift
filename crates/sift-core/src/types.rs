@@ -160,7 +160,12 @@ pub struct IndexStats {
 }
 
 /// Scan progress event for the CLI to display.
-#[derive(Debug, Clone)]
+///
+/// Not `Clone` because the `Error` variant carries `SiftError`, which wraps
+/// `std::io::Error` (non-`Clone`). Channels that need ownership transfer
+/// move events; consumers that need to inspect-and-forward should match
+/// before passing along.
+#[derive(Debug)]
 pub enum ScanEvent {
     Discovered {
         total: u64,
@@ -179,7 +184,10 @@ pub enum ScanEvent {
     },
     Error {
         path: String,
-        message: String,
+        /// The underlying typed error. Carrying `SiftError` instead of a
+        /// stringified message lets upstream consumers filter by error class
+        /// (parse vs storage vs IO) without re-parsing free-form text.
+        error: crate::SiftError,
     },
 }
 

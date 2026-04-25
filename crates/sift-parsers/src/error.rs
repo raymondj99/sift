@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ParseError {
     #[error("Unsupported format: {mime_type}")]
     UnsupportedFormat { mime_type: String },

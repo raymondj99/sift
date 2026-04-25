@@ -91,7 +91,7 @@ impl ExitCode {
             sift_core::SiftError::Parse { .. }
             | sift_core::SiftError::Search(_)
             | sift_core::SiftError::Source(_)
-            | sift_core::SiftError::Other(_) => ExitCode::GeneralError,
+            | sift_core::SiftError::Runtime(_) => ExitCode::GeneralError,
         }
     }
 }
@@ -802,8 +802,8 @@ fn run_command(cli: Cli, format: &OutputFormat) -> anyhow::Result<()> {
 }
 
 /// Parse a date string into a Unix timestamp. Supports:
-/// - ISO 8601 dates: `2025-01-01`
-/// - Relative durations: `7d`, `2w`, `3m`
+/// - ISO 8601 dates: `YYYY-MM-DD`
+/// - Relative durations: `7d` (days), `2w` (weeks), `3m` (months ≈ 30d)
 fn parse_after_date(s: &str) -> anyhow::Result<i64> {
     let s_trimmed = s.trim();
     let now = std::time::SystemTime::now()
@@ -811,37 +811,31 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
         .unwrap()
         .as_secs() as i64;
 
-    if let Some(num_str) = s_trimmed.strip_suffix('d') {
-        let days: i64 = num_str
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
-        return Ok(now - days * 86400);
-    }
-    if let Some(num_str) = s_trimmed.strip_suffix('w') {
-        let weeks: i64 = num_str
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
-        return Ok(now - weeks * 7 * 86400);
-    }
-    if let Some(num_str) = s_trimmed.strip_suffix('m') {
-        let months: i64 = num_str
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
-        return Ok(now - months * 30 * 86400);
+    const DAY: i64 = 86_400;
+    for (suffix, multiplier) in &[('d', 1i64), ('w', 7), ('m', 30)] {
+        if let Some(num_str) = s_trimmed.strip_suffix(*suffix) {
+            let n: i64 = num_str
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid number in '{s}'"))?;
+            return Ok(now - n * multiplier * DAY);
+        }
     }
 
-    // Parse ISO 8601 date: YYYY-MM-DD
+    // ISO 8601 date: YYYY-MM-DD. The civil-from-days algorithm (Howard Hinnant)
+    // converts a Gregorian calendar date directly to days since the Unix epoch
+    // without involving a calendar library.
     let parts: Vec<&str> = s_trimmed.split('-').collect();
-    if parts.len() != 3 {
-        anyhow::bail!("invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)");
-    }
-    let year: i64 = parts[0]
+    let [year_s, month_s, day_s] = match parts.as_slice() {
+        [y, m, d] => [*y, *m, *d],
+        _ => anyhow::bail!("invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)"),
+    };
+    let year: i64 = year_s
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid year in '{s}'"))?;
-    let month: i64 = parts[1]
+    let month: i64 = month_s
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid month in '{s}'"))?;
-    let day: i64 = parts[2]
+    let day: i64 = day_s
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid day in '{s}'"))?;
 
@@ -849,13 +843,12 @@ fn parse_after_date(s: &str) -> anyhow::Result<i64> {
         anyhow::bail!("invalid date '{s}'. Use YYYY-MM-DD or relative (7d, 2w, 3m)");
     }
 
-    // Days from epoch to date using the standard algorithm
     let m = if month <= 2 { month + 9 } else { month - 3 };
     let y = if month <= 2 { year - 1 } else { year };
     let days_from_epoch =
-        365 * y + y / 4 - y / 100 + y / 400 + (m * 306 + 5) / 10 + day - 1 - 719468;
+        365 * y + y / 4 - y / 100 + y / 400 + (m * 306 + 5) / 10 + day - 1 - 719_468;
 
-    Ok(days_from_epoch * 86400)
+    Ok(days_from_epoch * DAY)
 }
 
 /// Shared test helpers for all modules in sift-cli.

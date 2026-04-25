@@ -52,7 +52,7 @@ pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
 
     sift_server::serve(&addr, app)
         .await
-        .map_err(sift_core::SiftError::Other)?;
+        .map_err(|e| sift_core::SiftError::Runtime(e.to_string()))?;
 
     Ok(())
 }

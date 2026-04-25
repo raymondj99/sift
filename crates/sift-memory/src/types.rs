@@ -198,8 +198,8 @@ pub struct Episode {
     pub id: String,
     /// Claude Code session identifier.
     pub session_id: String,
-    /// Hook event type: "post_tool_use", "stop", "post_compact".
-    pub event_type: String,
+    /// Hook event type.
+    pub event_type: EventType,
     /// Tool name for PostToolUse events (e.g., "Edit", "Bash").
     pub tool_name: Option<String>,
     /// Raw JSON payload from hook stdin.
@@ -212,6 +212,48 @@ pub struct Episode {
     pub batch_id: Option<String>,
 }
 
+/// Hook event type captured by Cortex on the hot path.
+///
+/// Stored as TEXT in the `episodes.event_type` column; the enum is the
+/// in-memory canonical form. Adding a new event type requires updating this
+/// enum, which forces the consolidation match in [`crate::consolidation`] to
+/// be rechecked (rather than silently skipping unrecognized strings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventType {
+    /// `PostToolUse` hook — fired after a Claude Code tool call returns.
+    PostToolUse,
+    /// `Stop` hook — fired at the end of an assistant turn.
+    Stop,
+    /// `PostCompact` hook — fired after Claude Code compacts the conversation.
+    PostCompact,
+}
+
+impl EventType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PostToolUse => "post_tool_use",
+            Self::Stop => "stop",
+            Self::PostCompact => "post_compact",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "post_tool_use" => Some(Self::PostToolUse),
+            "stop" => Some(Self::Stop),
+            "post_compact" => Some(Self::PostCompact),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Processing state for episodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -222,12 +264,6 @@ pub enum EpisodeState {
     Processed = 1,
     /// Skipped by attention filter or error.
     Skipped = 2,
-}
-
-impl EpisodeState {
-    pub fn as_i32(self) -> i32 {
-        self as i32
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,9 +516,37 @@ mod tests {
 
     #[test]
     fn episode_state_values() {
-        assert_eq!(EpisodeState::Pending.as_i32(), 0);
-        assert_eq!(EpisodeState::Processed.as_i32(), 1);
-        assert_eq!(EpisodeState::Skipped.as_i32(), 2);
+        assert_eq!(EpisodeState::Pending as i32, 0);
+        assert_eq!(EpisodeState::Processed as i32, 1);
+        assert_eq!(EpisodeState::Skipped as i32, 2);
+    }
+
+    #[test]
+    fn event_type_roundtrip() {
+        for ev in [
+            EventType::PostToolUse,
+            EventType::Stop,
+            EventType::PostCompact,
+        ] {
+            let s = ev.as_str();
+            let parsed = EventType::parse(s).unwrap();
+            assert_eq!(parsed, ev);
+        }
+    }
+
+    #[test]
+    fn event_type_unknown_returns_none() {
+        assert!(EventType::parse("unknown").is_none());
+        assert!(EventType::parse("").is_none());
+    }
+
+    #[test]
+    fn event_type_serde_roundtrip() {
+        let ev = EventType::PostCompact;
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(json, "\"post_compact\"");
+        let parsed: EventType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ev);
     }
 
     #[test]

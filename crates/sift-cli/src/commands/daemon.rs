@@ -45,9 +45,8 @@ pub fn start(config: &Config) -> SiftResult<()> {
         let _ = std::fs::remove_file(socket_path()?);
     }
 
-    let exe = std::env::current_exe().map_err(|e| {
-        sift_core::SiftError::Other(anyhow::anyhow!("Cannot find sift executable: {e}"))
-    })?;
+    let exe = std::env::current_exe()
+        .map_err(|e| sift_core::SiftError::Runtime(format!("Cannot find sift executable: {e}")))?;
 
     let log_path = Config::sift_dir()?.join("daemon.log");
     let log_file = std::fs::File::create(&log_path)?;
@@ -58,7 +57,7 @@ pub fn start(config: &Config) -> SiftResult<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::from(log_file))
         .spawn()
-        .map_err(|e| sift_core::SiftError::Other(anyhow::anyhow!("Failed to spawn daemon: {e}")))?;
+        .map_err(|e| sift_core::SiftError::Runtime(format!("Failed to spawn daemon: {e}")))?;
 
     let pid = child.id();
 
@@ -108,10 +107,10 @@ pub fn stop() -> SiftResult<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map_err(|e| sift_core::SiftError::Other(anyhow::anyhow!("Failed to send signal: {e}")))?;
+        .map_err(|e| sift_core::SiftError::Runtime(format!("Failed to send signal: {e}")))?;
 
     if !status.success() {
-        return Err(sift_core::SiftError::Other(anyhow::anyhow!(
+        return Err(sift_core::SiftError::Runtime(format!(
             "Failed to stop daemon (PID {pid})"
         )));
     }
@@ -281,7 +280,7 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
 
     sift_server::serve_unix(&socket, app, shutdown)
         .await
-        .map_err(sift_core::SiftError::Other)?;
+        .map_err(|e| sift_core::SiftError::Runtime(e.to_string()))?;
 
     // Wait for background tasks to finish
     if let Some(handle) = consolidation_handle {
@@ -485,9 +484,7 @@ fn spawn_watcher(
                 tracing::error!("Watcher error: {e}");
             }
         })
-        .map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to spawn watcher: {e}"))
-        })?;
+        .map_err(|e| sift_core::SiftError::Runtime(format!("Failed to spawn watcher: {e}")))?;
 
     Ok(Some(handle))
 }

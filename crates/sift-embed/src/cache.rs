@@ -16,7 +16,7 @@ impl EmbeddingCache {
     /// Open a persistent cache at the given path. Creates the DB if it doesn't exist.
     pub fn open(path: &Path) -> SiftResult<Self> {
         let conn = Connection::open(path).map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open embedding cache: {e}"))
+            sift_core::SiftError::Storage(format!("Failed to open embedding cache: {e}"))
         })?;
 
         conn.execute_batch(
@@ -27,9 +27,7 @@ impl EmbeddingCache {
                  vector BLOB NOT NULL
              );",
         )
-        .map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {e}"))
-        })?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("Failed to init cache schema: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -41,7 +39,7 @@ impl EmbeddingCache {
     /// Create an in-memory cache (for tests).
     pub fn in_memory() -> SiftResult<Self> {
         let conn = Connection::open_in_memory().map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to open in-memory cache: {e}"))
+            sift_core::SiftError::Storage(format!("Failed to open in-memory cache: {e}"))
         })?;
 
         conn.execute_batch(
@@ -50,9 +48,7 @@ impl EmbeddingCache {
                  vector BLOB NOT NULL
              );",
         )
-        .map_err(|e| {
-            sift_core::SiftError::Other(anyhow::anyhow!("Failed to init cache schema: {e}"))
-        })?;
+        .map_err(|e| sift_core::SiftError::Storage(format!("Failed to init cache schema: {e}")))?;
 
         Ok(Self {
             conn: Mutex::new(conn),

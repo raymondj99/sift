@@ -73,7 +73,7 @@ pub fn run(config: &Config, path: Option<PathBuf>, debounce: u64) -> SiftResult<
                 }
             }
         })
-        .map_err(sift_core::SiftError::Other)?;
+        .map_err(|e| sift_core::SiftError::Runtime(e.to_string()))?;
 
     Ok(())
 }
