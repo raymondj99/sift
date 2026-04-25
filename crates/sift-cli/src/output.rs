@@ -2,7 +2,7 @@
 use crate::color_stub::*;
 #[cfg(feature = "fancy")]
 use colored::*;
-use sift_core::{IndexStats, SearchResult};
+use sift_core::{format_bytes, IndexStats, SearchResult};
 use std::io::{BufRead, Write};
 
 use crate::OutputFormat;
@@ -270,18 +270,6 @@ fn print_source_list_human(sources: &[(String, String, u32)]) {
             format!("[{ft}]").dimmed(),
             format!("({chunks} chunks)").dimmed(),
         );
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes}B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 

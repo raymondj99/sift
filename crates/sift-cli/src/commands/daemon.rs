@@ -219,14 +219,14 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
     };
 
     let state = Arc::new(AppState {
-        engine,
-        metadata,
+        engine: std::sync::RwLock::new(Arc::new(engine)),
+        metadata: std::sync::RwLock::new(Arc::new(metadata)),
         embedder,
         memory_dir: memory_dir.clone(),
         memory: memory_store.clone(),
         consolidation_config: Some(consolidation_config.clone()),
     });
-    let app = create_router(state);
+    let app = create_router(state.clone());
 
     tracing::info!(
         "Daemon listening on {} (embedder: {}, memory: {})",
@@ -259,7 +259,7 @@ pub async fn run_daemon(config: &Config) -> SiftResult<()> {
 
     // Spawn filesystem watcher if enabled
     let watch_handle = if let Some(paths) = watch_paths {
-        spawn_watcher(config, paths, &shutdown_flag)?
+        spawn_watcher(config, paths, &shutdown_flag, Arc::clone(&state))?
     } else {
         tracing::info!("Filesystem watcher disabled (set watch.enabled = true to enable)");
         None
@@ -453,6 +453,7 @@ fn spawn_watcher(
     config: &sift_core::Config,
     watch_paths: Vec<std::path::PathBuf>,
     shutdown_flag: &Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<AppState>,
 ) -> sift_core::SiftResult<Option<std::thread::JoinHandle<()>>> {
     if watch_paths.is_empty() {
         tracing::info!("Watcher enabled but no indexed paths found — nothing to watch");
@@ -477,7 +478,7 @@ fn spawn_watcher(
             let daemon = sift_server::WatchDaemon::new(watch_paths, debounce_ms);
             if let Err(e) = daemon.run_with_shutdown(
                 |changed_paths| {
-                    reindex_changed_files(&config, &changed_paths);
+                    reindex_changed_files(&config, &changed_paths, &state);
                 },
                 flag,
             ) {
@@ -491,9 +492,18 @@ fn spawn_watcher(
     Ok(Some(handle))
 }
 
-/// Re-index a batch of changed files. Opens a fresh engine per batch to
-/// ensure writes don't interfere with the daemon's read-only search engine.
-fn reindex_changed_files(config: &sift_core::Config, paths: &[std::path::PathBuf]) {
+/// Re-index a batch of changed files.
+///
+/// Opens a fresh engine for the scan (so we get a private write handle for
+/// the disk index), runs the pipeline, then — when `watch.reload_on_change`
+/// is true — atomically swaps that engine and metadata into the daemon's
+/// `AppState`. Without the swap, the daemon's long-lived in-memory engine
+/// state never sees newly indexed chunks until restart.
+fn reindex_changed_files(
+    config: &sift_core::Config,
+    paths: &[std::path::PathBuf],
+    state: &Arc<AppState>,
+) {
     let unique_dirs: Vec<std::path::PathBuf> = {
         let mut dirs = std::collections::BTreeSet::new();
         for p in paths {
@@ -536,6 +546,11 @@ fn reindex_changed_files(config: &sift_core::Config, paths: &[std::path::PathBuf
                             chunks = stats.chunks,
                             "Watcher: re-indexed changed files"
                         );
+                        if config.watch.reload_on_change {
+                            state.swap_engine(Arc::new(engine));
+                            state.swap_metadata(Arc::new(metadata));
+                            tracing::debug!("Watcher: swapped fresh engine + metadata into daemon");
+                        }
                     } else {
                         tracing::debug!(skipped = stats.skipped, "Watcher: all files unchanged");
                     }
@@ -636,6 +651,135 @@ mod tests {
         // Should collapse to the parent directory only
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], parent);
+    }
+
+    /// Serialize tests that mutate the HOME env var.
+    static HOME_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[allow(unsafe_code)]
+    fn with_home<F, R>(dir: &std::path::Path, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let _lock = HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", dir) };
+        let result = f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        result
+    }
+
+    #[test]
+    fn test_reindex_swaps_daemon_engine_when_reload_on_change() {
+        // Simulate the watcher path: the daemon starts with an empty in-memory
+        // engine; a file appears in a watched directory; the watcher reindexes
+        // and must swap a fresh engine in so the new content is searchable
+        // without restart.
+        let home = tempfile::TempDir::new().unwrap();
+        let watched = tempfile::TempDir::new().unwrap();
+        let new_file = watched.path().join("hello.txt");
+        std::fs::write(
+            &new_file,
+            "watcher reload reindex sentinel content for daemon hot swap",
+        )
+        .unwrap();
+
+        with_home(home.path(), || {
+            let mut config = sift_core::Config::default();
+            config.watch.reload_on_change = true;
+            config.ensure_dirs().unwrap();
+
+            // Bootstrap: an empty engine and metadata, just like the daemon
+            // would have at startup.
+            let (engine, metadata) = crate::pipeline::open_engine(&config).unwrap();
+            let state = Arc::new(AppState {
+                engine: std::sync::RwLock::new(Arc::new(engine)),
+                metadata: std::sync::RwLock::new(Arc::new(metadata)),
+                embedder: None,
+                memory_dir: None,
+                memory: None,
+                consolidation_config: None,
+            });
+
+            // Sanity check: nothing is indexed yet.
+            assert_eq!(state.metadata_snapshot().list_sources().unwrap().len(), 0);
+
+            // Drive a single watcher batch synchronously.
+            reindex_changed_files(&config, std::slice::from_ref(&new_file), &state);
+
+            // After the batch, the daemon's engine + metadata snapshots must
+            // reflect the new file. Without the swap, the metadata snapshot
+            // would still be empty even though the on-disk index has been
+            // updated.
+            let sources = state.metadata_snapshot().list_sources().unwrap();
+            assert!(
+                sources.iter().any(|(uri, _, _)| uri.contains("hello.txt")),
+                "metadata snapshot should reflect the newly indexed file: {sources:?}"
+            );
+
+            let engine = state.engine_snapshot();
+            let results = engine
+                .search(
+                    &[0.0; 768],
+                    "watcher reload reindex sentinel",
+                    5,
+                    sift_core::SearchMode::KeywordOnly,
+                )
+                .unwrap();
+            assert!(
+                !results.is_empty(),
+                "swapped engine should make the new file searchable"
+            );
+            assert!(
+                results.iter().any(|r| r.uri.contains("hello.txt")),
+                "search hit should be the newly indexed file: {results:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_reindex_skips_swap_when_reload_disabled() {
+        // With reload_on_change=false the watcher must not swap the daemon's
+        // engine — the engine `Arc` should remain pointer-identical before
+        // and after the reindex batch. (Disk-side updates are still made via
+        // the watcher's private engine; this test only verifies the swap
+        // itself is gated by config.)
+        let home = tempfile::TempDir::new().unwrap();
+        let watched = tempfile::TempDir::new().unwrap();
+        let new_file = watched.path().join("nope.txt");
+        std::fs::write(&new_file, "config-gated swap fixture").unwrap();
+
+        with_home(home.path(), || {
+            let mut config = sift_core::Config::default();
+            config.watch.reload_on_change = false;
+            config.ensure_dirs().unwrap();
+
+            let (engine, metadata) = crate::pipeline::open_engine(&config).unwrap();
+            let state = Arc::new(AppState {
+                engine: std::sync::RwLock::new(Arc::new(engine)),
+                metadata: std::sync::RwLock::new(Arc::new(metadata)),
+                embedder: None,
+                memory_dir: None,
+                memory: None,
+                consolidation_config: None,
+            });
+            let engine_before = state.engine_snapshot();
+            let metadata_before = state.metadata_snapshot();
+
+            reindex_changed_files(&config, std::slice::from_ref(&new_file), &state);
+
+            assert!(
+                Arc::ptr_eq(&engine_before, &state.engine_snapshot()),
+                "engine must not swap when reload_on_change=false"
+            );
+            assert!(
+                Arc::ptr_eq(&metadata_before, &state.metadata_snapshot()),
+                "metadata must not swap when reload_on_change=false"
+            );
+        });
     }
 
     #[test]

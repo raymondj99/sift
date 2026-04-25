@@ -367,6 +367,7 @@ fn print_consolidation_report(report: &FullConsolidationReport, elapsed: Duratio
     println!("{}", "Phase 1: Episode Processing".bold());
     println!("  Episodes processed:  {}", report.episodes_processed);
     println!("  Episodes skipped:    {}", report.episodes_skipped);
+    println!("  Episodes deferred:   {}", report.episodes_deferred);
     println!("  Entities created:    {}", report.entities_created);
     println!("  Observations created:{}", report.observations_created);
     println!();
@@ -454,9 +455,13 @@ pub fn generate_rules(config: &Config) -> anyhow::Result<()> {
 
 /// Print recommended hook configuration to stdout.
 pub fn init_hooks(target: HookTarget) -> anyhow::Result<()> {
-    // Resolve the sift binary path
-    let exe =
-        std::env::current_exe().map_or_else(|_| "sift".to_string(), |p| p.display().to_string());
+    // Resolve a stable sift binary path. `current_exe()` alone bakes the
+    // Homebrew Cellar version into the user's hooks.json, which breaks on
+    // the next `brew upgrade` — the helper prefers `which sift` and walks
+    // back to the brew prefix symlink when current_exe is under Cellar.
+    let exe = crate::commands::util::resolve_stable_exe()
+        .display()
+        .to_string();
     let hooks_json = build_hooks_json(target, &exe);
 
     println!(

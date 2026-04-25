@@ -681,147 +681,259 @@ enum Category {
 // Noise filtering
 // ===========================================================================
 
-/// Returns true if this observation is noise that should never be a rule.
-fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
-    // HTML/XML tags (often from code snippets captured by hooks)
-    if content.contains('<') && content.contains('>') {
-        return true;
+/// Why an observation was filtered out as noise.
+///
+/// Carrying the reason instead of a bare `bool` lets call sites log the
+/// distinct categories — useful when a future rule mis-fires and we want
+/// to know which predicate is responsible without instrumenting each line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // reasons are exposed for telemetry; not all are read yet
+pub(crate) enum NoiseReason {
+    HtmlOrXmlTags,
+    ToolUseNarration,
+    RawJsonOrArray,
+    QuotedMarkerList,
+    SessionOrEventEntity,
+    FilePathEntity,
+    ResearchEntity,
+    InternalCommentary,
+    ClassifierMetaCommentary,
+    CompletedBugFix,
+    LessonNarrative,
+    PartialSentence,
+    HypotheticalAnalysis,
+    MultipleQuotedExamples,
+    RecallScoringInternals,
+    CodeDerivable,
+    StalePlan,
+}
+
+impl NoiseReason {
+    #[allow(dead_code)]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::HtmlOrXmlTags => "html_or_xml_tags",
+            Self::ToolUseNarration => "tool_use_narration",
+            Self::RawJsonOrArray => "raw_json_or_array",
+            Self::QuotedMarkerList => "quoted_marker_list",
+            Self::SessionOrEventEntity => "session_or_event_entity",
+            Self::FilePathEntity => "file_path_entity",
+            Self::ResearchEntity => "research_entity",
+            Self::InternalCommentary => "internal_commentary",
+            Self::ClassifierMetaCommentary => "classifier_meta_commentary",
+            Self::CompletedBugFix => "completed_bug_fix",
+            Self::LessonNarrative => "lesson_narrative",
+            Self::PartialSentence => "partial_sentence",
+            Self::HypotheticalAnalysis => "hypothetical_analysis",
+            Self::MultipleQuotedExamples => "multiple_quoted_examples",
+            Self::RecallScoringInternals => "recall_scoring_internals",
+            Self::CodeDerivable => "code_derivable",
+            Self::StalePlan => "stale_plan",
+        }
+    }
+}
+
+/// Returns the noise classification, or `None` if the observation is fit to
+/// be a rule. `is_noise` is the boolean wrapper that existing call sites
+/// use; new call sites that want to log the reason should call this directly.
+fn classify_noise(content: &str, entity_name: &str, entity_type: &str) -> Option<NoiseReason> {
+    if has_html_tags(content) {
+        return Some(NoiseReason::HtmlOrXmlTags);
     }
 
     let trimmed = content.trim();
-
-    // Tool-use action narration (PostToolUse hook captures)
-    if trimmed.starts_with("Modified ")
-        || trimmed.starts_with("Created ")
-        || trimmed.starts_with("Created/wrote ")
-        || trimmed.starts_with("Deleted ")
-        || trimmed.starts_with("Wrote ")
-        || trimmed.starts_with("Ran: ")
-    {
-        return true;
+    if is_tool_use_narration(trimmed) {
+        return Some(NoiseReason::ToolUseNarration);
+    }
+    if is_raw_json_or_array(trimmed) {
+        return Some(NoiseReason::RawJsonOrArray);
+    }
+    if is_quoted_marker_list(trimmed) {
+        return Some(NoiseReason::QuotedMarkerList);
+    }
+    if is_session_or_event_entity(entity_name, entity_type) {
+        return Some(NoiseReason::SessionOrEventEntity);
+    }
+    if is_file_path_entity(entity_name) {
+        return Some(NoiseReason::FilePathEntity);
     }
 
-    // Raw JSON from LLM output or tool responses
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return true;
+    let entity_name_lower = entity_name.to_lowercase();
+    if is_research_entity(&entity_name_lower) {
+        return Some(NoiseReason::ResearchEntity);
     }
 
-    // Quoted substring marker lists (from classifier implementation notes)
-    if trimmed.starts_with('"') && trimmed.contains("\", \"") {
-        return true;
-    }
-
-    // Session entities — generic names rank poorly in recall
-    if entity_type == "event" || entity_name.starts_with("session:") {
-        return true;
-    }
-
-    // File path entities — the agent can read the actual files
-    if entity_name.contains('/') || entity_name.ends_with(".rs") || entity_name.ends_with(".toml") {
-        return true;
-    }
-
-    let name_lower = entity_name.to_lowercase();
-    if name_lower.contains("research")
-        || name_lower.contains("benchmarking")
-        || name_lower.contains("failure analysis")
-    {
-        return true;
-    }
-
-    // Strip bold/italic markers before content analysis so **bold** text
-    // matches the same filters as plain text.
+    // Strip bold/italic markers so **bold** text matches the same filters
+    // as plain text. Lowercased once here so each predicate doesn't repeat
+    // the work.
     let content_clean = content.replace("**", "").replace('*', "");
-    let content_lower = content_clean.to_lowercase();
-    let content_lower = content_lower.trim();
+    let content_lower_owned = content_clean.to_lowercase();
+    let content_lower = content_lower_owned.trim();
 
-    // Internal implementation commentary — not actionable for an agent
-    if content_lower.contains("the fundamental problem")
-        || content_lower.contains("this makes network-calling")
-        || content_lower.contains("next step is to")
-        || content_lower.contains("poc proved")
-        || content_lower.contains("poc results")
-        || content_lower.starts_with("contains:")
-        || content_lower.starts_with("imperative sequences:")
-        || content_lower.starts_with("process language:")
-        || content_lower.starts_with("workflow:")
-    {
-        return true;
+    if is_internal_commentary(content_lower) {
+        return Some(NoiseReason::InternalCommentary);
     }
-
-    // Meta-commentary about the classifier or extraction system
-    if content_lower.contains("matches `\"")
-        || content_lower.contains("heuristic classifier")
-        || content_lower.contains("routed to skip")
-        || content_lower.contains("the session entity has a generic name")
-        || content_lower.contains("only procedural statements")
-        || content_lower.contains("marker list")
-    {
-        return true;
+    if is_classifier_meta_commentary(content_lower) {
+        return Some(NoiseReason::ClassifierMetaCommentary);
     }
-
-    // Completed bug fixes or lessons learned — stale action items.
-    // These were relevant when discovered but are now resolved.
-    if content_lower.starts_with("discovered a latent")
-        || content_lower.starts_with("fix the ")
-        || content_lower.starts_with("added semantic search")
-        || content_lower.starts_with("publishing order matters")
-    {
-        return true;
+    if is_completed_bug_fix(content_lower) {
+        return Some(NoiseReason::CompletedBugFix);
     }
-
-    // Lesson/insight commentary — narrative, not instructions
-    if content_lower.contains("lesson:") || content_lower.contains("lesson —") {
-        return true;
+    if is_lesson_narrative(content_lower) {
+        return Some(NoiseReason::LessonNarrative);
     }
-
-    // Partial sentences, fragments, or status reports
-    if content_lower.starts_with("dependency:")
-        || content_lower.starts_with("trade-off exists")
-        || content_lower.starts_with("this must be done")
-        || content_lower.starts_with("every crate in")
-        || content_lower.starts_with("all ci checks pass")
-    {
-        return true;
+    if is_partial_sentence(content_lower) {
+        return Some(NoiseReason::PartialSentence);
     }
-
-    // Conditional/hypothetical analysis, not facts
-    if content_lower.starts_with("if we delete") || content_lower.starts_with("if we ") {
-        return true;
+    if is_hypothetical_analysis(content_lower) {
+        return Some(NoiseReason::HypotheticalAnalysis);
     }
-
-    // Observations containing multiple quoted examples — these are about
-    // the classifier/extraction system, not actionable instructions.
-    // E.g., '"always", "never", "before releasing"'
-    let quote_count = content.chars().filter(|&c| c == '"').count();
-    if quote_count >= 4 {
-        return true;
+    if has_multiple_quoted_examples(content) {
+        return Some(NoiseReason::MultipleQuotedExamples);
     }
-
-    // Completed/resolved action items phrased as discoveries
-    if content_lower.starts_with("discovered a latent")
-        || content_lower.starts_with("fix the ")
-        || content_lower.starts_with("added semantic search")
-    {
-        return true;
+    if is_recall_scoring_internals(content_lower) {
+        return Some(NoiseReason::RecallScoringInternals);
     }
-
-    // Recall scoring internals — implementation detail
-    if content_lower.starts_with("recall scoring penalizes") {
-        return true;
-    }
-
-    // Code-derivable content
     if is_code_derivable(content_lower) {
-        return true;
+        return Some(NoiseReason::CodeDerivable);
+    }
+    if is_stale_plan(content_lower, &entity_name_lower) {
+        return Some(NoiseReason::StalePlan);
     }
 
-    // Stale planning language
-    if is_stale_plan(content_lower, &name_lower) {
-        return true;
-    }
+    None
+}
 
-    false
+/// Boolean wrapper over [`classify_noise`] for the two existing skip-counting
+/// call sites. Returns `true` if the observation should be filtered.
+fn is_noise(content: &str, entity_name: &str, entity_type: &str) -> bool {
+    classify_noise(content, entity_name, entity_type).is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Individual predicates — each one is a single-rule check with a name that
+// matches the [`NoiseReason`] variant it produces.
+// ---------------------------------------------------------------------------
+
+/// Code/HTML snippets captured by hooks contain raw markup.
+fn has_html_tags(content: &str) -> bool {
+    content.contains('<') && content.contains('>')
+}
+
+/// PostToolUse hook captures narrate the action ("Modified X", "Ran: Y").
+fn is_tool_use_narration(trimmed: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "Modified ",
+        "Created ",
+        "Created/wrote ",
+        "Deleted ",
+        "Wrote ",
+        "Ran: ",
+    ];
+    PREFIXES.iter().any(|p| trimmed.starts_with(p))
+}
+
+/// Raw JSON output from an LLM or tool response.
+fn is_raw_json_or_array(trimmed: &str) -> bool {
+    trimmed.starts_with('{') || trimmed.starts_with('[')
+}
+
+/// Lists like `"foo", "bar", "baz"` are classifier marker dumps.
+fn is_quoted_marker_list(trimmed: &str) -> bool {
+    trimmed.starts_with('"') && trimmed.contains("\", \"")
+}
+
+/// Session / event entities have generic names that rank poorly in recall.
+fn is_session_or_event_entity(entity_name: &str, entity_type: &str) -> bool {
+    entity_type == "event" || entity_name.starts_with("session:")
+}
+
+/// Entity is a file path — the agent can re-read the file directly.
+fn is_file_path_entity(entity_name: &str) -> bool {
+    entity_name.contains('/') || entity_name.ends_with(".rs") || entity_name.ends_with(".toml")
+}
+
+/// Entity is a one-off research / benchmarking note.
+fn is_research_entity(entity_name_lower: &str) -> bool {
+    entity_name_lower.contains("research")
+        || entity_name_lower.contains("benchmarking")
+        || entity_name_lower.contains("failure analysis")
+}
+
+/// Implementation commentary that's not actionable for an agent.
+fn is_internal_commentary(content_lower: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "the fundamental problem",
+        "this makes network-calling",
+        "next step is to",
+        "poc proved",
+        "poc results",
+    ];
+    const PREFIXES: &[&str] = &[
+        "contains:",
+        "imperative sequences:",
+        "process language:",
+        "workflow:",
+    ];
+    NEEDLES.iter().any(|n| content_lower.contains(n))
+        || PREFIXES.iter().any(|p| content_lower.starts_with(p))
+}
+
+/// Meta-commentary about the classifier / extraction system itself.
+fn is_classifier_meta_commentary(content_lower: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "matches `\"",
+        "heuristic classifier",
+        "routed to skip",
+        "the session entity has a generic name",
+        "only procedural statements",
+        "marker list",
+    ];
+    NEEDLES.iter().any(|n| content_lower.contains(n))
+}
+
+/// Completed bug fixes phrased as discoveries — stale by the time we filter.
+fn is_completed_bug_fix(content_lower: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "discovered a latent",
+        "fix the ",
+        "added semantic search",
+        "publishing order matters",
+    ];
+    PREFIXES.iter().any(|p| content_lower.starts_with(p))
+}
+
+/// Narrative "lesson learned" notes — narrative, not instructions.
+fn is_lesson_narrative(content_lower: &str) -> bool {
+    content_lower.contains("lesson:") || content_lower.contains("lesson —")
+}
+
+/// Partial sentences, fragments, or status reports.
+fn is_partial_sentence(content_lower: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "dependency:",
+        "trade-off exists",
+        "this must be done",
+        "every crate in",
+        "all ci checks pass",
+    ];
+    PREFIXES.iter().any(|p| content_lower.starts_with(p))
+}
+
+/// Conditional / hypothetical analysis, not facts.
+fn is_hypothetical_analysis(content_lower: &str) -> bool {
+    content_lower.starts_with("if we delete") || content_lower.starts_with("if we ")
+}
+
+/// Four-or-more-quote observations are usually classifier-system
+/// commentary like `"always", "never", "before releasing"`.
+fn has_multiple_quoted_examples(content: &str) -> bool {
+    content.chars().filter(|&c| c == '"').count() >= 4
+}
+
+/// Recall-scoring implementation details that don't belong in user rules.
+fn is_recall_scoring_internals(content_lower: &str) -> bool {
+    content_lower.starts_with("recall scoring penalizes")
 }
 
 /// Content that restates what's already in the code (file manifests, schema
@@ -1584,9 +1696,15 @@ mod tests {
             .unwrap();
 
         let report = crate::consolidation::run_consolidation(&store, &episodes, &config).unwrap();
+        // Default config has LLM extraction disabled, so PostCompact + Stop
+        // episodes are deferred (left Pending) rather than falsely counted
+        // as processed. Direct sift_remember writes above still feed the
+        // rule generator below.
         assert!(
-            report.episodes_processed >= 2,
-            "Should process both episodes"
+            report.episodes_deferred >= 2,
+            "Default-config PostCompact + Stop should defer (got {} deferred, {} processed)",
+            report.episodes_deferred,
+            report.episodes_processed
         );
 
         // Test generate_all_rules with .claude/ present

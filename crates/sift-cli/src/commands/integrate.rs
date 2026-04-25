@@ -205,14 +205,11 @@ fn resolve_exe(override_: Option<&Path>) -> Result<PathBuf> {
         }
         return Ok(p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
     }
-    // Prefer an installed binary on PATH (homebrew, cargo install) so the
-    // config doesn't depend on a dev target/ directory.
-    if let Some(p) = which("sift") {
-        return Ok(p);
-    }
-    // Fall back to the currently-running exe.
-    let current = std::env::current_exe().context("cannot determine current executable path")?;
-    Ok(current)
+    // Delegate to the shared resolver so MCP server entries and Claude/Codex
+    // hook commands agree on the same stable path. The resolver prefers
+    // `which sift` from PATH, falls back to the brew prefix symlink, and
+    // only as a last resort uses `current_exe()`.
+    Ok(crate::commands::util::resolve_stable_exe())
 }
 
 fn resolve_ort_dylib() -> Option<PathBuf> {
@@ -232,24 +229,6 @@ fn resolve_ort_dylib() -> Option<PathBuf> {
         let p = home.join(rel);
         if p.exists() {
             return Some(p);
-        }
-    }
-    None
-}
-
-fn which(cmd: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(cmd);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            let exe = dir.join(format!("{cmd}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
         }
     }
     None
@@ -1609,7 +1588,10 @@ args = ["mcp"]
             &sift_memory::ConsolidationConfig::default(),
         )
         .unwrap();
-        assert_eq!(report.episodes_processed, 1);
+        // Default config has LLM extraction disabled — Stop events defer
+        // instead of being counted as processed.
+        assert_eq!(report.episodes_processed, 0);
+        assert_eq!(report.episodes_deferred, 1);
 
         let rule_report = sift_memory::rules::generate_all_rules(&store, tmp.path()).unwrap();
         assert!(rule_report.formats.contains(&"AGENTS.md".to_string()));

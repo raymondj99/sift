@@ -24,6 +24,12 @@ use tracing::{debug, info, warn};
 pub struct FullConsolidationReport {
     pub episodes_processed: usize,
     pub episodes_skipped: usize,
+    /// Episodes recognized but not extracted this run because the
+    /// extractor wasn't applicable yet (e.g. LLM disabled, payload empty).
+    /// Deferred episodes stay `Pending` and become eligible again on the
+    /// next consolidation run, so the count can change between runs as
+    /// LLM availability changes.
+    pub episodes_deferred: usize,
     pub entities_created: usize,
     pub observations_created: usize,
     pub duplicates_merged: usize,
@@ -33,6 +39,29 @@ pub struct FullConsolidationReport {
     pub skills_updated: usize,
     pub observations_pruned: usize,
     pub entities_pruned: usize,
+}
+
+/// Per-episode extraction outcome.
+///
+/// `Done` is the success case — entities/observations were created (or the
+/// extractor confirmed there was nothing to extract from a real payload).
+/// `Deferred` means the extractor couldn't run yet; the episode stays
+/// `Pending` so a future run with LLM available can retry.
+#[derive(Debug, Clone, Copy)]
+enum ExtractOutcome {
+    Done {
+        entities: usize,
+        observations: usize,
+    },
+    Deferred(DeferReason),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeferReason {
+    /// LLM extraction is disabled or the per-run circuit breaker has tripped.
+    LlmUnavailable,
+    /// The payload was missing or below the length floor for extraction.
+    EmptyOrTooShort,
 }
 
 /// Run all consolidation phases in sequence.
@@ -48,12 +77,12 @@ pub fn run_consolidation(
     let mut report = FullConsolidationReport::default();
 
     // Phase 1: Process pending episodes into entities + observations
-    let (processed, skipped, entities, observations) =
-        phase_episode_processing(memory, episodes, config)?;
-    report.episodes_processed = processed;
-    report.episodes_skipped = skipped;
-    report.entities_created = entities;
-    report.observations_created = observations;
+    let phase1 = phase_episode_processing(memory, episodes, config)?;
+    report.episodes_processed = phase1.processed;
+    report.episodes_skipped = phase1.skipped;
+    report.episodes_deferred = phase1.deferred;
+    report.entities_created = phase1.entities;
+    report.observations_created = phase1.observations;
 
     // Phase 2: Deduplication (extends existing consolidate())
     let dedup = phase_deduplication(memory, config)?;
@@ -85,6 +114,7 @@ pub fn run_consolidation(
 
     info!(
         episodes = report.episodes_processed,
+        deferred = report.episodes_deferred,
         entities = report.entities_created,
         observations = report.observations_created,
         dedup = report.duplicates_merged,
@@ -95,6 +125,15 @@ pub fn run_consolidation(
     );
 
     Ok(report)
+}
+
+#[derive(Debug, Default)]
+struct EpisodePhaseStats {
+    processed: usize,
+    skipped: usize,
+    deferred: usize,
+    entities: usize,
+    observations: usize,
 }
 
 // ===========================================================================
@@ -108,23 +147,26 @@ pub fn run_consolidation(
 /// - **Stop**: `last_assistant_message` → session entity + observation (silver)
 /// - **PostToolUse**: tool_input file paths → file entities + action observations
 ///
-/// Returns (processed, skipped, entities_created, observations_created).
+/// Returns counts of processed/skipped/deferred episodes plus
+/// entities/observations created.
 fn phase_episode_processing(
     memory: &MemoryStore,
     episodes: &EpisodeStore,
     config: &ConsolidationConfig,
-) -> crate::MemResult<(usize, usize, usize, usize)> {
+) -> crate::MemResult<EpisodePhaseStats> {
     let pending = episodes
         .fetch_pending(500)
         .map_err(crate::MemoryError::Sqlite)?;
 
     if pending.is_empty() {
-        return Ok((0, 0, 0, 0));
+        return Ok(EpisodePhaseStats::default());
     }
 
     let batch_id = uuid::Uuid::now_v7().to_string();
-    let mut processed_ids = Vec::new();
-    let mut skipped_ids = Vec::new();
+    let mut processed_ids: Vec<String> = Vec::new();
+    let mut skipped_ids: Vec<String> = Vec::new();
+    let mut deferred_count = 0usize;
+    let mut deferred_reasons: HashMap<&'static str, usize> = HashMap::new();
     let mut entities_created = 0usize;
     let mut observations_created = 0usize;
 
@@ -160,10 +202,19 @@ fn phase_episode_processing(
             };
 
             match result {
-                Ok((ent, obs)) => {
-                    entities_created += ent;
-                    observations_created += obs;
+                Ok(ExtractOutcome::Done {
+                    entities,
+                    observations,
+                }) => {
+                    entities_created += entities;
+                    observations_created += observations;
                     processed_ids.push(ep.id.clone());
+                }
+                Ok(ExtractOutcome::Deferred(reason)) => {
+                    deferred_count += 1;
+                    *deferred_reasons.entry(reason.as_static_str()).or_insert(0) += 1;
+                    // Leave the episode `Pending` so a later run with LLM
+                    // available (or richer payload) can extract from it.
                 }
                 Err(e) => {
                     warn!(episode_id = %ep.id, error = %e, "Episode processing failed");
@@ -173,7 +224,7 @@ fn phase_episode_processing(
         }
     }
 
-    // Mark episodes as processed/skipped
+    // Mark episodes as processed/skipped. Deferred episodes stay Pending.
     if !processed_ids.is_empty() {
         episodes
             .mark_processed(&processed_ids, EpisodeState::Processed, &batch_id)
@@ -188,15 +239,27 @@ fn phase_episode_processing(
     debug!(
         processed = processed_ids.len(),
         skipped = skipped_ids.len(),
+        deferred = deferred_count,
+        deferred_reasons = ?deferred_reasons,
         "Phase 1: episode processing"
     );
 
-    Ok((
-        processed_ids.len(),
-        skipped_ids.len(),
-        entities_created,
-        observations_created,
-    ))
+    Ok(EpisodePhaseStats {
+        processed: processed_ids.len(),
+        skipped: skipped_ids.len(),
+        deferred: deferred_count,
+        entities: entities_created,
+        observations: observations_created,
+    })
+}
+
+impl DeferReason {
+    fn as_static_str(self) -> &'static str {
+        match self {
+            DeferReason::LlmUnavailable => "llm_unavailable",
+            DeferReason::EmptyOrTooShort => "empty_or_too_short",
+        }
+    }
 }
 
 /// Extract knowledge from a PostCompact event.
@@ -211,13 +274,19 @@ fn extract_from_post_compact(
     _ep: &Episode,
     parsed: &serde_json::Value,
     llm: &LlmRuntime<'_>,
-) -> crate::MemResult<(usize, usize)> {
+) -> crate::MemResult<ExtractOutcome> {
     let summary = match parsed.get("compact_summary").and_then(|v| v.as_str()) {
         Some(s) if !s.trim().is_empty() => s.trim(),
-        _ => return Ok((0, 0)),
+        _ => return Ok(ExtractOutcome::Deferred(DeferReason::EmptyOrTooShort)),
     };
 
-    llm.try_extract(memory, summary).unwrap_or(Ok((0, 0)))
+    match llm.try_extract(memory, summary) {
+        Some(result) => result.map(|(entities, observations)| ExtractOutcome::Done {
+            entities,
+            observations,
+        }),
+        None => Ok(ExtractOutcome::Deferred(DeferReason::LlmUnavailable)),
+    }
 }
 
 /// Extract knowledge from a Stop event.
@@ -230,16 +299,22 @@ fn extract_from_stop(
     _ep: &Episode,
     parsed: &serde_json::Value,
     llm: &LlmRuntime<'_>,
-) -> crate::MemResult<(usize, usize)> {
+) -> crate::MemResult<ExtractOutcome> {
     let message = match parsed
         .get("last_assistant_message")
         .and_then(|v| v.as_str())
     {
         Some(s) if s.len() > 20 => s,
-        _ => return Ok((0, 0)),
+        _ => return Ok(ExtractOutcome::Deferred(DeferReason::EmptyOrTooShort)),
     };
 
-    llm.try_extract(memory, message).unwrap_or(Ok((0, 0)))
+    match llm.try_extract(memory, message) {
+        Some(result) => result.map(|(entities, observations)| ExtractOutcome::Done {
+            entities,
+            observations,
+        }),
+        None => Ok(ExtractOutcome::Deferred(DeferReason::LlmUnavailable)),
+    }
 }
 
 /// Extract knowledge from a PostToolUse event.
@@ -250,10 +325,15 @@ fn extract_from_post_tool_use(
     memory: &MemoryStore,
     ep: &Episode,
     parsed: &serde_json::Value,
-) -> crate::MemResult<(usize, usize)> {
+) -> crate::MemResult<ExtractOutcome> {
     let tool_name = match ep.tool_name.as_deref() {
         Some(t) => t,
-        None => return Ok((0, 0)),
+        None => {
+            return Ok(ExtractOutcome::Done {
+                entities: 0,
+                observations: 0,
+            })
+        }
     };
 
     // Extract file path from tool_input (works for Edit, Write, Read)
@@ -344,7 +424,10 @@ fn extract_from_post_tool_use(
         }
     }
 
-    Ok((entities, observations))
+    Ok(ExtractOutcome::Done {
+        entities,
+        observations,
+    })
 }
 
 // ===========================================================================
@@ -677,16 +760,40 @@ fn phase_decay_and_pruning(
 /// call failure. With up to 500 pending episodes per run, a single bad
 /// API key or dead endpoint would otherwise cause 500 × request-timeout
 /// seconds of wasted work.
+///
+/// `provider` is parsed once from the config string at construction time;
+/// an invalid provider string disables LLM extraction for the entire run
+/// with a single warning rather than re-failing once per episode.
 struct LlmRuntime<'a> {
     config: &'a ConsolidationConfig,
+    provider: Option<crate::llm::Provider>,
     disabled: std::cell::Cell<bool>,
 }
 
 impl<'a> LlmRuntime<'a> {
     fn new(config: &'a ConsolidationConfig) -> Self {
+        let provider = if config.llm_extraction {
+            match config
+                .llm_extraction_provider
+                .parse::<crate::llm::Provider>()
+            {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!(
+                        "LLM extraction disabled: invalid provider '{}' — {}",
+                        config.llm_extraction_provider, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config,
-            disabled: std::cell::Cell::new(!config.llm_extraction),
+            provider,
+            disabled: std::cell::Cell::new(!config.llm_extraction || provider.is_none()),
         }
     }
 
@@ -703,11 +810,8 @@ impl<'a> LlmRuntime<'a> {
         if self.disabled.get() {
             return None;
         }
-        match crate::llm::llm_decompose(
-            text,
-            &self.config.llm_extraction_model,
-            &self.config.llm_extraction_provider,
-        ) {
+        let provider = self.provider?;
+        match crate::llm::llm_decompose(text, &self.config.llm_extraction_model, provider) {
             Ok(extracted) if !extracted.is_empty() => {
                 Some(store_llm_observations(memory, &extracted))
             }
@@ -944,11 +1048,13 @@ mod tests {
             r#"{"compact_summary": "User is building a Rust memory system called Cortex."}"#;
         episodes.ingest("sess1", "post_compact", content).unwrap();
 
-        // LLM disabled (default) — PostCompact episodes are skipped
+        // LLM disabled (default) — PostCompact episodes are deferred,
+        // not falsely counted as processed.
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();
 
-        assert_eq!(report.episodes_processed, 1);
+        assert_eq!(report.episodes_processed, 0);
+        assert_eq!(report.episodes_deferred, 1);
         assert_eq!(report.observations_created, 0);
     }
 
@@ -960,11 +1066,13 @@ mod tests {
         let content = r#"{"last_assistant_message": "I've finished implementing the consolidation engine. All tests pass."}"#;
         episodes.ingest("sess1", "stop", content).unwrap();
 
-        // LLM disabled (default) — Stop episodes are skipped
+        // LLM disabled (default) — Stop episodes are deferred,
+        // not falsely counted as processed.
         let config = ConsolidationConfig::default();
         let report = run_consolidation(&store, &episodes, &config).unwrap();
 
-        assert_eq!(report.episodes_processed, 1);
+        assert_eq!(report.episodes_processed, 0);
+        assert_eq!(report.episodes_deferred, 1);
         assert_eq!(report.observations_created, 0);
     }
 

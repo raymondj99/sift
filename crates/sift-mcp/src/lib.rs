@@ -12,7 +12,7 @@ use rmcp::{
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
-use sift_core::{Config, SearchMode};
+use sift_core::{format_bytes, Config, SearchMode};
 use sift_store::{
     CachedSearchEngine, DefaultFullTextStore, FullTextStore as _, HybridSearchEngine,
     MetadataStore, SimpleVectorStore, VectorIndex as _,
@@ -313,7 +313,7 @@ impl SiftMcpServer {
         let (engine, metadata) = open_engine(&config)?;
 
         #[cfg(feature = "embeddings")]
-        let embedder = load_embedder(&config);
+        let embedder = sift_embed::load_embedder(&config, None);
 
         // Single-line startup banner on stderr (stdout is reserved for JSON-RPC).
         // Gives users a quick signal of whether semantic search is active without
@@ -772,6 +772,21 @@ impl SiftMcpServer {
             .insert(&[chunk])
             .map_err(|e| internal_err(format!("Insert failed: {e}")))?;
 
+        // Mirror the chunk into the metadata store so sift_status and
+        // sift_list_sources reflect the new URI immediately. Without this
+        // the engine and metadata stores drift apart.
+        let content_hash = *blake3::hash(req.text.as_bytes()).as_bytes();
+        self.metadata
+            .upsert_source(
+                &uri,
+                &content_hash,
+                req.text.len() as u64,
+                &file_type,
+                None,
+                1,
+            )
+            .map_err(|e| internal_err(format!("Metadata upsert failed: {e}")))?;
+
         // Persist the vector store to disk
         self.save_stores();
 
@@ -810,6 +825,14 @@ impl SiftMcpServer {
             .engine
             .delete_by_uri(&req.uri)
             .map_err(|e| internal_err(format!("Delete failed: {e}")))?;
+
+        // Keep the metadata store in lockstep with the engine. Ignore the
+        // boolean — if the URI was only in metadata or only in the engine
+        // (e.g. partial prior failure) we still want to converge on "gone".
+        let _ = self
+            .metadata
+            .remove_source(&req.uri)
+            .map_err(|e| internal_err(format!("Metadata remove failed: {e}")))?;
 
         // Persist after deletion
         self.save_stores();
@@ -1200,6 +1223,7 @@ impl SiftMcpServer {
             "status": "completed",
             "episodes_processed": report.episodes_processed,
             "episodes_skipped": report.episodes_skipped,
+            "episodes_deferred": report.episodes_deferred,
             "entities_created": report.entities_created,
             "observations_created": report.observations_created,
             "duplicates_merged": report.duplicates_merged,
@@ -1531,79 +1555,20 @@ impl SiftMcpServer {
 // ---------------------------------------------------------------------------
 
 /// Open or create the hybrid search engine for the configured index.
+///
+/// Wraps [`sift_store::open_engine`] to map sift errors into `anyhow` for
+/// the MCP entry point and to log the resolved index directory.
 fn open_engine(
     config: &Config,
 ) -> anyhow::Result<(
     HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
     MetadataStore,
 )> {
-    config.ensure_dirs()?;
-    let index_dir = config.index_dir()?;
-
-    #[cfg(feature = "hnsw")]
-    let vector_store = SimpleVectorStore::load_or_create(&index_dir)?;
-    #[cfg(not(feature = "hnsw"))]
-    let vector_store = SimpleVectorStore::load_or_migrate(&index_dir)?;
-
-    #[cfg(feature = "fulltext")]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("tantivy"))?;
-    #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("fts5.db"))?;
-    #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("bm25.json"))?;
-
-    #[cfg(feature = "sqlite")]
-    let metadata_path = index_dir.join("metadata.db");
-    #[cfg(not(feature = "sqlite"))]
-    let metadata_path = index_dir.join("metadata.json");
-    let metadata = MetadataStore::open(&metadata_path)?;
-
-    let engine = HybridSearchEngine::new(vector_store, fulltext_store, config.search.hybrid_alpha);
-    info!("MCP server opened index at {}", index_dir.display());
-
-    Ok((engine, metadata))
-}
-
-/// Load the ONNX embedding model for query embedding.
-#[cfg(feature = "embeddings")]
-fn load_embedder(config: &Config) -> Option<sift_embed::OnnxEmbedder> {
-    use sift_embed::{
-        models::{get_model, NOMIC_EMBED_TEXT_V1_5},
-        ModelManager,
-    };
-
-    let manager = ModelManager::new().ok()?;
-    manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
-
-    let model_def = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
-    if !model_def.is_download_supported() {
-        info!(
-            "Embedding model '{}' requires runtime '{}' — MCP search will use keyword-only mode. {}",
-            model_def.name,
-            model_def.runtime.as_str(),
-            model_def.notes
-        );
-        return None;
+    let result = sift_store::open_engine(config)?;
+    if let Ok(dir) = config.index_dir() {
+        info!("MCP server opened index at {}", dir.display());
     }
-    let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
-        info!(
-            "Embedding model not available — MCP search will use keyword-only mode. \
-             Run `sift models download {}` for semantic search.",
-            model_def.name
-        );
-        return None;
-    };
-
-    match sift_embed::OnnxEmbedder::load_model(&model_dir, model_def) {
-        Ok(emb) => {
-            info!("Loaded embedding model: {}", model_def.name);
-            Some(emb)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load embedding model: {e}. Using keyword-only.");
-            None
-        }
-    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1660,19 +1625,6 @@ fn dir_size(path: &std::path::Path) -> u64 {
         .filter_map(|e| e.metadata().ok())
         .map(|m| m.len())
         .sum()
-}
-
-/// Human-readable byte size formatting.
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes}B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
 }
 
 /// Truncate text to `max_len` chars, appending "..." if truncated.
@@ -2323,6 +2275,92 @@ mod tests {
             } else {
                 panic!("Expected text content");
             }
+        });
+    }
+
+    fn list_sources_uris(server: &SiftMcpServer) -> Vec<String> {
+        let req = ListSourcesRequest {
+            path: None,
+            limit: Some(500),
+        };
+        let result = server.sift_list_sources(Parameters(req)).unwrap();
+        let rmcp::model::RawContent::Text(text) = &result.content[0].raw else {
+            panic!("Expected text content");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        parsed["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|src| src["path"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_index_text_appears_in_list_sources_and_status() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+
+            let uri = "memory://test/metadata-roundtrip".to_string();
+            let req = IndexTextRequest {
+                text: "Metadata roundtrip fixture content.".to_string(),
+                uri: Some(uri.clone()),
+                content_type: None,
+                file_type: Some("md".to_string()),
+                title: None,
+            };
+            server.sift_index_text(Parameters(req)).unwrap();
+
+            let listed = list_sources_uris(&server);
+            assert!(
+                listed.contains(&uri),
+                "sift_list_sources should report indexed URI; got {listed:?}"
+            );
+
+            let status = server.sift_status().unwrap();
+            let rmcp::model::RawContent::Text(text) = &status.content[0].raw else {
+                panic!("Expected text content");
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+            assert!(
+                parsed["total_files"].as_u64().unwrap() >= 1,
+                "sift_status total_files should reflect the new URI: {parsed}"
+            );
+            assert!(
+                parsed["total_chunks"].as_u64().unwrap() >= 1,
+                "sift_status total_chunks should reflect the new chunk: {parsed}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_index_text_then_delete_clears_metadata() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        with_home(tmp.path(), || {
+            let config = sift_core::Config::default();
+            let server = SiftMcpServer::new(config).unwrap();
+
+            let uri = "memory://test/metadata-delete".to_string();
+            let req = IndexTextRequest {
+                text: "Soon-to-be-deleted metadata fixture.".to_string(),
+                uri: Some(uri.clone()),
+                content_type: None,
+                file_type: None,
+                title: None,
+            };
+            server.sift_index_text(Parameters(req)).unwrap();
+            assert!(list_sources_uris(&server).contains(&uri));
+
+            let del = DeleteRequest { uri: uri.clone() };
+            server.sift_delete(Parameters(del)).unwrap();
+
+            let listed = list_sources_uris(&server);
+            assert!(
+                !listed.contains(&uri),
+                "sift_list_sources should not list deleted URI; got {listed:?}"
+            );
         });
     }
 }

@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use axum::{
     error_handling::HandleErrorLayer,
     extract::{Query, State},
@@ -9,12 +10,18 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sift_core::{Embedder, IndexStats, SearchMode};
 use sift_store::{DefaultFullTextStore, HybridSearchEngine, MetadataStore, SimpleVectorStore};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+pub type SharedEngine = HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>;
+
 pub struct AppState {
-    pub engine: HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
-    pub metadata: MetadataStore,
+    /// Hot-swappable hybrid search engine. Readers grab a snapshot via
+    /// `engine_snapshot()` so they don't hold the lock during search.
+    /// The watcher swaps the engine in after a successful reindex batch.
+    pub engine: RwLock<Arc<SharedEngine>>,
+    /// Hot-swappable metadata store. Same pattern as `engine`.
+    pub metadata: RwLock<Arc<MetadataStore>>,
     pub embedder: Option<Box<dyn Embedder>>,
     /// Path to the memory directory. Enables `/api/memory/*` endpoints when set.
     pub memory_dir: Option<std::path::PathBuf>,
@@ -22,6 +29,38 @@ pub struct AppState {
     pub memory: Option<Arc<sift_memory::MemoryStore>>,
     /// Consolidation config from user settings (not just defaults).
     pub consolidation_config: Option<sift_memory::ConsolidationConfig>,
+}
+
+impl AppState {
+    /// Cheap clone of the current engine `Arc`. The `RwLock` is released
+    /// before the caller runs the search, so a concurrent swap can't stall
+    /// in-flight queries.
+    pub fn engine_snapshot(&self) -> Arc<SharedEngine> {
+        self.engine
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Cheap clone of the current metadata store `Arc`.
+    pub fn metadata_snapshot(&self) -> Arc<MetadataStore> {
+        self.metadata
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Atomically swap in a fresh engine. Used by the watcher after a
+    /// successful reindex batch so newly-indexed chunks become searchable
+    /// without restarting the daemon.
+    pub fn swap_engine(&self, new_engine: Arc<SharedEngine>) {
+        *self.engine.write().unwrap_or_else(|e| e.into_inner()) = new_engine;
+    }
+
+    /// Atomically swap in a fresh metadata store.
+    pub fn swap_metadata(&self, new_metadata: Arc<MetadataStore>) {
+        *self.metadata.write().unwrap_or_else(|e| e.into_inner()) = new_metadata;
+    }
 }
 
 #[derive(Deserialize)]
@@ -103,25 +142,21 @@ async fn health() -> &'static str {
 async fn search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchQuery>,
-) -> Result<Json<SearchResponse>, (StatusCode, String)> {
-    // Input validation
+) -> Result<Json<SearchResponse>, AppError> {
     if params.q.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Query must not be empty".to_string(),
-        ));
+        return Err(AppError::bad_request("Query must not be empty"));
     }
     if params.q.len() > 10_000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("Query too long ({} chars, max 10000)", params.q.len()),
-        ));
+        return Err(AppError::bad_request(format!(
+            "Query too long ({} chars, max 10000)",
+            params.q.len()
+        )));
     }
     if params.limit == 0 || params.limit > 1000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("Limit must be between 1 and 1000, got {}", params.limit),
-        ));
+        return Err(AppError::bad_request(format!(
+            "Limit must be between 1 and 1000, got {}",
+            params.limit
+        )));
     }
 
     let requested_mode = match params.mode.as_deref() {
@@ -130,32 +165,25 @@ async fn search(
         _ => SearchMode::Hybrid,
     };
 
-    // Determine effective mode based on embedder availability
     let (query_vector, effective_mode) = match (&state.embedder, requested_mode) {
         (Some(emb), mode) => {
             let vec = emb
                 .embed(&format!("search_query: {}", &params.q))
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Embedding failed: {e}"),
-                    )
-                })?;
+                .map_err(|e| AppError::internal(format!("Embedding failed: {e}")))?;
             (vec, mode)
         }
         (None, SearchMode::VectorOnly) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "Vector search requested but no embedding model is loaded".to_string(),
+            return Err(AppError::bad_request(
+                "Vector search requested but no embedding model is loaded",
             ));
         }
         (None, _) => (vec![0.0f32; 768], SearchMode::KeywordOnly),
     };
 
-    let results = state
-        .engine
+    let engine = state.engine_snapshot();
+    let results = engine
         .search(&query_vector, &params.q, params.limit, effective_mode)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::internal)?;
 
     let items: Vec<SearchResultItem> = results
         .into_iter()
@@ -192,13 +220,9 @@ async fn search(
     }))
 }
 
-async fn list(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<SourceItem>>, (StatusCode, String)> {
-    let sources = state
-        .metadata
-        .list_sources()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+async fn list(State(state): State<Arc<AppState>>) -> Result<Json<Vec<SourceItem>>, AppError> {
+    let metadata = state.metadata_snapshot();
+    let sources = metadata.list_sources().map_err(AppError::internal)?;
 
     let items: Vec<SourceItem> = sources
         .into_iter()
@@ -212,13 +236,9 @@ async fn list(
     Ok(Json(items))
 }
 
-async fn status(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<StatusResponse>, (StatusCode, String)> {
-    let stats = state
-        .metadata
-        .stats()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+async fn status(State(state): State<Arc<AppState>>) -> Result<Json<StatusResponse>, AppError> {
+    let metadata = state.metadata_snapshot();
+    let stats = metadata.stats().map_err(AppError::internal)?;
 
     Ok(Json(StatusResponse {
         status: "ok".to_string(),
@@ -234,11 +254,11 @@ async fn status(
 /// `GET /api/memory/status` — memory system statistics and tier breakdown.
 async fn memory_status(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let memory = state.memory.clone().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Memory not available".into(),
-    ))?;
+) -> Result<Json<serde_json::Value>, AppError> {
+    let memory = state
+        .memory
+        .clone()
+        .ok_or_else(|| AppError::unavailable("Memory not available"))?;
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let stats = memory.stats().map_err(|e| format!("Stats failed: {e}"))?;
@@ -256,13 +276,8 @@ async fn memory_status(
         }))
     })
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
-        )
-    })?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| AppError::internal(format!("Task failed: {e}")))?
+    .map_err(AppError::internal)?;
 
     Ok(Json(result))
 }
@@ -270,15 +285,15 @@ async fn memory_status(
 /// `POST /api/memory/consolidate` — trigger on-demand consolidation.
 async fn memory_consolidate(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let memory = state.memory.clone().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Memory not available".into(),
-    ))?;
+) -> Result<Json<serde_json::Value>, AppError> {
+    let memory = state
+        .memory
+        .clone()
+        .ok_or_else(|| AppError::unavailable("Memory not available"))?;
     let dir = state
         .memory_dir
         .clone()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Memory dir not set".into()))?;
+        .ok_or_else(|| AppError::unavailable("Memory dir not set"))?;
     let config = state.consolidation_config.clone().unwrap_or_default();
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
@@ -294,6 +309,7 @@ async fn memory_consolidate(
             "status": "completed",
             "episodes_processed": report.episodes_processed,
             "episodes_skipped": report.episodes_skipped,
+            "episodes_deferred": report.episodes_deferred,
             "entities_created": report.entities_created,
             "observations_created": report.observations_created,
             "duplicates_merged": report.duplicates_merged,
@@ -305,13 +321,8 @@ async fn memory_consolidate(
         }))
     })
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
-        )
-    })?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| AppError::internal(format!("Task failed: {e}")))?
+    .map_err(AppError::internal)?;
 
     Ok(Json(result))
 }
@@ -338,8 +349,8 @@ mod tests {
             let metadata = MetadataStore::open_in_memory().unwrap();
 
             let state = Arc::new(AppState {
-                engine,
-                metadata,
+                engine: RwLock::new(Arc::new(engine)),
+                metadata: RwLock::new(Arc::new(metadata)),
                 embedder: None,
                 memory_dir: None,
                 memory: None,
@@ -401,7 +412,7 @@ mod tests {
             },
             vector: vec![0.0; 3],
         }];
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         let (status, body) = get(h.app(), "/api/search?q=rust+programming&mode=keyword").await;
         assert_eq!(status, StatusCode::OK);
@@ -462,7 +473,7 @@ mod tests {
                 vector: vec![0.0; 3],
             },
         ];
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         let (status, body) = get(h.app(), "/api/search?q=rust&mode=keyword&type=rs").await;
         assert_eq!(status, StatusCode::OK);
@@ -496,7 +507,7 @@ mod tests {
             },
             vector: vec![0.0; 3],
         }];
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         // Default mode (no mode param) with no embedder should fall back to keyword
         let (status, body) = get(h.app(), "/api/search?q=rust+fallback").await;
@@ -525,7 +536,7 @@ mod tests {
                 vector: vec![0.0; 3],
             })
             .collect();
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         let (status, body) = get(h.app(), "/api/search?q=rust+document&mode=keyword&limit=2").await;
         assert_eq!(status, StatusCode::OK);
@@ -558,8 +569,8 @@ mod tests {
         let metadata = MetadataStore::open_in_memory().unwrap();
 
         let state = Arc::new(AppState {
-            engine,
-            metadata,
+            engine: RwLock::new(Arc::new(engine)),
+            metadata: RwLock::new(Arc::new(metadata)),
             embedder: Some(Box::new(FakeEmbedder)),
             memory_dir: None,
             memory: None,
@@ -585,7 +596,7 @@ mod tests {
             },
             vector: vec![1.0, 0.0, 0.0],
         }];
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         // With embedder, default mode should be hybrid
         let (status, body) = get(h.app(), "/api/search?q=rust+vector").await;
@@ -612,7 +623,7 @@ mod tests {
             },
             vector: vec![1.0, 0.0, 0.0],
         }];
-        h.state.engine.insert(&chunks).unwrap();
+        h.state.engine_snapshot().insert(&chunks).unwrap();
 
         let (status, body) = get(h.app(), "/api/search?q=rust&mode=vector").await;
         assert_eq!(status, StatusCode::OK);
@@ -691,7 +702,7 @@ mod tests {
 
         // Insert metadata for a source
         h.state
-            .metadata
+            .metadata_snapshot()
             .upsert_source("file:///test.rs", &[0u8; 32], 100, "rs", None, 3)
             .unwrap();
 

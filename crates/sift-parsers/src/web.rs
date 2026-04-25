@@ -1,3 +1,4 @@
+use crate::html_text::{self, collapse_whitespace};
 use crate::traits::Parser;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
@@ -17,17 +18,7 @@ impl WebParser {
 
 impl Parser for WebParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::WEB_MIMES.iter().any(|m| mime.starts_with(m)) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::WEB_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(mime_type, extension, Self::WEB_MIMES, Self::WEB_EXTENSIONS)
     }
 
     fn parse(
@@ -42,7 +33,7 @@ impl Parser for WebParser {
         let (text, title) = if is_xml {
             (strip_xml_tags(&raw), None)
         } else {
-            extract_html_text(&raw)
+            html_text::extract(&raw)
         };
 
         Ok(ParsedDocument {
@@ -57,103 +48,6 @@ impl Parser for WebParser {
     fn name(&self) -> &'static str {
         "web"
     }
-}
-
-/// Simple HTML text extraction - strips tags, extracts title.
-fn extract_html_text(html: &str) -> (String, Option<String>) {
-    let mut text = String::new();
-    let mut title = None;
-    let mut in_tag = false;
-    let mut in_script = false;
-    let mut in_style = false;
-    let mut tag_name = String::new();
-    let mut in_title_tag = false;
-    let mut title_text = String::new();
-
-    let chars: Vec<char> = html.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let ch = chars[i];
-
-        if ch == '<' {
-            in_tag = true;
-            tag_name.clear();
-            i += 1;
-            continue;
-        }
-
-        if ch == '>' && in_tag {
-            in_tag = false;
-            let tag_lower = tag_name.to_lowercase();
-
-            if tag_lower.starts_with("script") {
-                in_script = true;
-            } else if tag_lower.starts_with("/script") {
-                in_script = false;
-            } else if tag_lower.starts_with("style") {
-                in_style = true;
-            } else if tag_lower.starts_with("/style") {
-                in_style = false;
-            } else if tag_lower.starts_with("title") {
-                in_title_tag = true;
-            } else if tag_lower.starts_with("/title") {
-                in_title_tag = false;
-                title = Some(title_text.trim().to_string());
-            }
-
-            // Block-level tags get newlines
-            if matches!(
-                tag_lower.trim_start_matches('/'),
-                "p" | "div"
-                    | "br"
-                    | "h1"
-                    | "h2"
-                    | "h3"
-                    | "h4"
-                    | "h5"
-                    | "h6"
-                    | "li"
-                    | "tr"
-                    | "blockquote"
-                    | "pre"
-                    | "hr"
-                    | "section"
-                    | "article"
-                    | "header"
-                    | "footer"
-            ) {
-                text.push('\n');
-            }
-
-            i += 1;
-            continue;
-        }
-
-        if in_tag {
-            tag_name.push(ch);
-        } else if in_title_tag {
-            title_text.push(ch);
-        } else if !in_script && !in_style {
-            text.push(ch);
-        }
-
-        i += 1;
-    }
-
-    // Decode common HTML entities
-    let text = text
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ");
-
-    // Normalize whitespace
-    let text = collapse_whitespace(&text);
-
-    (text, title)
 }
 
 /// Strip XML tags, keeping text content.
@@ -176,25 +70,6 @@ fn strip_xml_tags(xml: &str) -> String {
     collapse_whitespace(&result)
 }
 
-fn collapse_whitespace(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut last_was_whitespace = false;
-
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            if !last_was_whitespace {
-                result.push(if ch == '\n' { '\n' } else { ' ' });
-            }
-            last_was_whitespace = true;
-        } else {
-            result.push(ch);
-            last_was_whitespace = false;
-        }
-    }
-
-    result.trim().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,7 +87,7 @@ mod tests {
     #[test]
     fn test_strip_scripts() {
         let html = b"<p>Before</p><script>alert('xss')</script><p>After</p>";
-        let (text, _) = extract_html_text(&String::from_utf8_lossy(html));
+        let (text, _) = html_text::extract(&String::from_utf8_lossy(html));
         assert!(text.contains("Before"));
         assert!(text.contains("After"));
         assert!(!text.contains("alert"));
@@ -221,7 +96,7 @@ mod tests {
     #[test]
     fn test_strip_style_tags() {
         let html = "<p>Visible</p><style>body { color: red; }</style><p>Also visible</p>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains("Visible"));
         assert!(text.contains("Also visible"));
         assert!(!text.contains("color"));
@@ -230,14 +105,14 @@ mod tests {
     #[test]
     fn test_html_entities_decoded() {
         let html = "<p>5 &lt; 10 &amp; 10 &gt; 5</p>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains("5 < 10 & 10 > 5"));
     }
 
     #[test]
     fn test_html_entities_quotes_and_nbsp() {
         let html = "<p>&quot;hello&quot;&nbsp;&#39;world&#39;</p>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains("\"hello\""));
         assert!(text.contains("'world'"));
     }
@@ -245,14 +120,14 @@ mod tests {
     #[test]
     fn test_block_level_tags_add_newlines() {
         let html = "<div>Block1</div><div>Block2</div>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains('\n'));
     }
 
     #[test]
     fn test_heading_tags_add_newlines() {
         let html = "<h1>Title</h1><h2>Subtitle</h2><p>Content</p>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         let lines: Vec<&str> = text.lines().collect();
         assert!(lines.len() >= 3);
     }
@@ -291,7 +166,7 @@ mod tests {
     #[test]
     fn test_tags_with_attributes() {
         let html = "<div class=\"container\" id=\"main\"><p style=\"color:red\">Content</p></div>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains("Content"));
         assert!(!text.contains("container"));
         assert!(!text.contains("color"));
@@ -326,7 +201,7 @@ mod tests {
     #[test]
     fn test_html_no_title() {
         let html = "<p>No title here</p>";
-        let (text, title) = extract_html_text(html);
+        let (text, title) = html_text::extract(html);
         assert!(text.contains("No title here"));
         assert!(title.is_none());
     }
@@ -335,7 +210,7 @@ mod tests {
     fn test_section_article_tags() {
         let html =
             "<section>Sec</section><article>Art</article><header>Hdr</header><footer>Ftr</footer>";
-        let (text, _) = extract_html_text(html);
+        let (text, _) = html_text::extract(html);
         assert!(text.contains("Sec"));
         assert!(text.contains("Art"));
         assert!(text.contains("Hdr"));

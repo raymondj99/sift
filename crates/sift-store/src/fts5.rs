@@ -60,16 +60,6 @@ impl Fts5Store {
         .map_err(|e| sift_core::SiftError::Storage(format!("FTS5 schema error: {}", e)))?;
         Ok(())
     }
-
-    fn content_type_from_str(s: &str) -> ContentType {
-        match s {
-            "code" => ContentType::Code,
-            "image" => ContentType::Image,
-            "audio" => ContentType::Audio,
-            "data" => ContentType::Data,
-            _ => ContentType::Text,
-        }
-    }
 }
 
 impl FullTextStore for Fts5Store {
@@ -172,7 +162,7 @@ impl FullTextStore for Fts5Store {
                 text,
                 score: score as f32,
                 chunk_index: chunk_index_str.parse().unwrap_or(0),
-                content_type: Self::content_type_from_str(&content_type_str),
+                content_type: content_type_str.parse().unwrap_or(ContentType::Text),
                 file_type,
                 title: if title.is_empty() { None } else { Some(title) },
                 byte_range: None,

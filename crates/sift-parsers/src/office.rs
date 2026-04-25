@@ -17,17 +17,12 @@ impl OfficeParser {
 
 impl Parser for OfficeParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::OFFICE_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::OFFICE_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::OFFICE_MIMES,
+            Self::OFFICE_EXTENSIONS,
+        )
     }
 
     fn parse(

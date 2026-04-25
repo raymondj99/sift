@@ -67,13 +67,53 @@ pub enum ContentType {
 
 impl std::fmt::Display for ContentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl ContentType {
+    /// The canonical lowercase tag for this content type. The same string
+    /// round-trips through [`FromStr`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            ContentType::Text => write!(f, "text"),
-            ContentType::Code => write!(f, "code"),
-            ContentType::Image => write!(f, "image"),
-            ContentType::Audio => write!(f, "audio"),
-            ContentType::Data => write!(f, "data"),
+            ContentType::Text => "text",
+            ContentType::Code => "code",
+            ContentType::Image => "image",
+            ContentType::Audio => "audio",
+            ContentType::Data => "data",
         }
+    }
+}
+
+/// Returned by [`ContentType::from_str`] for tags outside the known set.
+///
+/// Callers that want the historical "unknown ⇒ Text" behaviour should write
+/// `s.parse().unwrap_or(ContentType::Text)` so the fallback is visible at
+/// the call site rather than hidden inside the parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownContentType(pub String);
+
+impl std::fmt::Display for UnknownContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown content type: {}", self.0)
+    }
+}
+
+impl std::error::Error for UnknownContentType {}
+
+impl std::str::FromStr for ContentType {
+    type Err = UnknownContentType;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "text" => ContentType::Text,
+            "code" => ContentType::Code,
+            "image" => ContentType::Image,
+            "audio" => ContentType::Audio,
+            "data" => ContentType::Data,
+            _ => return Err(UnknownContentType(s.to_string())),
+        })
     }
 }
 
@@ -186,11 +226,47 @@ pub struct SearchOptions {
     pub after: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchMode {
+    #[default]
     Hybrid,
     VectorOnly,
     KeywordOnly,
+}
+
+impl SearchMode {
+    /// Canonical lowercase tag (`"hybrid"`, `"vector"`, `"keyword"`). Round
+    /// trips through [`SearchMode::from_str`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            SearchMode::Hybrid => "hybrid",
+            SearchMode::VectorOnly => "vector",
+            SearchMode::KeywordOnly => "keyword",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SearchMode {
+    type Err = ();
+
+    /// Parse a `SearchMode` from a lowercase tag. Unknown inputs return
+    /// `Err(())` so callers can decide on a default explicitly rather than
+    /// silently coercing to one mode.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "hybrid" => Ok(SearchMode::Hybrid),
+            "vector" | "vector_only" => Ok(SearchMode::VectorOnly),
+            "keyword" | "keyword_only" => Ok(SearchMode::KeywordOnly),
+            _ => Err(()),
+        }
+    }
 }
 
 impl Default for SearchOptions {

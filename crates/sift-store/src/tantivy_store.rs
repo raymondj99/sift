@@ -83,16 +83,6 @@ impl TantivyStore {
             .writer(50_000_000) // 50MB heap
             .map_err(|e| sift_core::SiftError::Storage(format!("Tantivy writer error: {e}")))
     }
-
-    fn content_type_from_str(s: &str) -> ContentType {
-        match s {
-            "code" => ContentType::Code,
-            "image" => ContentType::Image,
-            "audio" => ContentType::Audio,
-            "data" => ContentType::Data,
-            _ => ContentType::Text,
-        }
-    }
 }
 
 impl FullTextStore for TantivyStore {
@@ -181,7 +171,8 @@ impl FullTextStore for TantivyStore {
             let content_type = doc
                 .get_first(self.content_type_field)
                 .and_then(|v| v.as_str())
-                .map_or(ContentType::Text, Self::content_type_from_str);
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(ContentType::Text);
 
             let file_type = doc
                 .get_first(self.file_type_field)

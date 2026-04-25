@@ -15,17 +15,12 @@ impl TextParser {
 
 impl Parser for TextParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::TEXT_MIMES.iter().any(|m| mime.starts_with(m)) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::TEXT_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::TEXT_MIMES,
+            Self::TEXT_EXTENSIONS,
+        )
     }
 
     fn parse(

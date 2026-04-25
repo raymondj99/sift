@@ -16,17 +16,12 @@ impl EmailParser {
 
 impl Parser for EmailParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::EMAIL_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::EMAIL_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::EMAIL_MIMES,
+            Self::EMAIL_EXTENSIONS,
+        )
     }
 
     fn parse(

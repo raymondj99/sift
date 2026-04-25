@@ -17,17 +17,12 @@ impl ArchiveParser {
 
 impl Parser for ArchiveParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::ARCHIVE_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::ARCHIVE_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::ARCHIVE_MIMES,
+            Self::ARCHIVE_EXTENSIONS,
+        )
     }
 
     fn parse(

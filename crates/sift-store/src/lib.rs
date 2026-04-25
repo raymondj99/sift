@@ -6,6 +6,7 @@
 //! and [`HybridSearchEngine`] for Reciprocal Rank Fusion of vector + keyword results.
 
 pub mod cache;
+pub mod engine;
 pub mod error;
 
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
@@ -27,6 +28,7 @@ pub mod traits;
 #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
 pub use bm25::Bm25Store;
 pub use cache::CachedSearchEngine;
+pub use engine::open_engine;
 pub use error::StorageError;
 pub use flat::{ExportEntry, FlatVectorIndex};
 #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]

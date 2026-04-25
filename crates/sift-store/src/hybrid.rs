@@ -7,8 +7,11 @@ use std::collections::HashMap;
 pub struct HybridSearchEngine<V: VectorStore, F: FullTextStore> {
     pub vector_store: V,
     pub fulltext_store: F,
-    /// Weight for vector results. 0.0 = pure BM25, 1.0 = pure vector.
-    pub alpha: f32,
+    /// Weight for vector results, kept in `[0.0, 1.0]`. 0.0 = pure BM25,
+    /// 1.0 = pure vector. Always set via [`new`](Self::new) /
+    /// [`set_alpha`](Self::set_alpha) so the clamp is enforced; reading via
+    /// [`alpha`](Self::alpha) is fine.
+    alpha: f32,
 }
 
 impl<V: VectorStore, F: FullTextStore> HybridSearchEngine<V, F> {
@@ -18,6 +21,17 @@ impl<V: VectorStore, F: FullTextStore> HybridSearchEngine<V, F> {
             fulltext_store,
             alpha: alpha.clamp(0.0, 1.0),
         }
+    }
+
+    /// Current vector/BM25 fusion weight in `[0.0, 1.0]`.
+    #[must_use]
+    pub fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    /// Update the fusion weight. Values outside `[0.0, 1.0]` are clamped.
+    pub fn set_alpha(&mut self, alpha: f32) {
+        self.alpha = alpha.clamp(0.0, 1.0);
     }
 
     /// Insert chunks into both stores.
@@ -236,20 +250,29 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_alpha_clamping() {
-        // Test clamping with a simple struct that satisfies both traits
-        let eng_low = HybridSearchEngine {
-            vector_store: crate::flat::FlatVectorIndex::new(),
-            fulltext_store: create_fulltext_store(),
-            alpha: (-0.5f32).clamp(0.0, 1.0),
-        };
-        assert_eq!(eng_low.alpha, 0.0);
+        let eng_low = HybridSearchEngine::new(
+            crate::flat::FlatVectorIndex::new(),
+            create_fulltext_store(),
+            -0.5,
+        );
+        assert_eq!(eng_low.alpha(), 0.0);
 
-        let eng_high = HybridSearchEngine {
-            vector_store: crate::flat::FlatVectorIndex::new(),
-            fulltext_store: create_fulltext_store(),
-            alpha: (2.0f32).clamp(0.0, 1.0),
-        };
-        assert_eq!(eng_high.alpha, 1.0);
+        let eng_high = HybridSearchEngine::new(
+            crate::flat::FlatVectorIndex::new(),
+            create_fulltext_store(),
+            2.0,
+        );
+        assert_eq!(eng_high.alpha(), 1.0);
+
+        let mut eng = HybridSearchEngine::new(
+            crate::flat::FlatVectorIndex::new(),
+            create_fulltext_store(),
+            0.5,
+        );
+        eng.set_alpha(2.0);
+        assert_eq!(eng.alpha(), 1.0);
+        eng.set_alpha(-1.0);
+        assert_eq!(eng.alpha(), 0.0);
     }
 
     fn create_fulltext_store() -> impl FullTextStore {

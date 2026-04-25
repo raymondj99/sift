@@ -118,18 +118,12 @@ impl CodeParser {
 
 impl Parser for CodeParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::CODE_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            let ext_lower = ext.to_lowercase();
-            if Self::CODE_EXTENSIONS.contains(&ext_lower.as_str()) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::CODE_MIMES,
+            Self::CODE_EXTENSIONS,
+        )
     }
 
     fn parse(

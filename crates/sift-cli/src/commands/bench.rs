@@ -717,7 +717,12 @@ fn bench_end_to_end() -> BenchResult {
     // 3. Consolidate
     let config = sift_memory::ConsolidationConfig::default();
     let report = sift_memory::consolidation::run_consolidation(&store, &episodes, &config).unwrap();
-    let consolidated = report.episodes_processed >= 2;
+    // PostToolUse extracts without LLM; PostCompact requires LLM, so under
+    // the default config it must be deferred (not silently counted as
+    // processed). We assert both halves.
+    let processed_ok = report.episodes_processed >= 1;
+    let deferred_ok = report.episodes_deferred >= 1;
+    let consolidated = processed_ok && deferred_ok;
 
     // 4. Recall — search for the knowledge we ingested
     let results = store
@@ -732,10 +737,11 @@ fn bench_end_to_end() -> BenchResult {
     let passed = ingested && consolidated && recalled;
 
     let details = vec![format!(
-        "ingest: {}  consolidate: {} ({} episodes)  recall: {} ({} results)",
+        "ingest: {}  consolidate: {} ({} processed, {} deferred)  recall: {} ({} results)",
         if ingested { "ok" } else { "FAIL" },
         if consolidated { "ok" } else { "FAIL" },
         report.episodes_processed,
+        report.episodes_deferred,
         if recalled { "ok" } else { "FAIL" },
         results.len()
     )];

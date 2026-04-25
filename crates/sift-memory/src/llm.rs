@@ -83,6 +83,25 @@ pub enum Provider {
     Ollama,
 }
 
+impl Provider {
+    /// Canonical lowercase tag (`"anthropic"`, `"openai"`, `"ollama"`). Round
+    /// trips through [`Provider::from_str`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Provider::Anthropic => "anthropic",
+            Provider::OpenAi => "openai",
+            Provider::Ollama => "ollama",
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl std::str::FromStr for Provider {
     type Err = String;
 
@@ -104,20 +123,19 @@ impl std::str::FromStr for Provider {
 
 /// Decompose session text into categorized observations via an LLM.
 ///
-/// Dispatches to the appropriate provider based on `provider_str`. Returns
-/// `Ok(observations)` on success, or `Err` on any failure. Callers should
-/// fall back to heuristic extraction on error.
+/// The caller supplies a typed [`Provider`] (parsed once at consolidation
+/// startup) so that an invalid config produces a single warning rather than
+/// re-failing once per episode.
 #[cfg(feature = "llm")]
 pub fn llm_decompose(
     text: &str,
     model: &str,
-    provider_str: &str,
+    provider: Provider,
 ) -> Result<Vec<ExtractedObservation>, String> {
     if text.trim().len() < 30 {
         return Ok(Vec::new());
     }
 
-    let provider: Provider = provider_str.parse()?;
     let input = truncate_to_chars(text, MAX_INPUT_CHARS);
 
     let user_msg = format!(
@@ -128,7 +146,7 @@ pub fn llm_decompose(
     );
 
     debug!(
-        %provider_str,
+        %provider,
         model,
         input_len = input.len(),
         "LLM extraction: calling API"
@@ -174,7 +192,7 @@ fn build_agent() -> ureq::Agent {
 pub fn llm_decompose(
     _text: &str,
     _model: &str,
-    _provider_str: &str,
+    _provider: Provider,
 ) -> Result<Vec<ExtractedObservation>, String> {
     Err("LLM extraction requires the `llm` feature".into())
 }

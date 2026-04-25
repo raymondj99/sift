@@ -19,17 +19,12 @@ impl DataParser {
 
 impl Parser for DataParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::DATA_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::DATA_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::DATA_MIMES,
+            Self::DATA_EXTENSIONS,
+        )
     }
 
     fn parse(

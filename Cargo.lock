@@ -3261,6 +3261,7 @@ version = "0.1.7"
 dependencies = [
  "anyhow",
  "axum",
+ "blake3",
  "http-body-util",
  "rmcp",
  "schemars",

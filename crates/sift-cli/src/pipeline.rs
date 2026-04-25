@@ -10,10 +10,7 @@ use sift_core::{
     CancellationToken, Chunk, Config, EmbeddedChunk, Embedder, ScanOptions, SiftResult, SourceItem,
 };
 #[cfg(feature = "embeddings")]
-use sift_embed::{
-    models::{get_model, NOMIC_EMBED_TEXT_V1_5},
-    EmbeddingCache, ModelManager, OnnxEmbedder,
-};
+use sift_embed::{EmbeddingCache, OnnxEmbedder};
 use sift_parsers::ParserRegistry;
 use sift_sources::{FilesystemSource, Source};
 #[cfg(feature = "sqlite")]
@@ -26,6 +23,8 @@ use sift_store::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
+#[cfg(all(feature = "embeddings", feature = "vision"))]
+use sift_embed::ModelManager;
 #[cfg(feature = "vision")]
 use sift_embed::{models::NOMIC_EMBED_VISION_V1_5, VisionEmbedder};
 
@@ -41,116 +40,23 @@ impl NoopProgress {
 }
 
 /// Open or create the hybrid search engine for an index.
+///
+/// Thin wrapper over [`sift_store::open_engine`] kept for the existing
+/// `pipeline::open_engine` call sites.
 pub fn open_engine(
     config: &Config,
 ) -> SiftResult<(
     HybridSearchEngine<SimpleVectorStore, DefaultFullTextStore>,
     MetadataStore,
 )> {
-    config.ensure_dirs()?;
-    let index_dir = config.index_dir()?;
-
-    #[cfg(feature = "hnsw")]
-    let vector_store = SimpleVectorStore::load_or_create(&index_dir)?;
-    #[cfg(not(feature = "hnsw"))]
-    let vector_store = SimpleVectorStore::load_or_migrate(&index_dir)?;
-
-    #[cfg(feature = "fulltext")]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("tantivy"))?;
-    #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("fts5.db"))?;
-    #[cfg(all(not(feature = "fulltext"), not(feature = "fts5")))]
-    let fulltext_store = DefaultFullTextStore::open(&index_dir.join("bm25.json"))?;
-
-    #[cfg(feature = "sqlite")]
-    let metadata_path = index_dir.join("metadata.db");
-    #[cfg(not(feature = "sqlite"))]
-    let metadata_path = index_dir.join("metadata.json");
-    let metadata = MetadataStore::open(&metadata_path)?;
-
-    let engine = HybridSearchEngine::new(vector_store, fulltext_store, config.search.hybrid_alpha);
-
-    Ok((engine, metadata))
+    sift_store::open_engine(config)
 }
 
-/// Try to load the ONNX embedder. Returns `None` when the `embeddings` feature
-/// is disabled or when the model is not available.
-///
-/// Honors `config.default.ort_dylib_path` as a user override for the ONNX
-/// Runtime shared library location. Otherwise auto-detects the managed
-/// `~/.sift/models/ort/` directory.
+/// Try to load the ONNX embedder. Returns `None` when the model is not
+/// available — callers fall back to keyword-only search.
 #[cfg(feature = "embeddings")]
 pub fn load_embedder(config: &Config, model_override: Option<&str>) -> Option<OnnxEmbedder> {
-    let manager = ModelManager::new().ok()?;
-    manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
-
-    // Determine which model to load
-    let (model_dir, model_def) = if let Some(name) = model_override {
-        let path = std::path::Path::new(name);
-        if path.is_absolute() && path.is_dir() {
-            // Absolute path to a model directory
-            (path.to_path_buf(), &NOMIC_EMBED_TEXT_V1_5)
-        } else {
-            // Look up by name in ~/.sift/models/
-            let Some(model_def) = get_model(name) else {
-                info!(
-                    "Unknown embedding model '{}' — using keyword-only mode. Run `sift models list` to see supported models.",
-                    name
-                );
-                return None;
-            };
-            if !model_def.is_download_supported() {
-                info!(
-                    "Embedding model '{}' requires runtime '{}' — using keyword-only mode. {}",
-                    model_def.name,
-                    model_def.runtime.as_str(),
-                    model_def.notes
-                );
-                return None;
-            }
-            let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
-                info!(
-                    "Model '{}' not downloaded — using keyword-only mode. Run `sift models download {}` first.",
-                    model_def.name, model_def.name
-                );
-                return None;
-            };
-            (model_dir, model_def)
-        }
-    } else {
-        let model_def = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
-        if !model_def.is_download_supported() {
-            info!(
-                "Default embedding model '{}' requires runtime '{}' — using keyword-only mode. {}",
-                model_def.name,
-                model_def.runtime.as_str(),
-                model_def.notes
-            );
-            return None;
-        }
-        let Some(model_dir) = manager.downloaded_model_dir(model_def) else {
-            info!(
-                "Embedding model not downloaded — using keyword-only mode. Run `sift models download {}` for semantic search.",
-                model_def.name
-            );
-            return None;
-        };
-        (model_dir, model_def)
-    };
-
-    match OnnxEmbedder::load_model(&model_dir, model_def) {
-        Ok(embedder) => {
-            info!("Loaded embedding model: {}", model_def.name);
-            Some(embedder)
-        }
-        Err(e) => {
-            warn!(
-                "Failed to load embedding model: {}. Falling back to keyword-only.",
-                e
-            );
-            None
-        }
-    }
+    sift_embed::load_embedder(config, model_override)
 }
 
 /// Try to load the vision embedder for image embedding.

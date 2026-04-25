@@ -24,8 +24,8 @@ pub async fn run(config: &Config, host: &str, port: u16) -> SiftResult<()> {
             .ok()
     });
     let state = Arc::new(AppState {
-        engine,
-        metadata,
+        engine: std::sync::RwLock::new(Arc::new(engine)),
+        metadata: std::sync::RwLock::new(Arc::new(metadata)),
         embedder,
         memory_dir,
         memory,

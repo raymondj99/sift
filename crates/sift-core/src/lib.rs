@@ -16,4 +16,4 @@ pub use config::Config;
 pub use error::{SiftError, SiftResult};
 pub use retry::{with_retry, RetryConfig};
 pub use types::*;
-pub use util::atomic_write;
+pub use util::{atomic_write, format_bytes};

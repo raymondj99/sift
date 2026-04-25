@@ -19,17 +19,12 @@ impl SpreadsheetParser {
 
 impl Parser for SpreadsheetParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if Self::SPREADSHEET_MIMES.contains(&mime) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if Self::SPREADSHEET_EXTENSIONS.contains(&ext) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::SPREADSHEET_MIMES,
+            Self::SPREADSHEET_EXTENSIONS,
+        )
     }
 
     fn parse(

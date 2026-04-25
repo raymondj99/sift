@@ -14,6 +14,27 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Render `bytes` as a human-readable size with one decimal of precision.
+///
+/// Uses 1024-based units (`B`, `KB`, `MB`, `GB`) to match what disk-usage
+/// callers expect.
+#[must_use]
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", b / KB)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}MB", b / MB)
+    } else {
+        format!("{:.1}GB", b / GB)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +75,15 @@ mod tests {
         atomic_write(&path, &data).unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), data);
+    }
+
+    #[test]
+    fn format_bytes_thresholds() {
+        assert_eq!(format_bytes(0), "0B");
+        assert_eq!(format_bytes(1023), "1023B");
+        assert_eq!(format_bytes(1024), "1.0KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.0MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0GB");
+        assert_eq!(format_bytes(1536), "1.5KB");
     }
 }

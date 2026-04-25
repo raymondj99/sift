@@ -223,6 +223,31 @@ impl MemoryStore {
         &self.db
     }
 
+    /// Acquire the SQLite connection, recovering from a poisoned mutex.
+    ///
+    /// All internal mutation paths use this helper instead of inlining
+    /// `lock().unwrap_or_else(|e| e.into_inner())`. Mutex poisoning here
+    /// means a previous holder panicked mid-write; the connection itself
+    /// is still usable, so we recover the inner value rather than
+    /// propagating the poison up to every caller.
+    fn lock_db(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Acquire the rebuild-lock for read (recall path).
+    ///
+    /// Recall holds this lock for the duration of a vector search so that a
+    /// concurrent rebuild can't observe a half-rebuilt index.
+    fn read_rebuild(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.rebuild_lock.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Acquire the rebuild-lock for write (rebuild path).
+    #[cfg(feature = "embeddings")]
+    fn write_rebuild(&self) -> std::sync::RwLockWriteGuard<'_, ()> {
+        self.rebuild_lock.write().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Open an in-memory memory store (for benchmarks and external tests).
     pub fn open_in_memory_for_bench() -> MemResult<Self> {
         Self::open_in_memory_impl()
@@ -287,10 +312,10 @@ impl MemoryStore {
     pub fn rebuild_if_stale(&self) -> bool {
         // Poisoning here is benign — we're the only writer, and any prior
         // panic happened mid-rebuild on state we're about to overwrite.
-        let _guard = self.rebuild_lock.write().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.write_rebuild();
 
         let obs_count = {
-            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = self.lock_db();
             conn.query_row(
                 "SELECT COUNT(*) FROM observations WHERE valid_until IS NULL",
                 [],
@@ -327,7 +352,7 @@ impl MemoryStore {
     /// the vector index is out of sync with SQLite.
     #[cfg(feature = "embeddings")]
     pub fn rebuild_search_index_now(&self) -> MemResult<()> {
-        let _guard = self.rebuild_lock.write().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.write_rebuild();
         self.rebuild_search_index()?;
         self.save()
     }
@@ -342,7 +367,7 @@ impl MemoryStore {
 
         // Fetch observations with their entity names for prefixed indexing.
         let observations: Vec<(String, String, String)> = {
-            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = self.lock_db();
             let mut stmt = conn.prepare(
                 "SELECT o.id, e.name, o.content \
                  FROM observations o \
@@ -362,20 +387,18 @@ impl MemoryStore {
             result
         };
 
-        // Clear existing entries so we don't get duplicates.
-        for (id, _, _) in &observations {
-            let uri = format!("memory://observation/{id}");
-            let _ = self.search.delete_by_uri(&uri);
-        }
-
         // Re-index with "entity_name: content" text and real embeddings.
+        // Embed all batches FIRST. If any embedding call fails, return early
+        // without touching the search index — the previous (presumably good)
+        // index stays intact rather than being cleared and replaced with
+        // zero vectors.
         let mut chunks: Vec<sift_core::EmbeddedChunk> = Vec::with_capacity(observations.len());
         for batch in observations.chunks(MEMORY_REBUILD_EMBED_BATCH_SIZE) {
             let search_texts: Vec<String> = batch
                 .iter()
                 .map(|(_, entity_name, content)| format!("{entity_name}: {content}"))
                 .collect();
-            let vectors = self.embed_observations_batch(&search_texts);
+            let vectors = self.embed_observations_batch(&search_texts)?;
 
             chunks.extend(batch.iter().zip(search_texts).zip(vectors).map(
                 |(((id, _, _), search_text), vector)| sift_core::EmbeddedChunk {
@@ -392,6 +415,13 @@ impl MemoryStore {
                     vector,
                 },
             ));
+        }
+
+        // Embeddings succeeded — clear existing entries (so we don't double
+        // up) and insert the new ones.
+        for (id, _, _) in &observations {
+            let uri = format!("memory://observation/{id}");
+            let _ = self.search.delete_by_uri(&uri);
         }
 
         if !chunks.is_empty() {
@@ -462,7 +492,7 @@ impl MemoryStore {
             ));
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
 
         // Try to find existing entity by name
@@ -541,7 +571,7 @@ impl MemoryStore {
     /// is genuinely new. Callers should use `save_entity` with the returned
     /// name if `None`, or `add_observation` on the returned ID if `Some`.
     pub fn resolve_entity(&self, name: &str) -> MemResult<Option<(String, String)>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let normalized = normalize_entity_name(name);
 
         // 1. Exact normalized match
@@ -596,7 +626,7 @@ impl MemoryStore {
 
     /// Retrieve an entity by name.
     pub fn get_entity(&self, name: &str) -> MemResult<Option<Entity>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let result = conn.query_row(
             "SELECT id, name, entity_type, created_at, updated_at, confidence, source
              FROM entities WHERE name = ?1",
@@ -624,7 +654,7 @@ impl MemoryStore {
 
     /// Retrieve an entity by ID.
     pub fn get_entity_by_id(&self, id: &str) -> MemResult<Option<Entity>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let result = conn.query_row(
             "SELECT id, name, entity_type, created_at, updated_at, confidence, source
              FROM entities WHERE id = ?1",
@@ -657,7 +687,7 @@ impl MemoryStore {
         entity_type: EntityType,
         source: &str,
     ) -> MemResult<bool> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
         let updated = conn.execute(
             "UPDATE entities
@@ -678,7 +708,7 @@ impl MemoryStore {
         limit: usize,
         offset: usize,
     ) -> MemResult<Vec<(Entity, usize)>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
 
         let parse_row = |row: &rusqlite::Row<'_>| {
             let entity = Entity {
@@ -732,7 +762,7 @@ impl MemoryStore {
 
     /// Return all entities without pagination.
     pub fn all_entities(&self) -> MemResult<Vec<Entity>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let mut stmt = conn.prepare(
             "SELECT id, name, entity_type, created_at, updated_at, confidence, source
              FROM entities
@@ -771,7 +801,7 @@ impl MemoryStore {
             ));
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
 
         conn.execute_batch("BEGIN")?;
@@ -875,7 +905,7 @@ impl MemoryStore {
     /// are applied only after commit; if they fail, the database remains the
     /// source of truth and a rebuild is attempted before returning the error.
     pub fn apply_page_mutation_plan(&self, plan: &PageMutationPlan, source: &str) -> MemResult<()> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
 
         conn.execute_batch("BEGIN")?;
@@ -1204,7 +1234,7 @@ impl MemoryStore {
             ));
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
         let id = new_id();
 
@@ -1282,7 +1312,7 @@ impl MemoryStore {
         new_content: &str,
         threshold: f32,
     ) -> MemResult<Vec<ConflictInfo>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
 
         // Get all active observations for this entity
         let mut stmt = conn.prepare(
@@ -1307,7 +1337,7 @@ impl MemoryStore {
 
         // Embed the new content
         let entity_name: String = {
-            let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = self.lock_db();
             conn.query_row(
                 "SELECT name FROM entities WHERE id = ?1",
                 [entity_id],
@@ -1356,7 +1386,7 @@ impl MemoryStore {
 
     /// Get all current (non-invalidated) observations for an entity.
     pub fn get_entity_observations(&self, entity_id: &str) -> MemResult<Vec<Observation>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let mut stmt = conn.prepare(
             "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
                     confidence, source, supersedes
@@ -1388,7 +1418,7 @@ impl MemoryStore {
 
     /// Retrieve an observation by ID.
     pub fn get_observation(&self, observation_id: &str) -> MemResult<Option<Observation>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let result = conn.query_row(
             "SELECT id, logical_id, entity_id, content, observed_at, valid_from, valid_until,
                     confidence, source, supersedes
@@ -1428,7 +1458,7 @@ impl MemoryStore {
         observation_id: &str,
         now_override: Option<i64>,
     ) -> MemResult<bool> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_override.unwrap_or_else(now_secs);
 
         let entity_id: Option<String> = conn
@@ -1477,7 +1507,7 @@ impl MemoryStore {
             ));
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
 
         let predecessor: Option<(String, String, String)> = conn
@@ -1539,14 +1569,21 @@ impl MemoryStore {
     /// from the search index.  Returns the number of observations that were
     /// purged.
     pub fn delete_entity(&self, name: &str) -> MemResult<usize> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
 
-        // Look up the entity id.
+        // Look up the entity id. Distinguish "no such entity" (a sentinel
+        // condition the MCP layer surfaces as `not_found`) from other SQLite
+        // errors, which should propagate untouched.
         let entity_id: String = conn
             .query_row("SELECT id FROM entities WHERE name = ?1", [name], |row| {
                 row.get(0)
             })
-            .map_err(|_| MemoryError::EntityNotFound(name.to_string()))?;
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    MemoryError::EntityNotFound(name.to_string())
+                }
+                other => MemoryError::Sqlite(other),
+            })?;
 
         // Collect all observation ids so we can remove them from the search
         // index *before* the cascade deletes the rows.
@@ -1575,7 +1612,7 @@ impl MemoryStore {
     /// Prune all entities that have zero active (non-invalidated) observations
     /// and no relations.  Returns the names of the entities that were removed.
     pub fn prune_entities(&self) -> MemResult<Vec<String>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
 
         // Find entities with no active observations AND no relations.
         let targets: Vec<(String, String)> = {
@@ -1645,7 +1682,7 @@ impl MemoryStore {
             ));
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
         let id = new_id();
 
@@ -1693,7 +1730,7 @@ impl MemoryStore {
 
     /// Get all current relations for an entity (both outgoing and incoming).
     pub fn get_entity_relations(&self, entity_id: &str) -> MemResult<Vec<Relation>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let mut stmt = conn.prepare(
             "SELECT id, from_entity, to_entity, relation_type, weight, created_at,
                     valid_from, valid_until, source
@@ -1724,7 +1761,7 @@ impl MemoryStore {
 
     /// Retrieve a relation by ID.
     pub fn get_relation(&self, relation_id: &str) -> MemResult<Option<Relation>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let result = conn.query_row(
             "SELECT id, from_entity, to_entity, relation_type, weight, created_at,
                     valid_from, valid_until, source
@@ -1755,7 +1792,7 @@ impl MemoryStore {
 
     /// Soft-delete an active relation.
     pub fn invalidate_relation(&self, relation_id: &str) -> MemResult<bool> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
         let relation: Option<(String, String)> = conn
             .query_row(
@@ -1811,11 +1848,11 @@ impl MemoryStore {
         // the index during its delete-then-reinsert phase and return
         // spuriously empty results. Uncontended in the steady state.
         let results = {
-            let _guard = self.rebuild_lock.read().unwrap_or_else(|e| e.into_inner());
+            let _guard = self.read_rebuild();
             self.search.search(&vector, query, fetch_k, mode)?
         };
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let valid_at = filters.valid_at.unwrap_or_else(now_secs);
 
         let mut memory_results: Vec<RecallResult> = Vec::new();
@@ -2021,7 +2058,7 @@ impl MemoryStore {
         top_k: usize,
         filters: &RecallFilters,
     ) -> MemResult<Vec<RecallResult>> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let valid_at = filters.valid_at.unwrap_or_else(now_secs);
         let query_lower = query.to_lowercase();
 
@@ -2153,7 +2190,7 @@ impl MemoryStore {
             return Ok(vec![]);
         }
 
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let valid_at = filters.valid_at.unwrap_or_else(now_secs);
 
         // Collect unique entity IDs from the seed results
@@ -2291,7 +2328,7 @@ impl MemoryStore {
         &self,
         text_threshold: f32,
     ) -> MemResult<ConsolidationReport> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let mut report = ConsolidationReport::default();
         let now = now_secs();
 
@@ -2458,7 +2495,7 @@ impl MemoryStore {
     /// All writes are batched in a single transaction (3N statements in 1
     /// round-trip instead of 3N implicit transactions).
     fn log_access_batch(&self, query: &str, results: &[RecallResult]) -> MemResult<()> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
         let now = now_secs();
 
         conn.execute_batch("BEGIN")?;
@@ -2506,7 +2543,7 @@ impl MemoryStore {
 
     /// Get memory store statistics.
     pub fn stats(&self) -> MemResult<MemoryStats> {
-        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.lock_db();
 
         let total_entities: u64 =
             conn.query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
@@ -2635,10 +2672,13 @@ impl MemoryStore {
     /// Embed observation texts for rebuild indexing.
     ///
     /// `texts` must be the unprefixed indexed form (`entity_name: content`).
-    /// On embedder failure, returns zero vectors — matching the single-text
-    /// path's behavior in [`Self::embed_observation`].
+    /// When an embedder is configured, embedding failures and length
+    /// mismatches surface as `MemoryError::Storage(...)` so the caller can
+    /// abort instead of writing zero vectors that silently destroy recall.
+    /// When no embedder is configured, returns zero vectors — `embed_for_search`
+    /// already downgrades to `SearchMode::KeywordOnly` in that case.
     #[allow(unused_variables, clippy::unused_self)]
-    fn embed_observations_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+    fn embed_observations_batch(&self, texts: &[String]) -> MemResult<Vec<Vec<f32>>> {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
@@ -2648,22 +2688,28 @@ impl MemoryStore {
                     .collect();
                 let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
 
-                match embedder.embed_batch(&refs) {
-                    Ok(vectors) if vectors.len() == texts.len() => return vectors,
-                    Ok(vectors) => warn!(
-                        "Batch embedding returned {} vectors for {} observations; using zero vectors",
-                        vectors.len(),
+                let vectors = embedder.embed_batch(&refs).map_err(|e| {
+                    MemoryError::Storage(sift_core::SiftError::Embedding(format!(
+                        "Batch embedding failed for {} observations: {e}",
                         texts.len()
-                    ),
-                    Err(e) => warn!(
-                        "Batch embedding failed for {} observations: {e}; using zero vectors",
-                        texts.len()
-                    ),
+                    )))
+                })?;
+
+                if vectors.len() != texts.len() {
+                    return Err(MemoryError::Storage(sift_core::SiftError::Embedding(
+                        format!(
+                            "Batch embedding returned {} vectors for {} observations",
+                            vectors.len(),
+                            texts.len()
+                        ),
+                    )));
                 }
+
+                return Ok(vectors);
             }
         }
 
-        texts.iter().map(|_| vec![0.0f32; 768]).collect()
+        Ok(texts.iter().map(|_| vec![0.0f32; 768]).collect())
     }
 
     /// Embed a query for search.
@@ -3628,6 +3674,26 @@ mod tests {
     }
 
     #[cfg(feature = "embeddings")]
+    struct FailingEmbedder;
+
+    #[cfg(feature = "embeddings")]
+    impl sift_core::Embedder for FailingEmbedder {
+        fn embed_batch(&self, _texts: &[&str]) -> sift_core::SiftResult<Vec<Vec<f32>>> {
+            Err(sift_core::SiftError::Embedding(
+                "synthetic batch failure".to_string(),
+            ))
+        }
+
+        fn dimensions(&self) -> usize {
+            768
+        }
+
+        fn model_name(&self) -> &'static str {
+            "failing"
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
     fn seed_rebuild_observations(store: &MemoryStore, count: usize) {
         for i in 0..count {
             let entity_id = store
@@ -3670,6 +3736,45 @@ mod tests {
                 .iter()
                 .any(|result| result.observation.content.contains("number 32")),
             "rebuilt observation should remain searchable: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn rebuild_search_index_returns_err_when_embedder_fails() {
+        // First, build a known-good index using a recording embedder so we
+        // can assert it survives a subsequent failed rebuild.
+        let store = MemoryStore::open_in_memory().unwrap();
+        seed_rebuild_observations(&store, 3);
+
+        let good_embedder = std::sync::Arc::new(RecordingEmbedder::new());
+        let good_dyn: std::sync::Arc<dyn sift_core::Embedder> = good_embedder.clone();
+        let store = store.with_embedder(good_dyn);
+        store.rebuild_search_index_now().unwrap();
+        let baseline_count = store.search.count().unwrap_or(0);
+        assert!(
+            baseline_count > 0,
+            "baseline rebuild should have inserted observations"
+        );
+
+        // Swap in a failing embedder. The rebuild must error and leave the
+        // previous index untouched.
+        let failing: std::sync::Arc<dyn sift_core::Embedder> = std::sync::Arc::new(FailingEmbedder);
+        let store = store.with_embedder(failing);
+
+        let err = store
+            .rebuild_search_index_now()
+            .expect_err("rebuild must propagate embedder failure");
+        match err {
+            MemoryError::Storage(sift_core::SiftError::Embedding(_)) => {}
+            other => panic!("expected Storage(Embedding(_)), got {other:?}"),
+        }
+
+        // Index must be unchanged: same chunk count as before the failed rebuild.
+        assert_eq!(
+            store.search.count().unwrap_or(0),
+            baseline_count,
+            "failed rebuild must leave previous index untouched"
         );
     }
 

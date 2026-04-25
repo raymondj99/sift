@@ -99,9 +99,11 @@ pub struct MemoryConfig {
     /// Minimum pattern frequency to extract a skill.
     #[serde(default = "MemoryConfig::default_skill_min_frequency")]
     pub skill_min_frequency: u32,
-    /// Use an LLM to decompose compact_summary and stop messages into
-    /// individually categorized observations. Falls back to rule-based
-    /// heuristic extraction when disabled or on any failure.
+    /// Use an LLM to decompose `compact_summary` and stop messages into
+    /// individually categorized observations. When disabled (or when the
+    /// configured provider/key is unavailable), the affected episodes are
+    /// reported as `episodes_deferred` rather than processed — there is no
+    /// heuristic fallback (removed in v0.1.6).
     #[serde(default)]
     pub llm_extraction: bool,
     /// LLM provider: "anthropic", "openai", or "ollama".
@@ -126,11 +128,20 @@ pub struct WatchConfig {
     /// batched into a single re-index operation.
     #[serde(default = "WatchConfig::default_debounce_ms")]
     pub debounce_ms: u64,
+    /// Reload the daemon's in-memory search engine after a successful
+    /// watcher batch so newly-indexed chunks become searchable without
+    /// restarting the daemon.
+    #[serde(default = "WatchConfig::default_reload_on_change")]
+    pub reload_on_change: bool,
 }
 
 impl WatchConfig {
     fn default_debounce_ms() -> u64 {
         1000
+    }
+
+    fn default_reload_on_change() -> bool {
+        true
     }
 }
 
@@ -139,6 +150,7 @@ impl Default for WatchConfig {
         Self {
             enabled: false,
             debounce_ms: Self::default_debounce_ms(),
+            reload_on_change: Self::default_reload_on_change(),
         }
     }
 }
@@ -325,6 +337,9 @@ impl Config {
             if watch_table.contains_key("debounce_ms") {
                 merged.watch.debounce_ms = other.watch.debounce_ms;
             }
+            if watch_table.contains_key("reload_on_change") {
+                merged.watch.reload_on_change = other.watch.reload_on_change;
+            }
         }
 
         merged
@@ -465,6 +480,7 @@ impl Config {
             "memory.skill_min_frequency" => Some(self.memory.skill_min_frequency.to_string()),
             "watch.enabled" => Some(self.watch.enabled.to_string()),
             "watch.debounce_ms" => Some(self.watch.debounce_ms.to_string()),
+            "watch.reload_on_change" => Some(self.watch.reload_on_change.to_string()),
             _ => None,
         }
     }

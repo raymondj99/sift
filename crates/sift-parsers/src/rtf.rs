@@ -8,17 +8,12 @@ pub struct RtfParser;
 
 impl Parser for RtfParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if mime == "application/rtf" || mime == "text/rtf" {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if ext == "rtf" {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            &["application/rtf", "text/rtf"],
+            &["rtf"],
+        )
     }
 
     fn parse(

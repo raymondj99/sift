@@ -6,6 +6,7 @@
 //!
 //! Requires the ONNX Runtime shared library at runtime (`ORT_DYLIB_PATH`).
 
+pub mod bootstrap;
 pub mod error;
 
 #[cfg(feature = "sqlite")]
@@ -18,6 +19,7 @@ pub mod traits;
 #[cfg(feature = "vision")]
 pub mod vision;
 
+pub use bootstrap::load_embedder;
 #[cfg(feature = "sqlite")]
 pub use cache::EmbeddingCache;
 pub use error::EmbeddingError;

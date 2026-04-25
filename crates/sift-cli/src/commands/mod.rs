@@ -18,5 +18,6 @@ pub mod search;
 #[cfg(feature = "serve")]
 pub mod serve;
 pub mod status;
+pub mod util;
 #[cfg(feature = "serve")]
 pub mod watch;

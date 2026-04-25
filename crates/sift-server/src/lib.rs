@@ -4,9 +4,11 @@
 //! and checking status (`/api/status`), plus a [`WatchDaemon`] that monitors
 //! the filesystem for changes and triggers re-indexing.
 
+pub mod error;
 pub mod routes;
 pub mod watch;
 
+pub use error::AppError;
 pub use routes::create_router;
 pub use watch::WatchDaemon;
 

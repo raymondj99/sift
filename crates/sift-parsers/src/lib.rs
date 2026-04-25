@@ -22,6 +22,7 @@ mod data;
 mod email;
 #[cfg(feature = "epub")]
 mod epub;
+mod html_text;
 mod image;
 mod notebook;
 #[cfg(feature = "office")]

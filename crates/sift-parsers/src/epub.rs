@@ -1,3 +1,4 @@
+use crate::html_text;
 use crate::traits::Parser;
 use sift_core::{ContentType, ParsedDocument, SiftResult};
 use std::collections::HashMap;
@@ -9,17 +10,7 @@ pub struct EpubParser;
 
 impl Parser for EpubParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            if mime == "application/epub+zip" {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            if ext == "epub" {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(mime_type, extension, &["application/epub+zip"], &["epub"])
     }
 
     fn parse(
@@ -66,7 +57,7 @@ impl Parser for EpubParser {
                 continue;
             }
 
-            let text = strip_html_tags(&buf);
+            let (text, _chapter_title) = html_text::extract(&buf);
             let text = text.trim();
             if text.is_empty() {
                 continue;
@@ -154,110 +145,6 @@ fn extract_title_from_opf(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Optio
     }
 
     None
-}
-
-/// Strip HTML/XHTML tags from content, returning plain text.
-fn strip_html_tags(html: &str) -> String {
-    let mut text = String::with_capacity(html.len() / 2);
-    let mut in_tag = false;
-    let mut in_script = false;
-    let mut in_style = false;
-    let mut tag_name = String::new();
-
-    let chars: Vec<char> = html.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let ch = chars[i];
-
-        if ch == '<' {
-            in_tag = true;
-            tag_name.clear();
-            i += 1;
-            continue;
-        }
-
-        if ch == '>' && in_tag {
-            in_tag = false;
-            let tag_lower = tag_name.to_lowercase();
-
-            if tag_lower.starts_with("script") {
-                in_script = true;
-            } else if tag_lower.starts_with("/script") {
-                in_script = false;
-            } else if tag_lower.starts_with("style") {
-                in_style = true;
-            } else if tag_lower.starts_with("/style") {
-                in_style = false;
-            }
-
-            // Block-level tags produce newlines
-            let tag_base = tag_lower.trim_start_matches('/');
-            if matches!(
-                tag_base,
-                "p" | "div"
-                    | "br"
-                    | "h1"
-                    | "h2"
-                    | "h3"
-                    | "h4"
-                    | "h5"
-                    | "h6"
-                    | "li"
-                    | "tr"
-                    | "blockquote"
-                    | "pre"
-                    | "hr"
-                    | "section"
-                    | "article"
-            ) {
-                text.push('\n');
-            }
-
-            i += 1;
-            continue;
-        }
-
-        if in_tag {
-            tag_name.push(ch);
-        } else if !in_script && !in_style {
-            text.push(ch);
-        }
-
-        i += 1;
-    }
-
-    // Decode common HTML entities
-    let text = text
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ");
-
-    // Collapse whitespace while preserving intentional line breaks
-    collapse_whitespace(&text)
-}
-
-/// Collapse runs of whitespace, keeping single newlines.
-fn collapse_whitespace(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut last_was_whitespace = false;
-
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            if !last_was_whitespace {
-                result.push(if ch == '\n' { '\n' } else { ' ' });
-            }
-            last_was_whitespace = true;
-        } else {
-            result.push(ch);
-            last_was_whitespace = false;
-        }
-    }
-
-    result.trim().to_string()
 }
 
 #[cfg(test)]

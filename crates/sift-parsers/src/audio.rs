@@ -74,19 +74,12 @@ impl AudioParser {
 #[cfg(feature = "audio")]
 impl Parser for AudioParser {
     fn can_parse(&self, mime_type: Option<&str>, extension: Option<&str>) -> bool {
-        if let Some(mime) = mime_type {
-            let mime_lower = mime.to_lowercase();
-            if Self::AUDIO_MIMES.iter().any(|m| mime_lower.starts_with(m)) {
-                return true;
-            }
-        }
-        if let Some(ext) = extension {
-            let ext_lower = ext.to_lowercase();
-            if Self::AUDIO_EXTENSIONS.contains(&ext_lower.as_str()) {
-                return true;
-            }
-        }
-        false
+        crate::traits::matches(
+            mime_type,
+            extension,
+            Self::AUDIO_MIMES,
+            Self::AUDIO_EXTENSIONS,
+        )
     }
 
     fn parse(
