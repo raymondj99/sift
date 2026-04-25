@@ -1,0 +1,2377 @@
+{
+  "documents": [
+    {
+      "id": "cross-session-basic:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-basic",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User is building a REST API using Axum in Rust. Decided to use SQLite with WAL mode for the database. The project is called 'taskflow' and uses a layered architecture: handlers -> services -> repositories."
+    },
+    {
+      "id": "cross-session-basic:0:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-basic",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/main.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "cross-session-deployment:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-deployment",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Set up the CI/CD pipeline for the payments service. Using GitHub Actions with three stages: lint, test, deploy. Deployment targets are staging (auto-deploy on merge to main) and production (manual approval required). Docker images are pushed to ECR and deployed via ECS Fargate."
+    },
+    {
+      "id": "cross-session-deployment:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-deployment",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Added monitoring. Using Datadog for metrics and alerting, PagerDuty for on-call rotation. Set up alerts for p99 latency > 500ms and error rate > 1%. Structured logging with tracing crate, logs shipped to Datadog via fluentbit."
+    },
+    {
+      "id": "cross-session-api-design:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-api-design",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Designed the authentication API. Using JWT tokens with RS256 signing. Access tokens expire in 15 minutes, refresh tokens in 7 days. Tokens are stored in httpOnly cookies, not localStorage (XSS prevention). Rate limiting set to 100 requests/minute per user."
+    },
+    {
+      "id": "cross-session-api-design:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "cross_session",
+        "scenario_id": "cross-session-api-design",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Designed the pagination strategy. All list endpoints use cursor-based pagination, not offset-based (better performance on large datasets). Cursor is an opaque base64-encoded string. Default page size is 25, max is 100. Response format includes next_cursor and has_more fields."
+    },
+    {
+      "id": "preference-code-style:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "preference",
+        "scenario_id": "preference-code-style",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User prefers snake_case for Rust function names and 4-space indentation. They dislike excessive comments and prefer self-documenting code. They always want error handling with thiserror, not anyhow in libraries."
+    },
+    {
+      "id": "preference-code-style:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "preference",
+        "scenario_id": "preference-code-style",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User corrected the agent: don't use unwrap() in production code, always use proper error propagation with ?. They also prefer logging with tracing over println!."
+    },
+    {
+      "id": "preference-workflow:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "preference",
+        "scenario_id": "preference-workflow",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User's git workflow: always create feature branches from main, never commit directly to main. Branch naming convention is feat/description or fix/description. Commits should be atomic with conventional commit messages (feat:, fix:, docs:, refactor:). Always rebase before merging, never merge commits."
+    },
+    {
+      "id": "preference-workflow:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "preference",
+        "scenario_id": "preference-workflow",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User wants tests written before implementation (TDD approach). Unit tests go in the same file as the code (mod tests). Integration tests go in tests/ directory. Always run cargo clippy before committing. No warnings allowed in CI."
+    },
+    {
+      "id": "preference-documentation:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "preference",
+        "scenario_id": "preference-documentation",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User prefers minimal documentation: doc comments only on public API functions and complex logic. No README files unless the user explicitly asks. Never add TODO comments — use GitHub issues instead. Error messages should be user-facing and actionable, not developer-facing stack traces."
+    },
+    {
+      "id": "temporal-version-upgrade:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-version-upgrade",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "The project uses React 18 with TypeScript. State management is done with Redux Toolkit. The CI pipeline runs on GitHub Actions."
+    },
+    {
+      "id": "temporal-version-upgrade:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-version-upgrade",
+        "session_id": "session-3",
+        "session_idx": 1
+      },
+      "text": "Migrated from Redux Toolkit to Zustand for state management — simpler API, less boilerplate. Also upgraded to React 19 for the new compiler optimizations."
+    },
+    {
+      "id": "temporal-dependency-changes:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-dependency-changes",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Project initialized with npm as package manager, Jest for testing, and Webpack for bundling. Using ESLint with Airbnb config for linting."
+    },
+    {
+      "id": "temporal-dependency-changes:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-dependency-changes",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Migrated from npm to pnpm for faster installs and better monorepo support. Switched from Webpack to Vite for 10x faster dev server startup."
+    },
+    {
+      "id": "temporal-dependency-changes:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-dependency-changes",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Replaced Jest with Vitest for testing — native ESM support and Vite integration. Migrated from ESLint to Biome for combined linting and formatting (3x faster)."
+    },
+    {
+      "id": "temporal-rollback:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-rollback",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Database is PostgreSQL 15 with the pgvector extension for embeddings."
+    },
+    {
+      "id": "temporal-rollback:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-rollback",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Experimented with switching to CockroachDB for better horizontal scaling. Migrated the schema and ran load tests."
+    },
+    {
+      "id": "temporal-rollback:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "temporal",
+        "scenario_id": "temporal-rollback",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Rolled back from CockroachDB to PostgreSQL — CockroachDB doesn't support pgvector and the latency overhead wasn't worth the scaling benefits for our current load. Staying with PostgreSQL 15."
+    },
+    {
+      "id": "correction-sql-patterns:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-sql-patterns",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User corrected the agent: never use SELECT * in SQL queries, always enumerate columns explicitly. This caused a production bug when a column was added to the table."
+    },
+    {
+      "id": "correction-sql-patterns:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-sql-patterns",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User reminded: always add database migrations as separate files, never modify existing migration files. Use sequential numbering like 001_create_users.sql, 002_add_email.sql."
+    },
+    {
+      "id": "correction-api-patterns:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-api-patterns",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User corrected: don't return 200 OK for errors — always use appropriate HTTP status codes. 400 for validation, 401 for auth, 404 for not found, 409 for conflicts. The response body should include an error code, message, and optional details field."
+    },
+    {
+      "id": "correction-api-patterns:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-api-patterns",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User corrected: never expose internal IDs in URLs — use UUIDs instead of auto-incrementing integers. Also never include sensitive data in query parameters (they get logged); use request body instead."
+    },
+    {
+      "id": "correction-api-patterns:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-api-patterns",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "User corrected: all API endpoints must be idempotent. POST for create should use an idempotency key header. PUT should be a full replacement, PATCH for partial updates. DELETE should be idempotent (return 204 even if already deleted)."
+    },
+    {
+      "id": "correction-security:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-security",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User corrected: never log sensitive data (passwords, tokens, PII). The agent had included a user's email in a debug log statement. All log fields with user data must use the Redacted wrapper type."
+    },
+    {
+      "id": "correction-security:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "correction",
+        "scenario_id": "correction-security",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User corrected: never hardcode secrets or API keys in source code, even for testing. Always use environment variables loaded through a config module. Tests should use a .env.test file that is gitignored."
+    },
+    {
+      "id": "workflow-edit-test-cycle:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/lib.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:0:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo test\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:0:2",
+      "metadata": {
+        "event_idx": 2,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/lib.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:0:3",
+      "metadata": {
+        "event_idx": 3,
+        "event_type": "stop",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"last_assistant_message\":\"Fixed the failing test.\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/api.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:1:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo test\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:1:2",
+      "metadata": {
+        "event_idx": 2,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/api.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:1:3",
+      "metadata": {
+        "event_idx": 3,
+        "event_type": "stop",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"last_assistant_message\":\"All tests pass.\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/db.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:2:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo test\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-edit-test-cycle:2:2",
+      "metadata": {
+        "event_idx": 2,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-edit-test-cycle",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/db.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-pre-commit:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/main.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-pre-commit:0:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo fmt\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:0:2",
+      "metadata": {
+        "event_idx": 2,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo clippy\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:0:3",
+      "metadata": {
+        "event_idx": 3,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"tool_input\":{\"command\":\"git commit -m 'feat: add user endpoint'\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:0:4",
+      "metadata": {
+        "event_idx": 4,
+        "event_type": "stop",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"last_assistant_message\":\"Committed after formatting and lint checks.\"}"
+    },
+    {
+      "id": "workflow-pre-commit:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"file_path\":\"/src/routes.rs\"},\"tool_name\":\"Edit\"}"
+    },
+    {
+      "id": "workflow-pre-commit:1:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo fmt\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:1:2",
+      "metadata": {
+        "event_idx": 2,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"command\":\"cargo clippy\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:1:3",
+      "metadata": {
+        "event_idx": 3,
+        "event_type": "post_tool_use",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"tool_input\":{\"command\":\"git commit -m 'fix: handle empty input'\"},\"tool_name\":\"Bash\"}"
+    },
+    {
+      "id": "workflow-pre-commit:1:4",
+      "metadata": {
+        "event_idx": 4,
+        "event_type": "stop",
+        "scenario_category": "workflow",
+        "scenario_id": "workflow-pre-commit",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"last_assistant_message\":\"Formatted, linted, and committed.\"}"
+    },
+    {
+      "id": "isolation-overlapping-stacks:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "isolation",
+        "scenario_id": "isolation-overlapping-stacks",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Working on project Alpha — a Python FastAPI backend. Uses PostgreSQL for the database and Celery for background tasks. Deployed on AWS ECS."
+    },
+    {
+      "id": "isolation-overlapping-stacks:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "isolation",
+        "scenario_id": "isolation-overlapping-stacks",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Working on project Beta — a Rust CLI tool for data processing. Uses SQLite for local storage and tokio for async runtime. Distributed as a single binary via cargo install."
+    },
+    {
+      "id": "isolation-shared-team:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "isolation",
+        "scenario_id": "isolation-shared-team",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Working on the frontend repo. Uses Next.js 14 with App Router. Styling with Tailwind CSS. Testing with Playwright for E2E and React Testing Library for components. Sarah owns the design system components."
+    },
+    {
+      "id": "isolation-shared-team:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "isolation",
+        "scenario_id": "isolation-shared-team",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Working on the backend repo. Uses Express.js with TypeScript. Testing with Jest and Supertest. Sarah also contributes to the auth module here. Database is MongoDB with Mongoose ODM."
+    },
+    {
+      "id": "isolation-monorepo:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "isolation",
+        "scenario_id": "isolation-monorepo",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "The monorepo has three packages: @app/web (React SPA, port 3000), @app/api (Node.js API, port 4000), and @app/shared (shared types and utilities). The web package uses Vite, the API uses tsx for dev, and shared is built with tsup."
+    },
+    {
+      "id": "expertise-architecture:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "expertise",
+        "scenario_id": "expertise-architecture",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Explored the sift codebase. It has 10 crates: sift-core (types, config), sift-cli (CLI commands), sift-store (vector + FTS storage), sift-memory (knowledge graph), sift-embed (embedding models), sift-mcp (MCP server), sift-server (HTTP API), sift-sources (file discovery), sift-parsers (30+ format parsers), sift-chunker (text splitting)."
+    },
+    {
+      "id": "expertise-architecture:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "expertise",
+        "scenario_id": "expertise-architecture",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Learned that sift-memory uses SQLite with WAL mode and a bi-temporal data model (observed_at vs valid_from/valid_until). The MemoryStore struct holds a Mutex<Connection> and a HybridSearchEngine. Recall uses RRF fusion of BM25 + vector results."
+    },
+    {
+      "id": "expertise-performance:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "expertise",
+        "scenario_id": "expertise-performance",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Profiled the search pipeline. The embedding step takes 15ms per query (ONNX CPU inference). BM25 search takes 2ms. Vector search (HNSW) takes 5ms. The RRF fusion and post-filtering takes <1ms. Total recall latency is ~25ms for a typical query with 1000 observations."
+    },
+    {
+      "id": "expertise-performance:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "expertise",
+        "scenario_id": "expertise-performance",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Identified memory bottleneck: the consolidation engine holds the SQLite mutex for its entire duration. With 10K observations, consolidation takes ~2 seconds, blocking all other writers. Future optimization: batch updates in a single transaction and minimize lock hold time."
+    },
+    {
+      "id": "expertise-testing-patterns:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "expertise",
+        "scenario_id": "expertise-testing-patterns",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Testing conventions: unit tests use MemoryStore::open_in_memory() for fast isolated tests. Integration tests in tests/ use tempfile::TempDir for temporary on-disk databases. The test helper HOME_MUTEX serializes tests that modify the HOME env var. All tests must pass with --all-features to avoid CI failures from feature-gated code."
+    },
+    {
+      "id": "proactive-correction-priority:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-correction-priority",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Set up error handling in the payments service. Using thiserror for custom error types, anyhow for propagation. All handlers return Result<Json<T>, AppError> where AppError implements IntoResponse."
+    },
+    {
+      "id": "proactive-correction-priority:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "stop",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-correction-priority",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"last_assistant_message\":\"I apologize for using unwrap() in the payment handler. The issue was that unwrap causes a panic in production. The correct approach is to always use the ? operator or match/if-let for error handling. I've fixed all instances to use proper error propagation.\"}"
+    },
+    {
+      "id": "proactive-correction-priority:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-correction-priority",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Reviewed error handling patterns. Key lesson from session 2: never use unwrap() in production code, always use ? operator. Added clippy lint deny(clippy::unwrap_used) to the workspace Cargo.toml."
+    },
+    {
+      "id": "proactive-preference-surfacing:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-preference-surfacing",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "User prefers functional programming style — no mutable state, prefer map/filter/fold over for loops. Always use const over let when possible. Arrow functions only, no function keyword. TypeScript strict mode required."
+    },
+    {
+      "id": "proactive-preference-surfacing:0:1",
+      "metadata": {
+        "event_idx": 1,
+        "event_type": "stop",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-preference-surfacing",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "{\"last_assistant_message\":\"Finished setting up the TypeScript project with strict mode, ESLint configured for functional style.\"}"
+    },
+    {
+      "id": "proactive-preference-surfacing:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-preference-surfacing",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "User prefers 2-space indentation, single quotes, no trailing commas, no semicolons. Prettier config set up. Also prefers named exports over default exports for better refactoring support."
+    },
+    {
+      "id": "proactive-conflict-resolution:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-conflict-resolution",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Database design: using PostgreSQL 14 with connection pooling via PgBouncer. Max pool size is 20 connections. Schema uses UUID primary keys and soft-delete pattern (deleted_at column)."
+    },
+    {
+      "id": "proactive-conflict-resolution:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-conflict-resolution",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Migrated database from PostgreSQL to CockroachDB for multi-region support. Updated connection strings, changed pool size to 50 (CockroachDB handles more connections efficiently). Kept UUID primary keys and soft-delete pattern."
+    },
+    {
+      "id": "proactive-conflict-resolution:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-conflict-resolution",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Tuned CockroachDB connection pool. Reduced from 50 to 30 connections after observing connection timeout issues in the us-west region. Added connection health checks with 5-second timeout."
+    },
+    {
+      "id": "proactive-contextual-recall:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-contextual-recall",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "The auth module (src/auth/) uses passport.js with JWT strategy. Token validation middleware is in src/auth/middleware.ts. Important: the refresh token rotation is custom-built (not from passport) because passport-jwt doesn't support refresh tokens natively."
+    },
+    {
+      "id": "proactive-contextual-recall:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-contextual-recall",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "The billing module (src/billing/) uses Stripe SDK v14. Webhook handler is in src/billing/webhooks.ts. Critical: always verify webhook signatures before processing — use Stripe.webhooks.constructEvent() not manual parsing. Idempotency keys are stored in the payments table."
+    },
+    {
+      "id": "proactive-contextual-recall:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "stop",
+        "scenario_category": "proactive",
+        "scenario_id": "proactive-contextual-recall",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "{\"last_assistant_message\":\"I apologize for the confusion with the billing webhook. The correct approach is to ALWAYS verify the Stripe webhook signature using constructEvent(), never parse the raw body directly. This is a security requirement.\"}"
+    },
+    {
+      "id": "conflict-framework-migration:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-framework-migration",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Frontend architecture: using React 18 with Redux Toolkit for state management. Components follow atomic design pattern. Testing with Jest and React Testing Library."
+    },
+    {
+      "id": "conflict-framework-migration:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-framework-migration",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Migrated state management from Redux Toolkit to Zustand. Zustand is simpler — no boilerplate, no providers, just hooks. Kept React 18 and atomic design pattern. Migrated tests from Jest to Vitest for faster execution."
+    },
+    {
+      "id": "conflict-build-tool-change:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-build-tool-change",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Build system: using Webpack 5 with Babel for transpilation. Bundle size is 2.4MB gzipped. Hot module replacement enabled. Config in webpack.config.js."
+    },
+    {
+      "id": "conflict-build-tool-change:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-build-tool-change",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Migrated from Webpack to Vite for dev server. Vite uses native ESM — instant HMR, no bundling during development. Kept Webpack for production builds temporarily. Dev startup went from 12s to 400ms."
+    },
+    {
+      "id": "conflict-build-tool-change:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-build-tool-change",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Completed full migration from Webpack to Vite. Removed webpack.config.js. Production builds now use Rollup (built into Vite). Bundle size reduced from 2.4MB to 1.8MB gzipped. Babel replaced with SWC."
+    },
+    {
+      "id": "conflict-error-handling-pattern:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-error-handling-pattern",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Error handling in the API layer: using try-catch blocks with generic Error class. All errors logged to console. HTTP responses return 500 for all unexpected errors."
+    },
+    {
+      "id": "conflict-error-handling-pattern:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "stop",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-error-handling-pattern",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "{\"last_assistant_message\":\"I apologize for the previous error handling approach. Using generic Error with try-catch and 500 for everything is an anti-pattern. The correct approach: use custom error classes extending AppError with specific HTTP status codes. Use a centralized error middleware instead of try-catch in every route. Log to structured logging (winston) not console.log.\"}"
+    },
+    {
+      "id": "conflict-version-upgrade:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-version-upgrade",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Using Next.js 13 with Pages Router. API routes in pages/api/. Data fetching with getServerSideProps and getStaticProps. Styling with styled-components."
+    },
+    {
+      "id": "conflict-version-upgrade:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-version-upgrade",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Upgraded to Next.js 14 with App Router. Migrated from Pages Router to app/ directory. API routes now use Route Handlers (app/api/route.ts). Data fetching uses React Server Components with async/await instead of getServerSideProps. Replaced styled-components with Tailwind CSS for better server component support."
+    },
+    {
+      "id": "conflict-architecture-shift:0:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-architecture-shift",
+        "session_id": "session-1",
+        "session_idx": 0
+      },
+      "text": "Architecture: monolithic Express.js application. Single PostgreSQL database. Deployed as a Docker container on a single EC2 instance. Authentication via session cookies stored in Redis."
+    },
+    {
+      "id": "conflict-architecture-shift:1:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-architecture-shift",
+        "session_id": "session-2",
+        "session_idx": 1
+      },
+      "text": "Split monolith into 3 microservices: auth-service, order-service, notification-service. Each service has its own PostgreSQL database (database-per-service pattern). Communication via RabbitMQ message queue. Deployed on Kubernetes."
+    },
+    {
+      "id": "conflict-architecture-shift:2:0",
+      "metadata": {
+        "event_idx": 0,
+        "event_type": "post_compact",
+        "scenario_category": "conflict",
+        "scenario_id": "conflict-architecture-shift",
+        "session_id": "session-3",
+        "session_idx": 2
+      },
+      "text": "Replaced RabbitMQ with Apache Kafka for event streaming. RabbitMQ was dropping messages under high load. Kafka provides persistent event log and replay capability. Services still use PostgreSQL individually. Added API Gateway (Kong) in front of microservices."
+    }
+  ],
+  "name": "codingmem-retrieval",
+  "qrels": {
+    "conflict-architecture-shift:q0": [
+      {
+        "doc_id": "conflict-architecture-shift:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-architecture-shift:q1": [
+      {
+        "doc_id": "conflict-architecture-shift:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-architecture-shift:q2": [
+      {
+        "doc_id": "conflict-architecture-shift:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-architecture-shift:q3": [
+      {
+        "doc_id": "conflict-architecture-shift:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-architecture-shift:q4": [
+      {
+        "doc_id": "conflict-architecture-shift:0:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-architecture-shift:q5": [
+      {
+        "doc_id": "conflict-architecture-shift:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-build-tool-change:q0": [
+      {
+        "doc_id": "conflict-build-tool-change:1:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-build-tool-change:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-build-tool-change:q1": [
+      {
+        "doc_id": "conflict-build-tool-change:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-build-tool-change:q2": [
+      {
+        "doc_id": "conflict-build-tool-change:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-build-tool-change:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-build-tool-change:q3": [
+      {
+        "doc_id": "conflict-build-tool-change:2:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-error-handling-pattern:q0": [
+      {
+        "doc_id": "conflict-error-handling-pattern:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-error-handling-pattern:q1": [
+      {
+        "doc_id": "conflict-error-handling-pattern:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-error-handling-pattern:q2": [
+      {
+        "doc_id": "conflict-error-handling-pattern:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-framework-migration:q0": [
+      {
+        "doc_id": "conflict-framework-migration:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-framework-migration:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-framework-migration:q1": [
+      {
+        "doc_id": "conflict-framework-migration:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-framework-migration:q2": [
+      {
+        "doc_id": "conflict-framework-migration:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-framework-migration:q3": [
+      {
+        "doc_id": "conflict-framework-migration:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-framework-migration:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-version-upgrade:q0": [
+      {
+        "doc_id": "conflict-version-upgrade:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-version-upgrade:q1": [
+      {
+        "doc_id": "conflict-version-upgrade:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "conflict-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-version-upgrade:q2": [
+      {
+        "doc_id": "conflict-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-version-upgrade:q3": [
+      {
+        "doc_id": "conflict-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "conflict-version-upgrade:q4": [
+      {
+        "doc_id": "conflict-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "correction-api-patterns:q0": [
+      {
+        "doc_id": "correction-api-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "correction-api-patterns:q1": [
+      {
+        "doc_id": "correction-api-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "correction-api-patterns:q2": [],
+    "correction-api-patterns:q3": [
+      {
+        "doc_id": "correction-api-patterns:1:0",
+        "relevance": 2
+      }
+    ],
+    "correction-api-patterns:q4": [
+      {
+        "doc_id": "correction-api-patterns:2:0",
+        "relevance": 2
+      }
+    ],
+    "correction-api-patterns:q5": [],
+    "correction-security:q0": [
+      {
+        "doc_id": "correction-security:0:0",
+        "relevance": 2
+      }
+    ],
+    "correction-security:q1": [
+      {
+        "doc_id": "correction-security:1:0",
+        "relevance": 2
+      }
+    ],
+    "correction-sql-patterns:q0": [
+      {
+        "doc_id": "correction-sql-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "correction-sql-patterns:q1": [
+      {
+        "doc_id": "correction-sql-patterns:1:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-api-design:q0": [
+      {
+        "doc_id": "cross-session-api-design:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-api-design:q1": [
+      {
+        "doc_id": "cross-session-api-design:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-api-design:q2": [
+      {
+        "doc_id": "cross-session-api-design:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-api-design:q3": [
+      {
+        "doc_id": "cross-session-api-design:1:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-api-design:q4": [
+      {
+        "doc_id": "cross-session-api-design:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "cross-session-api-design:1:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-basic:q0": [
+      {
+        "doc_id": "cross-session-basic:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-basic:q1": [
+      {
+        "doc_id": "cross-session-basic:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-basic:q2": [
+      {
+        "doc_id": "cross-session-basic:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-deployment:q0": [
+      {
+        "doc_id": "cross-session-deployment:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-deployment:q1": [
+      {
+        "doc_id": "cross-session-deployment:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-deployment:q2": [
+      {
+        "doc_id": "cross-session-deployment:0:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-deployment:q3": [],
+    "cross-session-deployment:q4": [
+      {
+        "doc_id": "cross-session-deployment:1:0",
+        "relevance": 2
+      }
+    ],
+    "cross-session-deployment:q5": [
+      {
+        "doc_id": "cross-session-deployment:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-architecture:q0": [
+      {
+        "doc_id": "expertise-architecture:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-architecture:q1": [
+      {
+        "doc_id": "expertise-architecture:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-architecture:q2": [
+      {
+        "doc_id": "expertise-architecture:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-architecture:q3": [
+      {
+        "doc_id": "expertise-architecture:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-architecture:q4": [
+      {
+        "doc_id": "expertise-architecture:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-performance:q0": [
+      {
+        "doc_id": "expertise-performance:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-performance:q1": [
+      {
+        "doc_id": "expertise-performance:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-performance:q2": [
+      {
+        "doc_id": "expertise-performance:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-performance:q3": [
+      {
+        "doc_id": "expertise-performance:1:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-testing-patterns:q0": [
+      {
+        "doc_id": "expertise-testing-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-testing-patterns:q1": [
+      {
+        "doc_id": "expertise-testing-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-testing-patterns:q2": [
+      {
+        "doc_id": "expertise-testing-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "expertise-testing-patterns:q3": [
+      {
+        "doc_id": "expertise-testing-patterns:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-monorepo:q0": [
+      {
+        "doc_id": "isolation-monorepo:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-monorepo:q1": [
+      {
+        "doc_id": "isolation-monorepo:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-monorepo:q2": [
+      {
+        "doc_id": "isolation-monorepo:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-monorepo:q3": [
+      {
+        "doc_id": "isolation-monorepo:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-overlapping-stacks:q0": [
+      {
+        "doc_id": "isolation-overlapping-stacks:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-overlapping-stacks:q1": [
+      {
+        "doc_id": "isolation-overlapping-stacks:1:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-overlapping-stacks:q2": [
+      {
+        "doc_id": "isolation-overlapping-stacks:1:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-overlapping-stacks:q3": [
+      {
+        "doc_id": "isolation-overlapping-stacks:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q0": [
+      {
+        "doc_id": "isolation-shared-team:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q1": [
+      {
+        "doc_id": "isolation-shared-team:1:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q2": [
+      {
+        "doc_id": "isolation-shared-team:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q3": [
+      {
+        "doc_id": "isolation-shared-team:1:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q4": [
+      {
+        "doc_id": "isolation-shared-team:0:0",
+        "relevance": 2
+      }
+    ],
+    "isolation-shared-team:q5": [
+      {
+        "doc_id": "isolation-shared-team:1:0",
+        "relevance": 2
+      }
+    ],
+    "preference-code-style:q0": [
+      {
+        "doc_id": "preference-code-style:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-code-style:q1": [
+      {
+        "doc_id": "preference-code-style:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-code-style:q2": [
+      {
+        "doc_id": "preference-code-style:1:0",
+        "relevance": 2
+      }
+    ],
+    "preference-code-style:q3": [
+      {
+        "doc_id": "preference-code-style:1:0",
+        "relevance": 2
+      }
+    ],
+    "preference-documentation:q0": [
+      {
+        "doc_id": "preference-documentation:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-documentation:q1": [
+      {
+        "doc_id": "preference-documentation:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-documentation:q2": [
+      {
+        "doc_id": "preference-documentation:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-documentation:q3": [
+      {
+        "doc_id": "preference-documentation:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-workflow:q0": [
+      {
+        "doc_id": "preference-workflow:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-workflow:q1": [
+      {
+        "doc_id": "preference-workflow:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-workflow:q2": [
+      {
+        "doc_id": "preference-workflow:0:0",
+        "relevance": 2
+      }
+    ],
+    "preference-workflow:q3": [
+      {
+        "doc_id": "preference-workflow:1:0",
+        "relevance": 2
+      }
+    ],
+    "preference-workflow:q4": [
+      {
+        "doc_id": "preference-workflow:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-conflict-resolution:q0": [
+      {
+        "doc_id": "proactive-conflict-resolution:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-conflict-resolution:q1": [
+      {
+        "doc_id": "proactive-conflict-resolution:1:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "proactive-conflict-resolution:2:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-conflict-resolution:q2": [
+      {
+        "doc_id": "proactive-conflict-resolution:2:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-conflict-resolution:q3": [
+      {
+        "doc_id": "proactive-conflict-resolution:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "proactive-conflict-resolution:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-contextual-recall:q0": [
+      {
+        "doc_id": "proactive-contextual-recall:0:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-contextual-recall:q1": [
+      {
+        "doc_id": "proactive-contextual-recall:0:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-contextual-recall:q2": [
+      {
+        "doc_id": "proactive-contextual-recall:1:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "proactive-contextual-recall:2:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-contextual-recall:q3": [
+      {
+        "doc_id": "proactive-contextual-recall:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-correction-priority:q0": [
+      {
+        "doc_id": "proactive-correction-priority:1:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "proactive-correction-priority:2:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-correction-priority:q1": [
+      {
+        "doc_id": "proactive-correction-priority:2:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-correction-priority:q2": [
+      {
+        "doc_id": "proactive-correction-priority:0:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-correction-priority:q3": [
+      {
+        "doc_id": "proactive-correction-priority:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-preference-surfacing:q0": [
+      {
+        "doc_id": "proactive-preference-surfacing:0:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-preference-surfacing:q1": [
+      {
+        "doc_id": "proactive-preference-surfacing:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-preference-surfacing:q2": [
+      {
+        "doc_id": "proactive-preference-surfacing:1:0",
+        "relevance": 2
+      }
+    ],
+    "proactive-preference-surfacing:q3": [
+      {
+        "doc_id": "proactive-preference-surfacing:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "proactive-preference-surfacing:0:1",
+        "relevance": 2
+      }
+    ],
+    "temporal-dependency-changes:q0": [
+      {
+        "doc_id": "temporal-dependency-changes:1:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-dependency-changes:q1": [
+      {
+        "doc_id": "temporal-dependency-changes:1:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "temporal-dependency-changes:2:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-dependency-changes:q2": [
+      {
+        "doc_id": "temporal-dependency-changes:2:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-dependency-changes:q3": [
+      {
+        "doc_id": "temporal-dependency-changes:2:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-dependency-changes:q4": [
+      {
+        "doc_id": "temporal-dependency-changes:1:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-rollback:q0": [
+      {
+        "doc_id": "temporal-rollback:2:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-rollback:q1": [
+      {
+        "doc_id": "temporal-rollback:2:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-version-upgrade:q0": [
+      {
+        "doc_id": "temporal-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "temporal-version-upgrade:q1": [
+      {
+        "doc_id": "temporal-version-upgrade:0:0",
+        "relevance": 2
+      },
+      {
+        "doc_id": "temporal-version-upgrade:1:0",
+        "relevance": 2
+      }
+    ],
+    "workflow-edit-test-cycle:q0": [],
+    "workflow-pre-commit:q0": [],
+    "workflow-pre-commit:q1": []
+  },
+  "queries": [
+    {
+      "category": "cross_session",
+      "id": "cross-session-basic:q0",
+      "negative": false,
+      "text": "What web framework is the taskflow project using?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-basic:q1",
+      "negative": false,
+      "text": "What database and mode did we decide on for taskflow?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-basic:q2",
+      "negative": false,
+      "text": "What architecture pattern does taskflow use?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q0",
+      "negative": false,
+      "text": "What CI/CD platform do we use for the payments service?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q1",
+      "negative": false,
+      "text": "How many stages does the CI pipeline have?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q2",
+      "negative": false,
+      "text": "What triggers a production deployment?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q3",
+      "negative": false,
+      "text": "Where are Docker images stored?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q4",
+      "negative": false,
+      "text": "What monitoring platform are we using?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-deployment:q5",
+      "negative": false,
+      "text": "What is the p99 latency alert threshold?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-api-design:q0",
+      "negative": false,
+      "text": "What signing algorithm do we use for JWT tokens?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-api-design:q1",
+      "negative": false,
+      "text": "How long do access tokens last?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-api-design:q2",
+      "negative": false,
+      "text": "Where are tokens stored on the client side?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-api-design:q3",
+      "negative": false,
+      "text": "What pagination strategy do our list endpoints use?"
+    },
+    {
+      "category": "cross_session",
+      "id": "cross-session-api-design:q4",
+      "negative": false,
+      "text": "What is the maximum page size?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-code-style:q0",
+      "negative": false,
+      "text": "What naming convention does the user prefer for Rust functions?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-code-style:q1",
+      "negative": false,
+      "text": "What error handling crate should be used in libraries?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-code-style:q2",
+      "negative": false,
+      "text": "Should we use unwrap() in production code?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-code-style:q3",
+      "negative": false,
+      "text": "What logging approach does the user prefer?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-workflow:q0",
+      "negative": false,
+      "text": "What branch naming convention does the user follow?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-workflow:q1",
+      "negative": false,
+      "text": "What commit message format does the user require?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-workflow:q2",
+      "negative": false,
+      "text": "Should we use merge commits or rebase?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-workflow:q3",
+      "negative": false,
+      "text": "Does the user prefer TDD?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-workflow:q4",
+      "negative": false,
+      "text": "Where do unit tests go?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-documentation:q0",
+      "negative": false,
+      "text": "When should we add doc comments?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-documentation:q1",
+      "negative": false,
+      "text": "Should we create README files?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-documentation:q2",
+      "negative": false,
+      "text": "How should TODO items be tracked?"
+    },
+    {
+      "category": "preference",
+      "id": "preference-documentation:q3",
+      "negative": false,
+      "text": "What style should error messages use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-version-upgrade:q0",
+      "negative": false,
+      "text": "What version of React is the project using?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-version-upgrade:q1",
+      "negative": false,
+      "text": "What state management library does the project use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-dependency-changes:q0",
+      "negative": false,
+      "text": "What package manager does the project use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-dependency-changes:q1",
+      "negative": false,
+      "text": "What bundler is the project using?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-dependency-changes:q2",
+      "negative": false,
+      "text": "What testing framework does the project use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-dependency-changes:q3",
+      "negative": false,
+      "text": "What linter does the project use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-dependency-changes:q4",
+      "negative": false,
+      "text": "Why did we switch from Webpack to Vite?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-rollback:q0",
+      "negative": false,
+      "text": "What database does the project use?"
+    },
+    {
+      "category": "temporal",
+      "id": "temporal-rollback:q1",
+      "negative": false,
+      "text": "Why did we not switch to CockroachDB?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-sql-patterns:q0",
+      "negative": false,
+      "text": "Should we use SELECT * in SQL queries?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-sql-patterns:q1",
+      "negative": false,
+      "text": "How should database migrations be organized?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q0",
+      "negative": false,
+      "text": "What HTTP status code should be returned for validation errors?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q1",
+      "negative": false,
+      "text": "What should the error response body include?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q2",
+      "negative": true,
+      "text": "Should we use auto-incrementing IDs in URLs?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q3",
+      "negative": false,
+      "text": "Where should sensitive data go in API requests?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q4",
+      "negative": false,
+      "text": "How should POST create endpoints handle duplicate requests?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-api-patterns:q5",
+      "negative": false,
+      "text": "What should DELETE return for an already-deleted resource?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-security:q0",
+      "negative": false,
+      "text": "How should user data be handled in logs?"
+    },
+    {
+      "category": "correction",
+      "id": "correction-security:q1",
+      "negative": false,
+      "text": "How should secrets be managed in the codebase?"
+    },
+    {
+      "category": "workflow",
+      "id": "workflow-edit-test-cycle:q0",
+      "negative": false,
+      "text": "What is the typical workflow pattern when editing code?"
+    },
+    {
+      "category": "workflow",
+      "id": "workflow-pre-commit:q0",
+      "negative": false,
+      "text": "What steps happen before a git commit?"
+    },
+    {
+      "category": "workflow",
+      "id": "workflow-pre-commit:q1",
+      "negative": false,
+      "text": "Is code formatted before committing?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-overlapping-stacks:q0",
+      "negative": false,
+      "text": "What database does project Alpha use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-overlapping-stacks:q1",
+      "negative": false,
+      "text": "What database does project Beta use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-overlapping-stacks:q2",
+      "negative": false,
+      "text": "How is project Beta distributed?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-overlapping-stacks:q3",
+      "negative": false,
+      "text": "What task queue does project Alpha use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q0",
+      "negative": false,
+      "text": "What framework does the frontend repo use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q1",
+      "negative": false,
+      "text": "What framework does the backend repo use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q2",
+      "negative": false,
+      "text": "What testing tools does the frontend use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q3",
+      "negative": false,
+      "text": "What testing tools does the backend use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q4",
+      "negative": false,
+      "text": "What does Sarah work on in the frontend?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-shared-team:q5",
+      "negative": false,
+      "text": "What database does the backend use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-monorepo:q0",
+      "negative": false,
+      "text": "What port does the web package run on?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-monorepo:q1",
+      "negative": false,
+      "text": "What port does the API package run on?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-monorepo:q2",
+      "negative": false,
+      "text": "What build tool does the shared package use?"
+    },
+    {
+      "category": "isolation",
+      "id": "isolation-monorepo:q3",
+      "negative": false,
+      "text": "How many packages are in the monorepo?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-architecture:q0",
+      "negative": false,
+      "text": "How many crates does the sift project have?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-architecture:q1",
+      "negative": false,
+      "text": "What does sift-store handle?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-architecture:q2",
+      "negative": false,
+      "text": "What temporal model does sift-memory use?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-architecture:q3",
+      "negative": false,
+      "text": "What concurrency primitive does MemoryStore use for SQLite?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-architecture:q4",
+      "negative": false,
+      "text": "How does sift recall fuse search results?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-performance:q0",
+      "negative": false,
+      "text": "How long does embedding take per query?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-performance:q1",
+      "negative": false,
+      "text": "What is the total recall latency for a typical query?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-performance:q2",
+      "negative": false,
+      "text": "What is the main bottleneck in the consolidation engine?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-performance:q3",
+      "negative": false,
+      "text": "How long does consolidation take with 10K observations?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-testing-patterns:q0",
+      "negative": false,
+      "text": "How do unit tests create an isolated memory store?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-testing-patterns:q1",
+      "negative": false,
+      "text": "What do integration tests use for temporary databases?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-testing-patterns:q2",
+      "negative": false,
+      "text": "Why is HOME_MUTEX needed in tests?"
+    },
+    {
+      "category": "expertise",
+      "id": "expertise-testing-patterns:q3",
+      "negative": false,
+      "text": "What feature flag must tests pass with?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-correction-priority:q0",
+      "negative": false,
+      "text": "What is the main error handling rule for the payments service?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-correction-priority:q1",
+      "negative": false,
+      "text": "What clippy lint was added to prevent unwrap usage?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-correction-priority:q2",
+      "negative": false,
+      "text": "What crates are used for error handling?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-correction-priority:q3",
+      "negative": false,
+      "text": "What mistake was corrected in session 2?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-preference-surfacing:q0",
+      "negative": false,
+      "text": "What programming style does the user prefer for this TypeScript project?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-preference-surfacing:q1",
+      "negative": false,
+      "text": "What indentation and quote style should be used?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-preference-surfacing:q2",
+      "negative": false,
+      "text": "Should we use default exports or named exports?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-preference-surfacing:q3",
+      "negative": false,
+      "text": "Is TypeScript strict mode required?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-conflict-resolution:q0",
+      "negative": false,
+      "text": "What database does the project currently use?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-conflict-resolution:q1",
+      "negative": false,
+      "text": "What is the current connection pool size?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-conflict-resolution:q2",
+      "negative": false,
+      "text": "Why was the pool size changed to 30?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-conflict-resolution:q3",
+      "negative": false,
+      "text": "Are UUID primary keys still used?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-contextual-recall:q0",
+      "negative": false,
+      "text": "What authentication library does the auth module use?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-contextual-recall:q1",
+      "negative": false,
+      "text": "Why is the refresh token rotation custom-built?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-contextual-recall:q2",
+      "negative": false,
+      "text": "What is critical when handling Stripe webhooks?"
+    },
+    {
+      "category": "proactive",
+      "id": "proactive-contextual-recall:q3",
+      "negative": false,
+      "text": "Where are Stripe idempotency keys stored?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-framework-migration:q0",
+      "negative": false,
+      "text": "What state management library does the project use?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-framework-migration:q1",
+      "negative": false,
+      "text": "Why was Zustand chosen over Redux?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-framework-migration:q2",
+      "negative": false,
+      "text": "What testing framework is used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-framework-migration:q3",
+      "negative": false,
+      "text": "Is React still used for the frontend?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-build-tool-change:q0",
+      "negative": false,
+      "text": "What build tool does the project use?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-build-tool-change:q1",
+      "negative": false,
+      "text": "What transpiler is used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-build-tool-change:q2",
+      "negative": false,
+      "text": "What is the current production bundle size?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-build-tool-change:q3",
+      "negative": false,
+      "text": "Is webpack.config.js still used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-error-handling-pattern:q0",
+      "negative": false,
+      "text": "Should generic Error class be used for API errors?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-error-handling-pattern:q1",
+      "negative": false,
+      "text": "How should errors be handled in route handlers?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-error-handling-pattern:q2",
+      "negative": false,
+      "text": "What logging approach should be used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-version-upgrade:q0",
+      "negative": false,
+      "text": "What version of Next.js is the project using?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-version-upgrade:q1",
+      "negative": false,
+      "text": "Which router does the project use?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-version-upgrade:q2",
+      "negative": false,
+      "text": "How are API routes defined?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-version-upgrade:q3",
+      "negative": false,
+      "text": "How is data fetching done?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-version-upgrade:q4",
+      "negative": false,
+      "text": "What styling solution is used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q0",
+      "negative": false,
+      "text": "Is the application a monolith or microservices?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q1",
+      "negative": false,
+      "text": "What message broker is used for inter-service communication?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q2",
+      "negative": false,
+      "text": "Why was RabbitMQ replaced?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q3",
+      "negative": false,
+      "text": "What database pattern is used?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q4",
+      "negative": false,
+      "text": "How is the system deployed?"
+    },
+    {
+      "category": "conflict",
+      "id": "conflict-architecture-shift:q5",
+      "negative": false,
+      "text": "Is there an API gateway?"
+    }
+  ],
+  "schema_version": 1,
+  "source_version": "0.4.0"
+}

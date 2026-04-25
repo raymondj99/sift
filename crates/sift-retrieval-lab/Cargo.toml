@@ -1,0 +1,44 @@
+[package]
+name = "sift-retrieval-lab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reproducible IR-metric harness for sift retrieval. Not a runtime dependency."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+sift-core = { workspace = true }
+# sift-embed default features include "sqlite" (used for the embedding cache);
+# sift-store's error.rs references rusqlite::Error unconditionally — its
+# "sqlite" feature is effectively required even though we use only the
+# in-memory backends (FlatVectorIndex + Bm25Store).
+sift-embed = { workspace = true }
+sift-store = { workspace = true, default-features = false, features = ["sqlite"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+unicode-segmentation = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+
+[[bin]]
+name = "retrieval-lab"
+path = "src/bin/retrieval-lab.rs"
+
+[[bin]]
+name = "codingmem-transform"
+path = "src/bin/codingmem-transform.rs"

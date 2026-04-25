@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`sift-retrieval-lab` crate** — new workspace member providing a
+  reproducible IR-metric harness for sift retrieval. Single-cell runner
+  measures `(model × matryoshka dim × RRF alpha × search-mode × corpus)`
+  to TREC-standard `recall@k`, `nDCG@k`, `MRR`, and `MAP`, plus latency
+  `p50/p95/p99` with linear-interpolated percentiles (fixing the
+  `pct * len / 100` truncation bug at
+  `crates/sift-cli/src/commands/bench.rs:282` in the lab's own
+  `LatencyCollector`). Includes `codingmem-transform` binary that derives
+  a graded-relevance corpus from `evals/codingmem/scenarios.json` via
+  content-word token-set overlap with each question's answer (committed
+  to `evals/codingmem/codingmem-retrieval.json`), a Phase 0
+  hypothesis-validation suite that falsifies foundational assumptions
+  before any sweep machinery is built on top, and a `research`
+  subcommand that produces a fine-grained alpha curve, search-mode
+  comparison, and top-k saturation table. Excluded from
+  `default-members` to keep the fast default build cheap; depends on
+  `sift-core`, `sift-embed`, and `sift-store` only — explicitly **not**
+  on `sift-memory`, so the substrate measures retrieval rather than the
+  memory tier's decay/boost multipliers.
 - **Memory rebuild benchmark** — `sift bench memory-rebuild` now runs an
   opt-in ONNX-backed rebuild benchmark for the production embedding batch size,
   reporting median elapsed time and throughput so memory vector-index rebuild
