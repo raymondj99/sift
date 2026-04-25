@@ -293,8 +293,22 @@ impl Default for SearchOptions {
 }
 
 /// An embedding model that converts text to vectors.
+///
+/// Asymmetric retrieval models (Nomic, EmbeddingGemma, Snowflake Arctic, etc.)
+/// require *different* prefixes on the query side vs the document side. Earlier
+/// versions of sift hardcoded the Nomic-specific `search_query: ` /
+/// `search_document: ` strings at every call site, which would silently degrade
+/// recall the moment a different model was loaded. The trait now exposes
+/// per-model prefixes via [`Embedder::search_prefix`] / [`Embedder::document_prefix`]
+/// and the convenience methods [`Embedder::embed_query`] /
+/// [`Embedder::embed_passage`] / [`Embedder::embed_passages`] apply them
+/// automatically. New code should always go through those helpers.
 pub trait Embedder: Send + Sync {
     /// Embed a batch of texts, returning one vector per input.
+    ///
+    /// Callers that already know they have a query or a passage should prefer
+    /// [`Embedder::embed_query`] / [`Embedder::embed_passages`] so per-model
+    /// prefixes are applied automatically.
     fn embed_batch(&self, texts: &[&str]) -> SiftResult<Vec<Vec<f32>>>;
 
     /// Embed a single text.
@@ -310,11 +324,176 @@ pub trait Embedder: Send + Sync {
 
     /// Model name.
     fn model_name(&self) -> &str;
+
+    /// Prefix prepended to *query* texts before embedding, e.g. Nomic's
+    /// `"search_query: "`. Default is empty for symmetric models.
+    ///
+    /// Returns `&'static str` because the registered models' prefixes are
+    /// compiled in via [`crate::Embedder`] implementations. Implementors
+    /// that need runtime-configurable prefixes should box the strings and
+    /// expose them via a different mechanism.
+    fn search_prefix(&self) -> &'static str {
+        ""
+    }
+
+    /// Prefix prepended to *document* / *passage* texts before embedding,
+    /// e.g. Nomic's `"search_document: "`. Default is empty for symmetric
+    /// models.
+    fn document_prefix(&self) -> &'static str {
+        ""
+    }
+
+    /// Embed a single query, applying [`Embedder::search_prefix`] automatically.
+    fn embed_query(&self, text: &str) -> SiftResult<Vec<f32>> {
+        let prefix = self.search_prefix();
+        if prefix.is_empty() {
+            self.embed(text)
+        } else {
+            self.embed(&format!("{prefix}{text}"))
+        }
+    }
+
+    /// Embed a single passage / document chunk, applying
+    /// [`Embedder::document_prefix`] automatically.
+    fn embed_passage(&self, text: &str) -> SiftResult<Vec<f32>> {
+        let prefix = self.document_prefix();
+        if prefix.is_empty() {
+            self.embed(text)
+        } else {
+            self.embed(&format!("{prefix}{text}"))
+        }
+    }
+
+    /// Embed a batch of passages / document chunks with the document prefix.
+    fn embed_passages(&self, texts: &[&str]) -> SiftResult<Vec<Vec<f32>>> {
+        let prefix = self.document_prefix();
+        if prefix.is_empty() {
+            return self.embed_batch(texts);
+        }
+        let prefixed: Vec<String> = texts.iter().map(|t| format!("{prefix}{t}")).collect();
+        let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
+        self.embed_batch(&refs)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mock embedder that records every call to `embed_batch` so tests can
+    /// inspect whether the per-model prefixes were applied. Returns dummy
+    /// vectors derived from the input length so equality tests are stable.
+    struct MockEmbedder {
+        captured: std::sync::Mutex<Vec<String>>,
+        search_prefix: &'static str,
+        document_prefix: &'static str,
+    }
+
+    impl MockEmbedder {
+        fn new(search_prefix: &'static str, document_prefix: &'static str) -> Self {
+            Self {
+                captured: std::sync::Mutex::new(Vec::new()),
+                search_prefix,
+                document_prefix,
+            }
+        }
+
+        fn captured(&self) -> Vec<String> {
+            self.captured.lock().unwrap().clone()
+        }
+    }
+
+    impl Embedder for MockEmbedder {
+        fn embed_batch(&self, texts: &[&str]) -> SiftResult<Vec<Vec<f32>>> {
+            let mut captured = self.captured.lock().unwrap();
+            for t in texts {
+                captured.push((*t).to_string());
+            }
+            Ok(texts.iter().map(|t| vec![t.len() as f32]).collect())
+        }
+        fn dimensions(&self) -> usize {
+            1
+        }
+        // The trait keeps `model_name -> &str` (real impls store a `String`)
+        // so a literal here triggers `unnecessary_literal_bound`. Allow it
+        // for the test mock — the alternative would be a leaked `String`
+        // just to satisfy the lint.
+        #[allow(clippy::unnecessary_literal_bound)]
+        fn model_name(&self) -> &str {
+            "mock"
+        }
+        fn search_prefix(&self) -> &'static str {
+            self.search_prefix
+        }
+        fn document_prefix(&self) -> &'static str {
+            self.document_prefix
+        }
+    }
+
+    #[test]
+    fn embed_query_prepends_search_prefix() {
+        let m = MockEmbedder::new("search_query: ", "search_document: ");
+        let _ = m.embed_query("hello").unwrap();
+        assert_eq!(m.captured(), vec!["search_query: hello"]);
+    }
+
+    #[test]
+    fn embed_passage_prepends_document_prefix() {
+        let m = MockEmbedder::new("search_query: ", "search_document: ");
+        let _ = m.embed_passage("world").unwrap();
+        assert_eq!(m.captured(), vec!["search_document: world"]);
+    }
+
+    #[test]
+    fn embed_passages_prepends_to_each() {
+        let m = MockEmbedder::new("Q: ", "D: ");
+        let _ = m.embed_passages(&["a", "b", "c"]).unwrap();
+        assert_eq!(m.captured(), vec!["D: a", "D: b", "D: c"]);
+    }
+
+    #[test]
+    fn embed_query_with_empty_prefix_skips_format_allocation() {
+        // Symmetric models (BGE-M3, EmbeddingGemma's neutral case) use empty
+        // prefixes. The trait default fast-paths empty prefixes through
+        // `embed` directly without an extra allocation, but the captured
+        // string must still match the original input bit-for-bit.
+        let m = MockEmbedder::new("", "");
+        let _ = m.embed_query("plain").unwrap();
+        let _ = m.embed_passage("text").unwrap();
+        assert_eq!(m.captured(), vec!["plain", "text"]);
+    }
+
+    #[test]
+    fn embed_passages_with_empty_prefix_uses_batch_directly() {
+        // With an empty prefix, embed_passages must dispatch to embed_batch
+        // without allocating prefixed strings.
+        let m = MockEmbedder::new("", "");
+        let _ = m.embed_passages(&["one", "two"]).unwrap();
+        assert_eq!(m.captured(), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn default_embedder_prefixes_are_empty() {
+        // A trait impl that doesn't override search_prefix / document_prefix
+        // must report the empty string — otherwise asymmetric models would
+        // silently double-prefix on legacy call sites.
+        struct Bare;
+        impl Embedder for Bare {
+            fn embed_batch(&self, texts: &[&str]) -> SiftResult<Vec<Vec<f32>>> {
+                Ok(texts.iter().map(|_| vec![0.0]).collect())
+            }
+            fn dimensions(&self) -> usize {
+                1
+            }
+            #[allow(clippy::unnecessary_literal_bound)]
+            fn model_name(&self) -> &str {
+                "bare"
+            }
+        }
+        let b = Bare;
+        assert_eq!(b.search_prefix(), "");
+        assert_eq!(b.document_prefix(), "");
+    }
 
     #[test]
     fn test_search_options_default_context_is_false() {

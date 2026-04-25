@@ -44,6 +44,18 @@ pub struct OnnxEmbedder {
     max_tokens: usize,
     pooling: PoolingStrategy,
     output_tensor: &'static str,
+    /// Per-spec query prefix (e.g. Nomic's `"search_query: "`). Empty for
+    /// symmetric models. Surfaced via [`sift_core::Embedder::search_prefix`]
+    /// so call sites can use [`sift_core::Embedder::embed_query`] without
+    /// hardcoding the model's expected string.
+    search_prefix: &'static str,
+    /// Per-spec document prefix (e.g. Nomic's `"search_document: "`). Empty
+    /// for symmetric models.
+    document_prefix: &'static str,
+    /// Optional Matryoshka truncation. `Some(d)` truncates the pooled vector
+    /// to the first `d` dimensions and renormalizes; `None` keeps the
+    /// model's native dimensionality.
+    truncate_dim: Option<usize>,
 }
 
 impl OnnxEmbedder {
@@ -55,6 +67,8 @@ impl OnnxEmbedder {
             8192,
             PoolingStrategy::MeanPooling,
             "last_hidden_state",
+            "",
+            "",
         )
     }
 
@@ -66,9 +80,38 @@ impl OnnxEmbedder {
             model.max_tokens,
             model.pooling,
             model.output_tensor,
+            model.search_prefix,
+            model.document_prefix,
         )
     }
 
+    /// Same as [`Self::load_model`] but truncates the output to the first
+    /// `truncate_dim` dimensions (Matryoshka). Returns an error if the model
+    /// does not declare `truncate_dim` in its `matryoshka_dims` list.
+    pub fn load_model_with_truncation(
+        model_dir: &Path,
+        model: &ModelSpec,
+        truncate_dim: usize,
+    ) -> SiftResult<Self> {
+        if !model.matryoshka_dims.contains(&truncate_dim) {
+            return Err(sift_core::SiftError::Embedding(format!(
+                "Model '{}' does not support Matryoshka dimension {}. Supported: {:?}",
+                model.name, truncate_dim, model.matryoshka_dims
+            )));
+        }
+        if truncate_dim > model.dimensions {
+            return Err(sift_core::SiftError::Embedding(format!(
+                "truncate_dim {} exceeds model native dim {}",
+                truncate_dim, model.dimensions
+            )));
+        }
+        let mut embedder = Self::load_model(model_dir, model)?;
+        embedder.truncate_dim = Some(truncate_dim);
+        embedder.dimensions = truncate_dim;
+        Ok(embedder)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn load_with_options(
         model_dir: &Path,
         model_name: &str,
@@ -76,6 +119,8 @@ impl OnnxEmbedder {
         max_tokens: usize,
         pooling: PoolingStrategy,
         output_tensor: &'static str,
+        search_prefix: &'static str,
+        document_prefix: &'static str,
     ) -> SiftResult<Self> {
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -123,6 +168,9 @@ impl OnnxEmbedder {
             max_tokens,
             pooling,
             output_tensor,
+            search_prefix,
+            document_prefix,
+            truncate_dim: None,
         })
     }
 
@@ -343,6 +391,22 @@ impl Embedder for OnnxEmbedder {
             }
         };
 
+        // Matryoshka truncation. The pooled vectors above are L2-normalized;
+        // truncating breaks unit length, so we renormalize. Models trained
+        // with MRL keep most semantic content in the leading dimensions, so
+        // a truncated-then-renormalized vector remains a valid embedding.
+        if let Some(target_dim) = self.truncate_dim {
+            let truncated: Vec<Vec<f32>> = results
+                .into_iter()
+                .map(|mut v| {
+                    v.truncate(target_dim);
+                    l2_normalize_in_place(&mut v);
+                    v
+                })
+                .collect();
+            return Ok(truncated);
+        }
+
         Ok(results)
     }
 
@@ -352,6 +416,14 @@ impl Embedder for OnnxEmbedder {
 
     fn model_name(&self) -> &str {
         &self.model_name
+    }
+
+    fn search_prefix(&self) -> &'static str {
+        self.search_prefix
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        self.document_prefix
     }
 }
 

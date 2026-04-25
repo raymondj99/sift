@@ -79,9 +79,21 @@ pub fn load_embedder(config: &Config, model_override: Option<&str>) -> Option<On
         (model_dir, model_def)
     };
 
-    match OnnxEmbedder::load_model(&model_dir, model_def) {
+    let load_result = match config.default.embedding_dim {
+        Some(dim) => OnnxEmbedder::load_model_with_truncation(&model_dir, model_def, dim),
+        None => OnnxEmbedder::load_model(&model_dir, model_def),
+    };
+
+    match load_result {
         Ok(embedder) => {
-            info!("Loaded embedding model: {}", model_def.name);
+            if let Some(dim) = config.default.embedding_dim {
+                info!(
+                    "Loaded embedding model: {} (Matryoshka truncated to {} dims)",
+                    model_def.name, dim
+                );
+            } else {
+                info!("Loaded embedding model: {}", model_def.name);
+            }
             Some(embedder)
         }
         Err(e) => {

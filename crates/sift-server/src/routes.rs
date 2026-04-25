@@ -168,7 +168,7 @@ async fn search(
     let (query_vector, effective_mode) = match (&state.embedder, requested_mode) {
         (Some(emb), mode) => {
             let vec = emb
-                .embed(&format!("search_query: {}", &params.q))
+                .embed_query(&params.q)
                 .map_err(|e| AppError::internal(format!("Embedding failed: {e}")))?;
             (vec, mode)
         }

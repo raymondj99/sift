@@ -27,7 +27,10 @@ pub fn open_engine(
     let index_dir = config.index_dir()?;
 
     #[cfg(feature = "hnsw")]
-    let vector_store = SimpleVectorStore::load_or_create(&index_dir)?;
+    let vector_store = {
+        let precision = crate::VectorPrecision::from_config(&config.search.vector_quantization);
+        SimpleVectorStore::load_or_create_with_precision(&index_dir, precision)?
+    };
     #[cfg(not(feature = "hnsw"))]
     let vector_store = SimpleVectorStore::load_or_migrate(&index_dir)?;
 

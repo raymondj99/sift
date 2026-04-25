@@ -34,7 +34,7 @@ pub use flat::{ExportEntry, FlatVectorIndex};
 #[cfg(all(not(feature = "fulltext"), feature = "fts5"))]
 pub use fts5::Fts5Store;
 #[cfg(feature = "hnsw")]
-pub use hnsw::HnswIndex;
+pub use hnsw::{HnswIndex, VectorPrecision};
 pub use hybrid::HybridSearchEngine;
 #[cfg(not(feature = "sqlite"))]
 pub use json_metadata::MetadataStore;

@@ -33,6 +33,60 @@ struct EntryMeta {
     byte_range: Option<(u64, u64)>,
 }
 
+/// Vector storage precision for HNSW. Maps to usearch `ScalarKind`.
+///
+/// `F32` is the default (no quantization). `F16` halves memory at near-zero
+/// quality cost. `I8` is 4× smaller than F32 and typically retains ~99% of
+/// retrieval quality on normalized embeddings. `B1` (binary) is 32× smaller
+/// but loses noticeable quality and should be paired with an F32 rescore
+/// pass for production use (not yet wired).
+///
+/// Selected via `[search.vector_quantization]` in `~/.sift/config.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VectorPrecision {
+    /// Full-precision 32-bit float — the default.
+    #[default]
+    F32,
+    /// Half-precision 16-bit float.
+    F16,
+    /// 8-bit signed integer quantization. ~4× memory reduction vs F32.
+    I8,
+    /// 1-bit binary quantization. ~32× memory reduction vs F32.
+    B1,
+}
+
+impl VectorPrecision {
+    /// Parse from a config string. Unknown strings fall back to F32 with no
+    /// error so a typo in `config.toml` doesn't brick a user's index.
+    pub fn from_config(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "f32" | "float32" | "" => Self::F32,
+            "f16" | "float16" | "half" => Self::F16,
+            "i8" | "int8" => Self::I8,
+            "b1" | "binary" | "bit" => Self::B1,
+            _ => Self::F32,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F16 => "f16",
+            Self::I8 => "i8",
+            Self::B1 => "b1",
+        }
+    }
+
+    fn to_scalar_kind(self) -> ScalarKind {
+        match self {
+            Self::F32 => ScalarKind::F32,
+            Self::F16 => ScalarKind::F16,
+            Self::I8 => ScalarKind::I8,
+            Self::B1 => ScalarKind::B1,
+        }
+    }
+}
+
 /// Inner mutable state protected by a mutex.
 struct HnswInner {
     /// USearch HNSW index.
@@ -45,6 +99,10 @@ struct HnswInner {
     uri_to_labels: HashMap<String, Vec<u64>>,
     /// Dimensionality (set on first insert, 0 until then).
     dimensions: usize,
+    /// Storage precision for vectors inside the usearch index. Stays fixed
+    /// for the lifetime of an index — re-created on first insert if the
+    /// dimensions weren't yet known.
+    precision: VectorPrecision,
 }
 
 /// Approximate nearest-neighbour vector index backed by USearch HNSW.
@@ -56,10 +114,15 @@ pub struct HnswIndex {
 }
 
 impl HnswIndex {
-    /// Create a fresh, empty index. Dimensionality is determined on the first
-    /// insert.
+    /// Create a fresh, empty index at the default F32 precision.
+    /// Dimensionality is determined on the first insert.
     pub fn new() -> Self {
-        let options = Self::default_options(0);
+        Self::new_with_precision(VectorPrecision::F32)
+    }
+
+    /// Create a fresh, empty index with the given vector precision.
+    pub fn new_with_precision(precision: VectorPrecision) -> Self {
+        let options = Self::default_options(0, precision);
         let index = Index::new(&options).expect("usearch: failed to create empty index");
         Self {
             inner: Mutex::new(HnswInner {
@@ -68,16 +131,17 @@ impl HnswIndex {
                 meta: HashMap::new(),
                 uri_to_labels: HashMap::new(),
                 dimensions: 0,
+                precision,
             }),
         }
     }
 
-    /// Build default `IndexOptions` for the given dimensionality.
-    fn default_options(dimensions: usize) -> IndexOptions {
+    /// Build default `IndexOptions` for the given dimensionality and precision.
+    fn default_options(dimensions: usize, precision: VectorPrecision) -> IndexOptions {
         IndexOptions {
             dimensions,
             metric: MetricKind::Cos,
-            quantization: ScalarKind::F32,
+            quantization: precision.to_scalar_kind(),
             connectivity: DEFAULT_M,
             expansion_add: DEFAULT_EF_CONSTRUCTION,
             expansion_search: DEFAULT_EF_SEARCH,
@@ -85,9 +149,12 @@ impl HnswIndex {
         }
     }
 
-    /// Create a new index with known dimensionality.
-    fn new_with_dimensions(dimensions: usize) -> SiftResult<Self> {
-        let options = Self::default_options(dimensions);
+    /// Create a new index with known dimensionality and precision.
+    fn new_with_dimensions_and_precision(
+        dimensions: usize,
+        precision: VectorPrecision,
+    ) -> SiftResult<Self> {
+        let options = Self::default_options(dimensions, precision);
         let index = Index::new(&options)
             .map_err(|e| SiftError::Storage(format!("usearch: create index: {e}")))?;
         Ok(Self {
@@ -97,6 +164,7 @@ impl HnswIndex {
                 meta: HashMap::new(),
                 uri_to_labels: HashMap::new(),
                 dimensions,
+                precision,
             }),
         })
     }
@@ -113,8 +181,22 @@ impl HnswIndex {
     }
 
     /// Load an existing HNSW index from `index_dir`, migrate from flat if
-    /// necessary, or create a new empty index.
+    /// necessary, or create a new empty index. Defaults to F32 precision —
+    /// callers wanting `i8` quantization should use
+    /// [`Self::load_or_create_with_precision`].
     pub fn load_or_create(index_dir: &std::path::Path) -> SiftResult<Self> {
+        Self::load_or_create_with_precision(index_dir, VectorPrecision::F32)
+    }
+
+    /// Same as [`Self::load_or_create`] but with explicit storage precision.
+    /// On *existing* indexes the on-disk precision wins (so users can't break
+    /// recall by changing the config under a populated index); the requested
+    /// precision only applies when creating a new empty index or migrating
+    /// from the flat backend.
+    pub fn load_or_create_with_precision(
+        index_dir: &std::path::Path,
+        precision: VectorPrecision,
+    ) -> SiftResult<Self> {
         let hnsw_path = index_dir.join(HNSW_INDEX_FILE);
         let meta_path = index_dir.join(HNSW_META_FILE);
 
@@ -126,9 +208,12 @@ impl HnswIndex {
         // 2. Try migrating from FlatVectorIndex.
         let flat_path = index_dir.join(FLAT_BIN_FILE);
         if flat_path.exists() {
-            tracing::info!("Migrating flat vector index -> HNSW");
+            tracing::info!(
+                "Migrating flat vector index -> HNSW (precision: {})",
+                precision.as_str()
+            );
             let flat = FlatVectorIndex::load(&flat_path)?;
-            let hnsw = Self::migrate_from_flat(&flat)?;
+            let hnsw = Self::migrate_from_flat_with_precision(&flat, precision)?;
             hnsw.save_to(index_dir)?;
             return Ok(hnsw);
         }
@@ -136,17 +221,20 @@ impl HnswIndex {
         // 3. Also try JSON migration path.
         let json_path = index_dir.join("vectors.json");
         if json_path.exists() {
-            tracing::info!("Migrating vectors.json -> HNSW");
+            tracing::info!(
+                "Migrating vectors.json -> HNSW (precision: {})",
+                precision.as_str()
+            );
             let flat = FlatVectorIndex::load_json(&json_path)?;
-            let hnsw = Self::migrate_from_flat(&flat)?;
+            let hnsw = Self::migrate_from_flat_with_precision(&flat, precision)?;
             hnsw.save_to(index_dir)?;
             let bak_path = index_dir.join("vectors.json.bak");
             std::fs::rename(&json_path, &bak_path)?;
             return Ok(hnsw);
         }
 
-        // 4. Empty index.
-        Ok(Self::new())
+        // 4. Empty index — honour the requested precision.
+        Ok(Self::new_with_precision(precision))
     }
 
     /// Load HNSW index + sidecar metadata from `index_dir`.
@@ -171,8 +259,9 @@ impl HnswIndex {
         }
 
         // Infer dimensions from any entry's vector (we will get it from the loaded index).
-        // Create options with 0 dimensions; load will override.
-        let options = Self::default_options(0);
+        // Create options with 0 dimensions and F32 precision; load() reads the
+        // on-disk precision from the saved index.
+        let options = Self::default_options(0, VectorPrecision::F32);
         let index = Index::new(&options)
             .map_err(|e| SiftError::Storage(format!("usearch: create for load: {e}")))?;
 
@@ -192,6 +281,9 @@ impl HnswIndex {
                 meta,
                 uri_to_labels,
                 dimensions,
+                // On reload we don't know the actual precision (usearch handles
+                // it internally); default to F32 for any subsequent rebuild.
+                precision: VectorPrecision::F32,
             }),
         })
     }
@@ -218,15 +310,25 @@ impl HnswIndex {
         Ok(())
     }
 
-    /// Build an `HnswIndex` from all entries in a `FlatVectorIndex`.
+    /// Build an `HnswIndex` from all entries in a `FlatVectorIndex` at default
+    /// F32 precision.
     pub fn migrate_from_flat(flat: &FlatVectorIndex) -> SiftResult<Self> {
+        Self::migrate_from_flat_with_precision(flat, VectorPrecision::F32)
+    }
+
+    /// Build an `HnswIndex` from all entries in a `FlatVectorIndex` at the
+    /// given vector precision.
+    pub fn migrate_from_flat_with_precision(
+        flat: &FlatVectorIndex,
+        precision: VectorPrecision,
+    ) -> SiftResult<Self> {
         let entries = flat.export_all()?;
         if entries.is_empty() {
-            return Ok(Self::new());
+            return Ok(Self::new_with_precision(precision));
         }
 
         let dim = entries[0].vector.len();
-        let hnsw = Self::new_with_dimensions(dim)?;
+        let hnsw = Self::new_with_dimensions_and_precision(dim, precision)?;
 
         // Convert entries to EmbeddedChunks for insert.
         let chunks: Vec<EmbeddedChunk> = entries
@@ -255,8 +357,9 @@ impl HnswIndex {
     /// mismatch.
     fn ensure_dimensions(inner: &mut HnswInner, dim: usize) -> SiftResult<()> {
         if inner.dimensions == 0 {
-            // First insert - reinitialize with correct dimensions.
-            let options = Self::default_options(dim);
+            // First insert - reinitialize with correct dimensions while
+            // preserving the configured precision.
+            let options = Self::default_options(dim, inner.precision);
             let index = Index::new(&options)
                 .map_err(|e| SiftError::Storage(format!("usearch: create: {e}")))?;
             inner.index = index;
@@ -808,5 +911,92 @@ mod tests {
         // Only b.txt should remain.
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].uri, "file:///b.txt");
+    }
+
+    #[test]
+    fn test_vector_precision_from_config_strings() {
+        assert_eq!(VectorPrecision::from_config("f32"), VectorPrecision::F32);
+        assert_eq!(VectorPrecision::from_config("F32"), VectorPrecision::F32);
+        assert_eq!(
+            VectorPrecision::from_config("float32"),
+            VectorPrecision::F32
+        );
+        assert_eq!(VectorPrecision::from_config(""), VectorPrecision::F32);
+        assert_eq!(VectorPrecision::from_config("i8"), VectorPrecision::I8);
+        assert_eq!(VectorPrecision::from_config("int8"), VectorPrecision::I8);
+        assert_eq!(VectorPrecision::from_config("f16"), VectorPrecision::F16);
+        assert_eq!(VectorPrecision::from_config("b1"), VectorPrecision::B1);
+        assert_eq!(VectorPrecision::from_config("binary"), VectorPrecision::B1);
+        // Unknown values must fall back to F32 silently rather than panicking
+        assert_eq!(
+            VectorPrecision::from_config("garbage"),
+            VectorPrecision::F32
+        );
+    }
+
+    /// Build a deterministic dataset of `n` 32-dim unit vectors, returns the
+    /// vectors and the EmbeddedChunks ready to insert.
+    fn make_synthetic_corpus(n: usize) -> Vec<EmbeddedChunk> {
+        (0..n)
+            .map(|i| {
+                // Spread vectors deterministically across the unit sphere so
+                // each one has a clear nearest neighbour (itself).
+                let mut v = vec![0.0f32; 32];
+                v[i % 32] = 1.0;
+                // Add small unique perturbation so vectors aren't identical.
+                v[(i + 1) % 32] = 0.1 * (i as f32 % 7.0);
+                let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                for x in &mut v {
+                    *x /= norm;
+                }
+                make_chunk_with_vec(&format!("file:///doc{i}.txt"), "text", 0, v)
+            })
+            .collect()
+    }
+
+    /// Cross-check Recall@1 between F32 and I8 indexes on the same data. I8
+    /// should retain at least 80% of F32's Recall@1 — the documented MRL/INT8
+    /// papers report ~99% retention on real embeddings, but this synthetic
+    /// dataset uses sparse one-hot-like vectors which are harder for INT8 to
+    /// represent so we set a conservative bar.
+    #[test]
+    fn test_int8_quantization_recall_close_to_f32() {
+        let chunks = make_synthetic_corpus(50);
+
+        let index_f32 = HnswIndex::new_with_precision(VectorPrecision::F32);
+        index_f32.insert(&chunks).unwrap();
+
+        let index_i8 = HnswIndex::new_with_precision(VectorPrecision::I8);
+        index_i8.insert(&chunks).unwrap();
+
+        let mut hits_f32 = 0usize;
+        let mut hits_i8 = 0usize;
+        for (i, c) in chunks.iter().enumerate() {
+            let r_f32 = index_f32.search(&c.vector, 1).unwrap();
+            let r_i8 = index_i8.search(&c.vector, 1).unwrap();
+            let expected_uri = format!("file:///doc{i}.txt");
+            if r_f32.first().is_some_and(|r| r.uri == expected_uri) {
+                hits_f32 += 1;
+            }
+            if r_i8.first().is_some_and(|r| r.uri == expected_uri) {
+                hits_i8 += 1;
+            }
+        }
+
+        let n = chunks.len() as f32;
+        let r1_f32 = hits_f32 as f32 / n;
+        let r1_i8 = hits_i8 as f32 / n;
+        let ratio = if r1_f32 > 0.0 { r1_i8 / r1_f32 } else { 0.0 };
+
+        eprintln!(
+            "int8 vs f32 Recall@1: {r1_i8:.3} / {r1_f32:.3} = {ratio:.3} (n={})",
+            chunks.len()
+        );
+
+        assert!(r1_f32 > 0.5, "f32 baseline degenerate: {r1_f32}");
+        assert!(
+            ratio >= 0.80,
+            "i8 Recall@1 ratio {ratio:.3} below 0.80 threshold (i8={r1_i8:.3} f32={r1_f32:.3})"
+        );
     }
 }

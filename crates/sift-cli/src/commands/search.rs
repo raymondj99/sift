@@ -42,7 +42,7 @@ pub fn run(
     #[cfg(feature = "embeddings")]
     let (query_vector, effective_mode) = match (&embedder, options.mode) {
         (Some(emb), mode) => {
-            let vec = emb.embed(&format!("search_query: {}", &options.query))?;
+            let vec = emb.embed_query(&options.query)?;
             (vec, mode)
         }
         (None, SearchMode::VectorOnly) => {

@@ -2657,8 +2657,7 @@ impl MemoryStore {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
-                let prefixed = format!("search_document: {text}");
-                match embedder.embed(&prefixed) {
+                match embedder.embed_passage(text) {
                     Ok(vec) => return vec,
                     Err(e) => {
                         warn!("Embedding failed for observation: {e}");
@@ -2682,13 +2681,8 @@ impl MemoryStore {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
-                let prefixed: Vec<String> = texts
-                    .iter()
-                    .map(|text| format!("search_document: {text}"))
-                    .collect();
-                let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
-
-                let vectors = embedder.embed_batch(&refs).map_err(|e| {
+                let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+                let vectors = embedder.embed_passages(&refs).map_err(|e| {
                     MemoryError::Storage(sift_core::SiftError::Embedding(format!(
                         "Batch embedding failed for {} observations: {e}",
                         texts.len()
@@ -2718,8 +2712,7 @@ impl MemoryStore {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
-                let prefixed = format!("search_query: {query}");
-                match embedder.embed(&prefixed) {
+                match embedder.embed_query(query) {
                     Ok(vec) => return (vec, sift_core::SearchMode::Hybrid),
                     Err(e) => {
                         warn!("Query embedding failed: {e}. Using keyword-only.");

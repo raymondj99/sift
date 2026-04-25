@@ -35,6 +35,13 @@ pub struct DefaultConfig {
     /// Leave unset to use the auto-detected `~/.sift/models/ort/` location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ort_dylib_path: Option<PathBuf>,
+    /// Optional Matryoshka truncation. When set, the embedder truncates
+    /// pooled vectors to the first N dimensions and renormalizes. Must be
+    /// in the active model's `matryoshka_dims` list, otherwise the embedder
+    /// fails to load. Set to `None` (omit from config) to keep the model's
+    /// native dimensionality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dim: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +58,14 @@ pub struct SearchConfig {
     pub hybrid_alpha: f32,
     #[serde(default = "SearchConfig::default_rerank")]
     pub rerank: bool,
+    /// Vector storage precision for the HNSW index. One of `"f32"` (default,
+    /// no quantization), `"f16"` (~2× memory savings), `"i8"` (~4× memory
+    /// savings, ~99% retrieval quality on normalized embeddings), or `"b1"`
+    /// (~32× memory savings, ~92% quality without rescore). Setting this on
+    /// an existing populated index has no effect — the on-disk precision is
+    /// preserved. Only takes effect when creating a fresh index.
+    #[serde(default = "SearchConfig::default_vector_quantization")]
+    pub vector_quantization: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +271,9 @@ impl Config {
                     .ort_dylib_path
                     .clone_from(&other.default.ort_dylib_path);
             }
+            if default_table.contains_key("embedding_dim") {
+                merged.default.embedding_dim = other.default.embedding_dim;
+            }
         }
 
         if let Some(search_table) = specified.get("search").and_then(|v| v.as_table()) {
@@ -267,6 +285,12 @@ impl Config {
             }
             if search_table.contains_key("rerank") {
                 merged.search.rerank = other.search.rerank;
+            }
+            if search_table.contains_key("vector_quantization") {
+                merged
+                    .search
+                    .vector_quantization
+                    .clone_from(&other.search.vector_quantization);
             }
         }
 
@@ -389,6 +413,30 @@ impl Config {
                 "max_results must be greater than 0".into(),
             ));
         }
+        // Reject typos in vector_quantization at config-load time so the user
+        // gets a clear error rather than a silent fallback to F32.
+        match self
+            .search
+            .vector_quantization
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "f32" | "float32" | "" | "f16" | "float16" | "half" | "i8" | "int8" | "b1"
+            | "binary" | "bit" => {}
+            other => {
+                return Err(crate::SiftError::Config(format!(
+                    "search.vector_quantization '{other}' is not recognized. \
+                     Valid: \"f32\" | \"f16\" | \"i8\" | \"b1\""
+                )));
+            }
+        }
+        if let Some(dim) = self.default.embedding_dim {
+            if dim == 0 {
+                return Err(crate::SiftError::Config(
+                    "default.embedding_dim must be greater than 0 when set".into(),
+                ));
+            }
+        }
         if self.memory.decay_rate < 0.0 {
             return Err(crate::SiftError::Config(
                 "memory.decay_rate must be non-negative".into(),
@@ -454,9 +502,11 @@ impl Config {
                 .ort_dylib_path
                 .as_ref()
                 .map(|p| p.display().to_string()),
+            "default.embedding_dim" => self.default.embedding_dim.map(|d| d.to_string()),
             "search.max_results" => Some(self.search.max_results.to_string()),
             "search.hybrid_alpha" => Some(self.search.hybrid_alpha.to_string()),
             "search.rerank" => Some(self.search.rerank.to_string()),
+            "search.vector_quantization" => Some(self.search.vector_quantization.clone()),
             "server.host" => Some(self.server.host.clone()),
             "server.port" => Some(self.server.port.to_string()),
             "ignore.patterns" => Some(
@@ -527,6 +577,7 @@ impl Default for DefaultConfig {
             max_file_size: Self::default_max_file_size(),
             jobs: 0,
             ort_dylib_path: None,
+            embedding_dim: None,
         }
     }
 }
@@ -562,6 +613,9 @@ impl SearchConfig {
     fn default_rerank() -> bool {
         true
     }
+    fn default_vector_quantization() -> String {
+        "f32".to_string()
+    }
 }
 
 impl Default for SearchConfig {
@@ -570,6 +624,7 @@ impl Default for SearchConfig {
             max_results: Self::default_max_results(),
             hybrid_alpha: Self::default_hybrid_alpha(),
             rerank: Self::default_rerank(),
+            vector_quantization: Self::default_vector_quantization(),
         }
     }
 }
@@ -782,9 +837,104 @@ patterns = ["*.log"]
         assert!(config.get_value("search.max_results").is_some());
         assert!(config.get_value("search.hybrid_alpha").is_some());
         assert!(config.get_value("search.rerank").is_some());
+        assert!(config.get_value("search.vector_quantization").is_some());
         assert!(config.get_value("server.host").is_some());
         assert!(config.get_value("server.port").is_some());
         assert!(config.get_value("ignore.patterns").is_some());
+    }
+
+    #[test]
+    fn test_get_value_embedding_dim_some_returns_value() {
+        let mut config = Config::default();
+        config.default.embedding_dim = Some(256);
+        assert_eq!(config.get_value("default.embedding_dim").unwrap(), "256");
+    }
+
+    #[test]
+    fn test_get_value_embedding_dim_none_returns_none() {
+        let config = Config::default();
+        assert!(config.default.embedding_dim.is_none());
+        assert!(config.get_value("default.embedding_dim").is_none());
+    }
+
+    #[test]
+    fn test_get_value_vector_quantization_default_is_f32() {
+        let config = Config::default();
+        assert_eq!(
+            config.get_value("search.vector_quantization").unwrap(),
+            "f32"
+        );
+    }
+
+    #[test]
+    fn test_validate_vector_quantization_accepts_known_values() {
+        for value in [
+            "f32", "F32", "float32", "f16", "half", "i8", "int8", "b1", "binary", "",
+        ] {
+            let mut config = Config::default();
+            config.search.vector_quantization = value.to_string();
+            assert!(
+                config.validate().is_ok(),
+                "vector_quantization='{value}' should validate"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_vector_quantization_rejects_unknown() {
+        let mut config = Config::default();
+        config.search.vector_quantization = "garbage".into();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("vector_quantization"));
+        assert!(err.contains("garbage"));
+    }
+
+    #[test]
+    fn test_validate_embedding_dim_zero_rejected() {
+        let mut config = Config::default();
+        config.default.embedding_dim = Some(0);
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("embedding_dim"));
+    }
+
+    #[test]
+    fn test_validate_embedding_dim_some_positive_accepted() {
+        let mut config = Config::default();
+        config.default.embedding_dim = Some(256);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_merge_vector_quantization_from_specified() {
+        let base = Config::default();
+        let mut overlay = Config::default();
+        overlay.search.vector_quantization = "i8".into();
+        let specified: toml::Table = "[search]\nvector_quantization = \"i8\"\n".parse().unwrap();
+        let merged = base.merge(&overlay, &specified);
+        assert_eq!(merged.search.vector_quantization, "i8");
+    }
+
+    #[test]
+    fn test_merge_embedding_dim_from_specified() {
+        let base = Config::default();
+        let mut overlay = Config::default();
+        overlay.default.embedding_dim = Some(256);
+        let specified: toml::Table = "[default]\nembedding_dim = 256\n".parse().unwrap();
+        let merged = base.merge(&overlay, &specified);
+        assert_eq!(merged.default.embedding_dim, Some(256));
+    }
+
+    #[test]
+    fn test_merge_skips_unspecified_vector_quantization() {
+        // If the user only sets `hybrid_alpha`, the default `vector_quantization`
+        // must survive the merge — otherwise an empty overlay would silently
+        // drop the on-disk precision.
+        let base = Config::default();
+        let mut overlay = Config::default();
+        overlay.search.vector_quantization = "i8".into(); // overlay tries to override
+        let specified: toml::Table = "[search]\nhybrid_alpha = 0.5\n".parse().unwrap();
+        let merged = base.merge(&overlay, &specified);
+        assert_eq!(merged.search.vector_quantization, "f32");
     }
 
     #[test]

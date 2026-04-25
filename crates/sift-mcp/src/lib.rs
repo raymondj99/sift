@@ -1489,8 +1489,7 @@ impl SiftMcpServer {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
-                let prefixed = format!("search_query: {query}");
-                match embedder.embed(&prefixed) {
+                match embedder.embed_query(query) {
                     Ok(vec) => return (vec, mode),
                     Err(e) => {
                         tracing::warn!("Embedding failed: {e}. Falling back to keyword search.");
@@ -1507,7 +1506,7 @@ impl SiftMcpServer {
         (vec![0.0f32; 768], fallback)
     }
 
-    /// Embed text for indexing (using the "search_document:" prefix for Nomic).
+    /// Embed text for indexing using the active model's document prefix.
     /// Returns a zero vector if no embedder is available — the text will still
     /// be keyword-searchable via FTS.
     #[allow(unused_variables, clippy::unused_self)]
@@ -1515,8 +1514,7 @@ impl SiftMcpServer {
         #[cfg(feature = "embeddings")]
         {
             if let Some(ref embedder) = self.embedder {
-                let prefixed = format!("search_document: {text}");
-                match embedder.embed(&prefixed) {
+                match embedder.embed_passage(text) {
                     Ok(vec) => return vec,
                     Err(e) => {
                         tracing::warn!(

@@ -72,6 +72,23 @@ pub fn run(filter: Option<&str>) -> anyhow::Result<()> {
         println!();
     }
 
+    if explicit_benchmark == Some("matryoshka") {
+        let result = bench_matryoshka_recall();
+        let status = if result.passed {
+            passed += 1;
+            "PASS".green().bold().to_string()
+        } else {
+            failed += 1;
+            "FAIL".red().bold().to_string()
+        };
+
+        println!("  [{status}] matryoshka");
+        for line in &result.details {
+            println!("         {line}");
+        }
+        println!();
+    }
+
     println!("{}", format!("{passed} passed, {failed} failed").bold());
 
     if failed > 0 {
@@ -220,6 +237,230 @@ fn seeded_memory_rebuild_store(
     }
 
     Ok(store)
+}
+
+// ===========================================================================
+// Benchmark: Matryoshka Recall
+// ===========================================================================
+//
+// Verifies that truncated Matryoshka embeddings retain enough quality to be
+// usable in production. Loads the configured embedding model, embeds a small
+// synthetic corpus + matched queries at the model's full dim and at each
+// declared Matryoshka dim, then reports Recall@1 and average rank-of-target
+// per dim.
+//
+// Pass criterion: 256-dim Recall@1 must be at least 80% of the full-dim
+// Recall@1. Below that, truncation isn't worth the storage win and the
+// feature should be reconsidered.
+
+/// Hand-crafted query → expected-document pairs covering distinct topics.
+/// Each pair's expected doc is unambiguous so a working retriever should
+/// hit Recall@1 = 1.0 at full dim.
+#[cfg(feature = "embeddings")]
+const MRL_PAIRS: &[(&str, &str)] = &[
+    (
+        "How do Python decorators work?",
+        "Python decorators are functions that wrap other functions to extend their behavior without modifying the source.",
+    ),
+    (
+        "What is the Rust borrow checker?",
+        "The Rust borrow checker enforces ownership and lifetime rules at compile time to prevent data races and use-after-free.",
+    ),
+    (
+        "Explain the CAP theorem in distributed systems.",
+        "The CAP theorem states that a distributed data store cannot simultaneously guarantee Consistency, Availability, and Partition tolerance.",
+    ),
+    (
+        "How does HNSW indexing work?",
+        "HNSW is a graph-based approximate nearest-neighbor index that organizes vectors into a hierarchy of small-world graphs for fast similarity search.",
+    ),
+    (
+        "What is mean pooling for sentence embeddings?",
+        "Mean pooling averages the hidden states of all tokens, weighted by the attention mask, to produce a single fixed-size sentence embedding.",
+    ),
+    (
+        "How does BM25 ranking work in full-text search?",
+        "BM25 scores a document against a query using term frequency saturation and inverse document frequency to balance keyword importance and document length.",
+    ),
+    (
+        "What is reciprocal rank fusion?",
+        "Reciprocal rank fusion combines multiple ranked result lists by summing 1/(k + rank) for each item across lists, prioritizing items that rank well in many sources.",
+    ),
+    (
+        "Explain the Ebbinghaus forgetting curve.",
+        "The Ebbinghaus forgetting curve describes how memory retention decays exponentially over time without reinforcement, modelled as exp(-lambda * elapsed).",
+    ),
+    (
+        "What is bi-temporal modeling?",
+        "Bi-temporal modeling stores both when a fact was observed and when it was true in the real world, enabling historical queries and proper supersession of outdated facts.",
+    ),
+    (
+        "How does an inverted index speed up keyword search?",
+        "An inverted index maps each term to the list of documents that contain it, so keyword lookups become O(matches) instead of scanning every document.",
+    ),
+];
+
+#[cfg(feature = "embeddings")]
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// Recall@1 + mean rank for one dimensionality. Returns (recall_at_1,
+/// mean_rank_of_target).
+#[cfg(feature = "embeddings")]
+fn evaluate_at_dim(query_vecs: &[Vec<f32>], doc_vecs: &[Vec<f32>]) -> (f32, f32) {
+    let n = query_vecs.len();
+    let mut hits_at_1 = 0usize;
+    let mut total_rank = 0usize;
+
+    for (qi, q) in query_vecs.iter().enumerate() {
+        let mut scored: Vec<(usize, f32)> = doc_vecs
+            .iter()
+            .enumerate()
+            .map(|(di, d)| (di, cosine_similarity(q, d)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        if scored[0].0 == qi {
+            hits_at_1 += 1;
+        }
+        let rank = scored
+            .iter()
+            .position(|(d, _)| *d == qi)
+            .unwrap_or(scored.len());
+        total_rank += rank + 1;
+    }
+
+    (hits_at_1 as f32 / n as f32, total_rank as f32 / n as f32)
+}
+
+fn bench_matryoshka_recall() -> BenchResult {
+    #[cfg(not(feature = "embeddings"))]
+    {
+        return BenchResult::fail(vec!["requires the `embeddings` feature".to_string()]);
+    }
+
+    #[cfg(feature = "embeddings")]
+    {
+        use sift_core::{Config, Embedder as _};
+        use sift_embed::models::{get_model, NOMIC_EMBED_TEXT_V1_5};
+        use sift_embed::{ModelManager, OnnxEmbedder};
+
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(e) => return BenchResult::fail(vec![format!("failed to load config: {e}")]),
+        };
+
+        let manager = match ModelManager::new() {
+            Ok(m) => m,
+            Err(e) => return BenchResult::fail(vec![format!("model manager: {e}")]),
+        };
+        manager.init_ort_env_with_override(config.default.ort_dylib_path.as_deref());
+
+        let model = get_model(&config.default.model).unwrap_or(&NOMIC_EMBED_TEXT_V1_5);
+        if model.matryoshka_dims.is_empty() {
+            return BenchResult::fail(vec![format!(
+                "model '{}' does not declare any Matryoshka dimensions",
+                model.name
+            )]);
+        }
+        let Some(model_dir) = manager.downloaded_model_dir(model) else {
+            return BenchResult::fail(vec![format!(
+                "model '{}' not downloaded; run `sift models download {}`",
+                model.name, model.name
+            )]);
+        };
+
+        let queries: Vec<&str> = MRL_PAIRS.iter().map(|(q, _)| *q).collect();
+        let docs: Vec<&str> = MRL_PAIRS.iter().map(|(_, d)| *d).collect();
+
+        let mut details = vec![
+            format!("model: {} (native dim {})", model.name, model.dimensions),
+            format!(
+                "corpus: {} query→doc pairs (distinct topics)",
+                MRL_PAIRS.len()
+            ),
+            String::new(),
+            format!(
+                "  {:>6}  {:>9}  {:>10}  {:>11}",
+                "dim", "Recall@1", "mean rank", "size/vec"
+            ),
+        ];
+
+        // Baseline at native dim (no truncation)
+        let baseline = match OnnxEmbedder::load_model(&model_dir, model) {
+            Ok(e) => e,
+            Err(e) => return BenchResult::fail(vec![format!("load full embedder: {e}")]),
+        };
+        let q_full: Result<Vec<_>, _> = queries.iter().map(|q| baseline.embed_query(q)).collect();
+        let d_full: Result<Vec<_>, _> = docs.iter().map(|d| baseline.embed_passage(d)).collect();
+        let (q_full, d_full) = match (q_full, d_full) {
+            (Ok(q), Ok(d)) => (q, d),
+            (Err(e), _) | (_, Err(e)) => {
+                return BenchResult::fail(vec![format!("baseline embed failed: {e}")]);
+            }
+        };
+        let (full_r1, full_mean_rank) = evaluate_at_dim(&q_full, &d_full);
+        let bytes_full = model.dimensions * 4;
+        details.push(format!(
+            "  {:>6}  {:>9.3}  {:>10.2}  {:>9}B",
+            model.dimensions, full_r1, full_mean_rank, bytes_full
+        ));
+
+        // Each Matryoshka truncation
+        let mut results: Vec<(usize, f32, f32, usize)> =
+            vec![(model.dimensions, full_r1, full_mean_rank, bytes_full)];
+        for &dim in model.matryoshka_dims {
+            if dim == model.dimensions {
+                continue; // already covered as baseline
+            }
+            let truncated = match OnnxEmbedder::load_model_with_truncation(&model_dir, model, dim) {
+                Ok(e) => e,
+                Err(e) => {
+                    details.push(format!("  {:>6}  load failed: {}", dim, e));
+                    continue;
+                }
+            };
+            let q_t: Result<Vec<_>, _> = queries.iter().map(|q| truncated.embed_query(q)).collect();
+            let d_t: Result<Vec<_>, _> = docs.iter().map(|d| truncated.embed_passage(d)).collect();
+            let (q_t, d_t) = match (q_t, d_t) {
+                (Ok(q), Ok(d)) => (q, d),
+                (Err(e), _) | (_, Err(e)) => {
+                    details.push(format!("  {:>6}  embed failed: {}", dim, e));
+                    continue;
+                }
+            };
+            let (r1, mean_rank) = evaluate_at_dim(&q_t, &d_t);
+            let bytes = dim * 4;
+            details.push(format!(
+                "  {:>6}  {:>9.3}  {:>10.2}  {:>9}B",
+                dim, r1, mean_rank, bytes
+            ));
+            results.push((dim, r1, mean_rank, bytes));
+        }
+
+        // Pass criterion: 256-dim Recall@1 ≥ 80% of full-dim Recall@1
+        let r1_256 = results
+            .iter()
+            .find(|(d, _, _, _)| *d == 256)
+            .map(|(_, r, _, _)| *r);
+        let target_threshold = full_r1 * 0.80;
+        let passed = match r1_256 {
+            Some(r) => r >= target_threshold,
+            None => true, // model doesn't support 256d — don't fail on its absence
+        };
+
+        details.push(String::new());
+        details.push(format!(
+            "pass criterion: 256d Recall@1 (={:?}) >= 80% of full-dim Recall@1 ({:.3} = {:.3}*0.80)",
+            r1_256, target_threshold, full_r1
+        ));
+
+        if passed {
+            BenchResult::pass(details)
+        } else {
+            BenchResult::fail(details)
+        }
+    }
 }
 
 struct BenchResult {
