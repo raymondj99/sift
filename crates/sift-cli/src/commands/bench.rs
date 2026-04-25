@@ -89,6 +89,23 @@ pub fn run(filter: Option<&str>) -> anyhow::Result<()> {
         println!();
     }
 
+    if explicit_benchmark == Some("code-chunking") {
+        let result = bench_code_chunking();
+        let status = if result.passed {
+            passed += 1;
+            "PASS".green().bold().to_string()
+        } else {
+            failed += 1;
+            "FAIL".red().bold().to_string()
+        };
+
+        println!("  [{status}] code-chunking");
+        for line in &result.details {
+            println!("         {line}");
+        }
+        println!();
+    }
+
     println!("{}", format!("{passed} passed, {failed} failed").bold());
 
     if failed > 0 {
@@ -456,6 +473,210 @@ fn bench_matryoshka_recall() -> BenchResult {
         ));
 
         if passed {
+            BenchResult::pass(details)
+        } else {
+            BenchResult::fail(details)
+        }
+    }
+}
+
+// =============================================================================
+// bench code-chunking
+// =============================================================================
+//
+// Validates the cAST-style intra-definition recursive split (ACL 2025
+// Findings: aclanthology.org/2025.findings-emnlp.430). For each
+// hand-built oversized code sample, chunks via `CodeChunker` and
+// measures the fraction of chunks whose first content line lands at a
+// structural boundary — i.e., starts with a keyword/identifier rather
+// than mid-expression punctuation.
+//
+// This is opt-in (run with `--benchmark code-chunking`) and intentionally
+// only covers the structural metric. The retrieval-side metric (intra-
+// function Recall@1) is left for a follow-up benchmark that reuses the
+// matryoshka eval scaffolding once the corpus is large enough to give
+// signal at the `embeddings`-feature-required tier.
+//
+// Pass criterion: overall good-boundary rate >= 0.90. The pre-cAST
+// SemanticChunker fallback typically scored < 0.50 on these samples
+// because character-aligned cuts often landed mid-`let var = compute(...);`
+// or mid-method signature.
+
+#[cfg(feature = "ast")]
+const CODE_CHUNKING_SAMPLES: &[(&str, &str)] = &[
+    (
+        "rs",
+        "fn process_request(req: Request) -> Response {\n    \
+         let user_id = req.user_id;\n    \
+         let session = lookup_session(user_id);\n    \
+         if session.is_expired() {\n        return Response::unauthorized();\n    }\n    \
+         let cache = get_cache();\n    \
+         let result = match cache.get(&user_id) {\n        \
+         Some(cached) => cached.clone(),\n        \
+         None => {\n            \
+         let fresh = fetch_from_db(user_id);\n            \
+         cache.insert(user_id, fresh.clone());\n            \
+         fresh\n        \
+         }\n    \
+         };\n    \
+         let serialized = serde_json::to_string(&result).unwrap();\n    \
+         Response::ok(serialized)\n}\n",
+    ),
+    (
+        "py",
+        "class PaymentService:\n    \
+         def __init__(self, gateway):\n        \
+         self.gateway = gateway\n        \
+         self.retry_count = 3\n        \
+         self.timeout = 30\n\n    \
+         def process_payment(self, order):\n        \
+         validated = self.validate_order(order)\n        \
+         if not validated:\n            \
+         raise PaymentError(\"Invalid order\")\n        \
+         return self.gateway.charge(order)\n\n    \
+         def validate_order(self, order):\n        \
+         if order.total <= 0:\n            return False\n        \
+         if not order.customer:\n            return False\n        \
+         return True\n\n    \
+         def refund_payment(self, payment_id):\n        \
+         return self.gateway.refund(payment_id)\n",
+    ),
+    (
+        "js",
+        "class UserController {\n    \
+         constructor(db, cache) {\n        this.db = db;\n        this.cache = cache;\n    }\n\n    \
+         async fetchUser(id) {\n        \
+         const cached = await this.cache.get(id);\n        \
+         if (cached) return cached;\n        \
+         const fresh = await this.db.users.find(id);\n        \
+         await this.cache.set(id, fresh);\n        \
+         return fresh;\n    }\n\n    \
+         async updateUser(id, payload) {\n        \
+         const validated = this.validate(payload);\n        \
+         await this.db.users.update(id, validated);\n        \
+         await this.cache.invalidate(id);\n        \
+         return { id, ...validated };\n    }\n\n    \
+         validate(payload) {\n        \
+         if (!payload.email) throw new Error('email required');\n        \
+         if (!payload.name) throw new Error('name required');\n        \
+         return payload;\n    }\n}\n",
+    ),
+    (
+        "go",
+        "package main\n\n\
+         func ProcessOrder(order Order) (Response, error) {\n    \
+         user, err := lookupUser(order.UserID)\n    \
+         if err != nil {\n        return Response{}, err\n    }\n    \
+         if !user.IsActive {\n        return Response{}, ErrInactive\n    }\n    \
+         total, err := computeTotal(order.Items)\n    \
+         if err != nil {\n        return Response{}, err\n    }\n    \
+         if err := chargeUser(user, total); err != nil {\n        return Response{}, err\n    }\n    \
+         orderID, err := storeOrder(order, total)\n    \
+         if err != nil {\n        return Response{}, err\n    }\n    \
+         return Response{OrderID: orderID, Total: total}, nil\n}\n",
+    ),
+    (
+        "java",
+        "public class Calculator {\n    \
+         private int result;\n    \
+         private List<String> history;\n\n    \
+         public Calculator() {\n        this.result = 0;\n        this.history = new ArrayList<>();\n    }\n\n    \
+         public int add(int x) {\n        this.result += x;\n        this.history.add(\"add \" + x);\n        return this.result;\n    }\n\n    \
+         public int multiply(int x) {\n        this.result *= x;\n        this.history.add(\"mul \" + x);\n        return this.result;\n    }\n\n    \
+         public int reset() {\n        int prev = this.result;\n        this.result = 0;\n        this.history.add(\"reset\");\n        return prev;\n    }\n\n    \
+         public List<String> getHistory() {\n        return new ArrayList<>(this.history);\n    }\n}\n",
+    ),
+];
+
+/// Returns `true` if the chunk's first non-comment, non-blank line
+/// starts with a "structural" character — a letter, underscore,
+/// closing brace, decorator/preprocessor sigil, or `)` (Go-style
+/// chained close). False if it starts with mid-expression punctuation
+/// like `,`, `=`, `(`, `+`, `*`, etc., which signals the chunker cut
+/// inside a statement.
+#[cfg(feature = "ast")]
+fn chunk_starts_at_boundary(chunk: &str) -> bool {
+    let first = chunk
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with("//"))
+        .map_or("", str::trim_start);
+    if first.is_empty() {
+        return true;
+    }
+    let c = first.chars().next().unwrap_or(' ');
+    c.is_alphabetic() || c == '_' || c == '}' || c == ')' || c == '@' || c == '#'
+}
+
+fn bench_code_chunking() -> BenchResult {
+    #[cfg(not(feature = "ast"))]
+    {
+        return BenchResult::fail(vec!["requires the `ast` feature".to_string()]);
+    }
+
+    #[cfg(feature = "ast")]
+    {
+        use sift_chunker::CodeChunker;
+
+        // Use a tight budget so each sample produces multiple chunks and
+        // the recursive split is exercised.
+        let max_chunk_size = 120usize;
+        let chunker = CodeChunker::new(max_chunk_size, 0);
+
+        let mut details = vec![
+            format!(
+                "corpus: {} hand-built oversized samples (one per language)",
+                CODE_CHUNKING_SAMPLES.len()
+            ),
+            format!("max_chunk_size: {max_chunk_size}"),
+            String::new(),
+            format!(
+                "  {:>5}  {:>7}  {:>7}  {:>14}",
+                "lang", "bytes", "chunks", "good_bndy_rate"
+            ),
+        ];
+
+        let mut total_chunks = 0usize;
+        let mut total_good = 0usize;
+
+        for (lang, code) in CODE_CHUNKING_SAMPLES {
+            let chunks = chunker.chunk_with_language(code, Some(lang));
+            let count = chunks.len();
+            let good = chunks
+                .iter()
+                .filter(|(c, _)| chunk_starts_at_boundary(c))
+                .count();
+            let rate = if count == 0 {
+                1.0
+            } else {
+                good as f32 / count as f32
+            };
+
+            total_chunks += count;
+            total_good += good;
+
+            details.push(format!(
+                "  {:>5}  {:>7}  {:>7}  {:>14.3}",
+                lang,
+                code.len(),
+                count,
+                rate
+            ));
+        }
+
+        let overall = if total_chunks == 0 {
+            1.0
+        } else {
+            total_good as f32 / total_chunks as f32
+        };
+
+        details.push(String::new());
+        details.push(format!(
+            "overall good-boundary rate: {:.3} ({}/{})",
+            overall, total_good, total_chunks
+        ));
+        details.push("pass criterion: rate >= 0.90".to_string());
+
+        if overall >= 0.90 {
             BenchResult::pass(details)
         } else {
             BenchResult::fail(details)

@@ -63,11 +63,18 @@ impl CodeChunker {
         // Sort by byte offset
         definitions.sort_by_key(|d| d.start_byte);
 
-        // Merge adjacent small definitions into larger chunks
-        self.merge_definitions(text, &definitions)
+        // Merge adjacent small definitions into larger chunks. Pass the
+        // tree so oversized chunks can be split via the AST instead of
+        // falling back to character-based chunking.
+        self.merge_definitions(text, &definitions, &tree)
     }
 
-    fn merge_definitions(&self, text: &str, defs: &[Definition]) -> Vec<(String, usize)> {
+    fn merge_definitions(
+        &self,
+        text: &str,
+        defs: &[Definition],
+        tree: &tree_sitter::Tree,
+    ) -> Vec<(String, usize)> {
         let mut chunks: Vec<(String, usize)> = Vec::new();
         // Track which definitions contribute to each chunk so we can build scope headers.
         let mut current_start = defs[0].start_byte;
@@ -138,11 +145,39 @@ impl CodeChunker {
             }
         }
 
-        // If any chunk is still too large, split it with the fallback chunker
+        // If any chunk is still too large, split it. Prefer AST-based
+        // recursive splitting (cAST, ACL 2025) when the oversized chunk
+        // corresponds to a single identifiable definition; fall back to
+        // SemanticChunker only as a safety net for non-AST cases.
         let mut final_chunks = Vec::new();
         for (chunk_text, offset) in chunks {
             if chunk_text.len() <= self.max_chunk_size {
                 final_chunks.push((chunk_text, offset));
+                continue;
+            }
+
+            // Oversized chunks always come from a single definition: the
+            // merge phase only combines defs while their joined size is
+            // within budget, so any chunk that overruns must be one
+            // single-definition group whose `start_byte` matches a def.
+            let mut ast_split: Option<(tree_sitter::Node, Option<String>)> = None;
+            if let Some(def) = defs.iter().find(|d| d.start_byte == offset) {
+                if let Some(node) = tree
+                    .root_node()
+                    .descendant_for_byte_range(def.start_byte, def.end_byte)
+                {
+                    // Verify the re-found node is the one we meant.
+                    // `descendant_for_byte_range` returns the smallest
+                    // enclosing node, which may be a wider parent if the
+                    // def's byte range happens to match it exactly.
+                    if node.kind() == def.kind {
+                        ast_split = Some((node, def.scope_path.clone()));
+                    }
+                }
+            }
+
+            if let Some((node, scope_path)) = ast_split {
+                final_chunks.extend(self.split_node_recursively(node, text, &scope_path));
             } else {
                 let sub = crate::SemanticChunker::new(self.max_chunk_size, self.overlap);
                 for (sub_text, sub_offset) in sub.chunk(&chunk_text) {
@@ -152,6 +187,150 @@ impl CodeChunker {
         }
 
         final_chunks
+    }
+
+    /// Recursively split an oversized AST node into chunks that fit
+    /// `max_chunk_size`, preserving structural boundaries (cAST, ACL 2025
+    /// Findings).
+    ///
+    /// Algorithm:
+    /// 1. **Base case** — if the node fits the budget, emit one chunk
+    ///    with the scope-path comment header.
+    /// 2. **Transparent descent** — if exactly one named child is the
+    ///    dominant content (> 50% of the node's size), descend into it
+    ///    without emitting the small siblings as standalone chunks. This
+    ///    collapses `function_item -> block`, `class_declaration ->
+    ///    class_body`, `match_expression -> match_block`, etc. The
+    ///    wrapper's structural metadata (identifier, parameters) is
+    ///    captured by the `scope_path` instead of becoming a sliver chunk.
+    /// 3. **Greedy merge of children** — accumulate adjacent named
+    ///    siblings up to the budget. Recurse into any single child that
+    ///    itself exceeds the budget.
+    /// 4. **Last resort** — if the node has no splittable children (a
+    ///    leaf like a giant string literal) or the recursion produced
+    ///    nothing, fall back to `SemanticChunker` for that single node.
+    fn split_node_recursively(
+        &self,
+        node: tree_sitter::Node,
+        text: &str,
+        scope_path: &Option<String>,
+    ) -> Vec<(String, usize)> {
+        let node_size = node.end_byte() - node.start_byte();
+
+        // (1) Base case
+        if node_size <= self.max_chunk_size {
+            let slice = text[node.start_byte()..node.end_byte()].trim();
+            if slice.is_empty() {
+                return Vec::new();
+            }
+            return vec![(prepend_scope_comment(slice, scope_path), node.start_byte())];
+        }
+
+        // (1a) Function-like atomicity: a function/method declaration is a
+        // semantic unit. Splitting one into [signature][body] loses the
+        // signature context, which the scope_path can't fully recover
+        // (it has the parent's name but not the parameters or return
+        // type). For modest overflow (up to 2× budget), emit the whole
+        // declaration even though it exceeds `max_chunk_size`. Only
+        // recursively split functions that are massively oversized.
+        if is_method_like(node.kind()) && node_size <= self.max_chunk_size * 2 {
+            let slice = text[node.start_byte()..node.end_byte()].trim();
+            if !slice.is_empty() {
+                return vec![(prepend_scope_comment(slice, scope_path), node.start_byte())];
+            }
+        }
+
+        let mut cursor = node.walk();
+        let children: Vec<tree_sitter::Node> = node.named_children(&mut cursor).collect();
+
+        if children.is_empty() {
+            return self.character_split_node(node, text, scope_path);
+        }
+
+        // (2) Transparent descent into a dominant child
+        let dominant: Vec<tree_sitter::Node> = children
+            .iter()
+            .copied()
+            .filter(|c| (c.end_byte() - c.start_byte()) * 2 > node_size)
+            .collect();
+        if dominant.len() == 1 {
+            return self.split_node_recursively(dominant[0], text, scope_path);
+        }
+
+        // (3) Greedy merge of children, recursing into any single
+        // oversized child.
+        let mut chunks: Vec<(String, usize)> = Vec::new();
+        let mut group_start: Option<usize> = None;
+        let mut group_end: usize = 0;
+
+        for child in &children {
+            let child_size = child.end_byte() - child.start_byte();
+
+            if child_size > self.max_chunk_size {
+                if let Some(start) = group_start.take() {
+                    let slice = text[start..group_end].trim();
+                    if !slice.is_empty() {
+                        chunks.push((prepend_scope_comment(slice, scope_path), start));
+                    }
+                }
+                chunks.extend(self.split_node_recursively(*child, text, scope_path));
+                continue;
+            }
+
+            match group_start {
+                None => {
+                    group_start = Some(child.start_byte());
+                    group_end = child.end_byte();
+                }
+                Some(start) => {
+                    if (child.end_byte() - start) <= self.max_chunk_size {
+                        group_end = child.end_byte();
+                    } else {
+                        let slice = text[start..group_end].trim();
+                        if !slice.is_empty() {
+                            chunks.push((prepend_scope_comment(slice, scope_path), start));
+                        }
+                        group_start = Some(child.start_byte());
+                        group_end = child.end_byte();
+                    }
+                }
+            }
+        }
+
+        if let Some(start) = group_start {
+            let slice = text[start..group_end].trim();
+            if !slice.is_empty() {
+                chunks.push((prepend_scope_comment(slice, scope_path), start));
+            }
+        }
+
+        // (4) Last resort if recursion produced nothing
+        if chunks.is_empty() {
+            return self.character_split_node(node, text, scope_path);
+        }
+
+        chunks
+    }
+
+    /// Last-resort character split for an AST leaf (or unsplittable
+    /// construct) that exceeds `max_chunk_size`. In practice this fires
+    /// only for things like a multi-KB string literal in a small chunk
+    /// budget — extremely rare for source code.
+    fn character_split_node(
+        &self,
+        node: tree_sitter::Node,
+        text: &str,
+        scope_path: &Option<String>,
+    ) -> Vec<(String, usize)> {
+        let slice = &text[node.start_byte()..node.end_byte()];
+        let sub = crate::SemanticChunker::new(self.max_chunk_size, self.overlap);
+        sub.chunk(slice)
+            .into_iter()
+            .map(|(sub_text, sub_offset)| {
+                let with_scope = prepend_scope_comment(&sub_text, scope_path);
+                (with_scope, node.start_byte() + sub_offset)
+            })
+            .collect()
     }
 
     fn fallback_chunk(&self, text: &str) -> Vec<(String, usize)> {
@@ -177,6 +356,11 @@ impl Chunker for CodeChunker {
 struct Definition {
     start_byte: usize,
     end_byte: usize,
+    /// Tree-sitter node kind (e.g. "function_item"). Stored so we can
+    /// re-locate the original AST node via `descendant_for_byte_range`
+    /// when an oversized chunk needs recursive splitting, and verify
+    /// the re-found node is the one we meant rather than a wider parent.
+    kind: &'static str,
     /// Scope path for this definition, e.g. "impl Foo > fn bar".
     scope_path: Option<String>,
 }
@@ -190,6 +374,7 @@ fn collect_top_level_definitions(node: tree_sitter::Node, text: &str, defs: &mut
             defs.push(Definition {
                 start_byte: child.start_byte(),
                 end_byte: child.end_byte(),
+                kind: child.kind(),
                 scope_path: scope,
             });
             // Also collect nested definitions inside container nodes
@@ -1135,6 +1320,7 @@ use std::cell::RefCell;
         let defs = vec![Definition {
             start_byte: 0,
             end_byte: 10,
+            kind: "function_item",
             scope_path: None,
         }];
         let result = build_scope_header(&defs, &[0]);
@@ -1146,6 +1332,7 @@ use std::cell::RefCell;
         let defs = vec![Definition {
             start_byte: 0,
             end_byte: 10,
+            kind: "function_item",
             scope_path: Some("fn foo".to_string()),
         }];
         let result = build_scope_header(&defs, &[0]);
@@ -1158,11 +1345,13 @@ use std::cell::RefCell;
             Definition {
                 start_byte: 0,
                 end_byte: 10,
+                kind: "function_item",
                 scope_path: Some("fn foo".to_string()),
             },
             Definition {
                 start_byte: 10,
                 end_byte: 20,
+                kind: "function_item",
                 scope_path: Some("fn bar".to_string()),
             },
         ];
@@ -1325,5 +1514,171 @@ fn standalone() {
             "Expected oversized function to be sub-chunked, got {} chunks",
             chunks.len()
         );
+    }
+
+    // ---------------------------------------------------------------
+    // cAST: structural quality of intra-definition recursive splits
+    // (ACL 2025 Findings: aclanthology.org/2025.findings-emnlp.430)
+    // ---------------------------------------------------------------
+
+    /// First non-comment, non-blank line of a chunk, with leading
+    /// whitespace stripped. Returns "" if the chunk is empty/all-comment.
+    fn first_meaningful_line(chunk: &str) -> &str {
+        chunk
+            .lines()
+            .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with("//"))
+            .map_or("", str::trim_start)
+    }
+
+    #[test]
+    fn test_oversized_function_splits_at_statement_boundaries() {
+        // 30 statements, each ~22 bytes, against an 80-byte budget. Pre-cAST,
+        // SemanticChunker fallback would happily cut mid-`let var_NN = ...;`.
+        let chunker = CodeChunker::new(80, 0);
+        let mut code = String::from("fn process_request(req: u32) -> u32 {\n");
+        for i in 0..30 {
+            use std::fmt::Write as FmtWrite;
+            writeln!(code, "    let var_{i:02} = compute({i});").unwrap();
+        }
+        code.push_str("}\n");
+
+        let chunks = chunker.chunk_with_language(&code, Some("rs"));
+        assert!(
+            chunks.len() >= 2,
+            "Function should split into multiple chunks; got {}",
+            chunks.len()
+        );
+
+        for (chunk_text, _) in &chunks {
+            let first = first_meaningful_line(chunk_text);
+            let is_statement_like = first.starts_with("let ")
+                || first.starts_with("if ")
+                || first.starts_with("for ")
+                || first.starts_with("match ")
+                || first.starts_with("return ")
+                || first.starts_with("fn ")
+                || first.starts_with("pub ")
+                || first.starts_with('}')
+                || first.is_empty();
+            assert!(
+                is_statement_like,
+                "Chunk should start at a statement boundary, but first line is {first:?}.\nFull chunk:\n{chunk_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_oversized_class_keeps_methods_intact() {
+        // 10 small methods. Pre-cAST, character split could land between
+        // `def name():` and its body line.
+        let chunker = CodeChunker::new(100, 0);
+        let mut code = String::from("class Service:\n");
+        for i in 0..10 {
+            use std::fmt::Write as FmtWrite;
+            writeln!(code, "    def method_{i:02}(self):").unwrap();
+            writeln!(code, "        return {i}").unwrap();
+        }
+
+        let chunks = chunker.chunk_with_language(&code, Some("py"));
+        assert!(
+            chunks.len() >= 2,
+            "Class should split into multiple chunks; got {}",
+            chunks.len()
+        );
+
+        for (chunk_text, _) in &chunks {
+            let lines: Vec<&str> = chunk_text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("def method_") {
+                    let body = lines.get(i + 1).map_or("", |s| s.trim_start());
+                    assert!(
+                        body.starts_with("return "),
+                        "Method def should be followed by its body in the same chunk.\nFull chunk:\n{chunk_text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_oversized_match_recurses_through_arms() {
+        // One big match expression. With cAST, the dominant-child rule
+        // collapses function -> block -> match_expression -> match_block,
+        // then splits between match arms.
+        let chunker = CodeChunker::new(120, 0);
+        let code = "\
+fn dispatch(cmd: u8) -> u32 {
+    match cmd {
+        1 => {
+            let result = compute_first();
+            store_result(result);
+            result
+        }
+        2 => {
+            let result = compute_second();
+            cache_result(result);
+            result
+        }
+        3 => {
+            let result = compute_third();
+            log_result(result);
+            result
+        }
+        _ => 0,
+    }
+}
+";
+        let chunks = chunker.chunk_with_language(code, Some("rs"));
+        assert!(
+            chunks.len() >= 2,
+            "Match function should split into multiple chunks; got {}",
+            chunks.len()
+        );
+
+        // For every chunk, the count of arm-opening braces (`=> {`) must
+        // not exceed the count of closing braces — otherwise an arm was
+        // cut mid-body.
+        for (chunk_text, _) in &chunks {
+            let arm_opens = chunk_text.matches("=> {").count();
+            let close_braces = chunk_text
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| l.matches('}').count())
+                .sum::<usize>();
+            assert!(
+                close_braces >= arm_opens,
+                "Chunk has unclosed match-arm braces ({arm_opens} opens, {close_braces} closes).\nFull chunk:\n{chunk_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_oversized_definition_preserves_scope_header() {
+        // Every chunk emitted from an oversized split should carry the
+        // scope-path comment header so it's readable in isolation. The
+        // pre-cAST SemanticChunker fallback dropped the header on
+        // sub-chunks.
+        let chunker = CodeChunker::new(80, 0);
+        let mut code = String::from("fn process_request(req: u32) -> u32 {\n");
+        for i in 0..30 {
+            use std::fmt::Write as FmtWrite;
+            writeln!(code, "    let var_{i:02} = compute({i});").unwrap();
+        }
+        code.push_str("}\n");
+
+        let chunks = chunker.chunk_with_language(&code, Some("rs"));
+        assert!(
+            chunks.len() >= 2,
+            "Function should split into multiple chunks; got {}",
+            chunks.len()
+        );
+
+        for (chunk_text, _) in &chunks {
+            let first_line = chunk_text.lines().next().unwrap_or("");
+            assert!(
+                first_line.starts_with("// fn process_request"),
+                "Each sub-chunk should begin with `// fn process_request`, got: {first_line:?}.\nFull chunk:\n{chunk_text}"
+            );
+        }
     }
 }

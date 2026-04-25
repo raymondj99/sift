@@ -415,7 +415,8 @@ enum Commands {
     /// Run Cortex memory system benchmarks
     Bench {
         /// Run a specific benchmark (latency-ingest, latency-recall, strengthening,
-        /// forgetting, consolidation, skill-extraction, e2e) or "all"
+        /// forgetting, consolidation, skill-extraction, e2e) or "all". Opt-in
+        /// benchmarks: memory-rebuild, matryoshka, code-chunking.
         name: Option<String>,
     },
 }
